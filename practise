@@ -1,0 +1,35 @@
+from math import radians, sin, cos, sqrt, atan2
+
+# Haversine 公式（計算兩個經緯度之間的距離）
+def haversine_distance(coord1, coord2):
+    R = 6371  # 地球半徑（公里）
+    lat1, lon1 = map(radians, coord1)
+    lat2, lon2 = map(radians, coord2)
+    
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+    return R * c  # 回傳距離（公里）
+
+# 廁所資料
+toilets = {
+    "A廁所": (25.0330, 121.5654),  # (緯度, 經度) 台北 101
+    "B廁所": (24.1477, 120.6736),  # 台中
+    "C廁所": (22.6273, 120.3014)   # 高雄
+}
+
+# 讓使用者輸入 GPS 位置
+user_lat = float(input("請輸入你的緯度: "))
+user_lon = float(input("請輸入你的經度: "))
+user_location = (user_lat, user_lon)
+
+# 找出最近的廁所
+def find_nearest_toilet(user_location, toilets):
+    nearest = min(toilets, key=lambda t: haversine_distance(user_location, toilets[t]))
+    return nearest, haversine_distance(user_location, toilets[nearest])
+
+nearest_toilet, distance = find_nearest_toilet(user_location, toilets)
+print(f"🚻 最近的廁所：{nearest_toilet}，距離約 {distance:.2f} 公里")
