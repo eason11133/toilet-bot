@@ -1,5 +1,3 @@
-# app.py
-
 import os
 import hmac
 import hashlib
@@ -21,16 +19,19 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 user_locations = {}
 
+# 計算兩點距離（公尺）
 def haversine(lat1, lon1, lat2, lon2):
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
     c = 2 * asin(sqrt(a))
     r = 6371000
     return c * r
 
+# 查詢本地 SQLite 廁所資料
 def query_local_toilets(lat, lon, radius=500):
+    print("查詢本地資料庫...")
     conn = sqlite3.connect("toilets.db")
     cursor = conn.cursor()
     cursor.execute("SELECT name, type, latitude, longitude, address FROM toilets")
@@ -48,9 +49,12 @@ def query_local_toilets(lat, lon, radius=500):
                 "distance": distance
             })
     conn.close()
+    print(f"找到 {len(toilets)} 筆本地資料")
     return sorted(toilets, key=lambda x: x["distance"])
 
-def query_overpass_toilets(lat, lon, radius=500):
+# 查詢 Overpass API
+def query_overpass_toilets(lat, lon, radius=1000):
+    print("查詢 Overpass API...")
     overpass_url = "https://overpass-api.de/api/interpreter"
     query = f"""
     [out:json];
@@ -61,8 +65,13 @@ def query_overpass_toilets(lat, lon, radius=500):
     );
     out center;
     """
-    response = requests.post(overpass_url, data=query)
-    data = response.json()
+    try:
+        response = requests.post(overpass_url, data=query, timeout=10)
+        data = response.json()
+    except Exception as e:
+        print("Overpass API 查詢失敗：", e)
+        return []
+
     toilets = []
     for item in data.get("elements", []):
         if item["type"] == "node":
@@ -80,6 +89,8 @@ def query_overpass_toilets(lat, lon, radius=500):
             "lon": t_lon,
             "distance": distance
         })
+
+    print(f"Overpass 找到 {len(toilets)} 筆資料")
     return sorted(toilets, key=lambda x: x["distance"])
 
 @app.route("/")
@@ -102,6 +113,7 @@ def callback():
 
     return "OK"
 
+# 文字訊息處理（例如「廁所」）
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_text = event.message.text.strip()
@@ -113,9 +125,12 @@ def handle_text_message(event):
             return
 
         lat, lon = user_locations[user_id]
+        print(f"使用者查詢廁所：{lat}, {lon}")
 
-        # 優先查本地資料庫
+        # 查本地資料庫
         toilets = query_local_toilets(lat, lon)
+
+        # 若本地沒有，查 OSM
         if not toilets:
             toilets = query_overpass_toilets(lat, lon)
 
@@ -129,7 +144,6 @@ def handle_text_message(event):
         toilet_lon = toilet["lon"]
         distance_str = f"{toilet['distance']:.2f} 公尺"
         map_url = f"https://www.google.com/maps/search/?api=1&query={toilet_lat},{toilet_lon}"
-
         source = "本地資料庫" if toilet["type"] == "local" else "OpenStreetMap"
 
         flex_message = {
@@ -180,14 +194,17 @@ def handle_text_message(event):
             TextSendMessage(text="請輸入「廁所」來查詢附近廁所，或先傳送您目前的位置。")
         )
 
+# 處理位置訊息
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location_message(event):
     user_id = event.source.user_id
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[user_id] = (lat, lon)
+    print(f"✅ 使用者位置已更新：{lat}, {lon}")
     reply = f"📍 位置已更新！\n緯度：{lat}\n經度：{lon}\n請輸入「廁所」查詢附近的廁所。"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
+# 啟動伺服器
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
