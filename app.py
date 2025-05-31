@@ -1,51 +1,57 @@
+# app.py
+
+import os
+import hmac
+import hashlib
+import base64
+from math import radians, cos, sin, asin, sqrt
+import sqlite3
+import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, LocationMessage, TextSendMessage
+from linebot.exceptions import InvalidSignatureError, LineBotApiError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, LocationMessage, FlexSendMessage
 from dotenv import load_dotenv
-import os
-import requests
-import math
-import sqlite3
 
 load_dotenv()
 
 app = Flask(__name__)
-
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# Haversine 公式計算距離
-def haversine(lon1, lat1, lon2, lat2):
-    R = 6371000  # 地球半徑（公尺）
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+user_locations = {}
 
-# 從本地資料庫查詢
-def get_local_toilets(lat, lon, radius=500):
+def haversine(lat1, lon1, lat2, lon2):
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371000
+    return c * r
+
+def query_local_toilets(lat, lon, radius=500):
     conn = sqlite3.connect("toilets.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT name, lat, lon FROM toilets")
-    results = []
-    for name, t_lat, t_lon in cursor.fetchall():
-        distance = haversine(lon, lat, t_lon, t_lat)
+    cursor.execute("SELECT name, type, latitude, longitude, address FROM toilets")
+    toilets = []
+    for row in cursor.fetchall():
+        name, type_, t_lat, t_lon, address = row
+        distance = haversine(lat, lon, t_lat, t_lon)
         if distance <= radius:
-            results.append({
-                "name": name,
+            toilets.append({
+                "name": name or "無名稱",
+                "type": "local",
                 "lat": t_lat,
                 "lon": t_lon,
-                "distance": round(distance, 1)
+                "address": address or "",
+                "distance": distance
             })
     conn.close()
-    return results
+    return sorted(toilets, key=lambda x: x["distance"])
 
-# 查詢 OSM 的公共廁所
-def get_overpass_toilets(lat, lon, radius=500):
-    overpass_url = "http://overpass-api.de/api/interpreter"
+def query_overpass_toilets(lat, lon, radius=500):
+    overpass_url = "https://overpass-api.de/api/interpreter"
     query = f"""
     [out:json];
     (
@@ -57,76 +63,131 @@ def get_overpass_toilets(lat, lon, radius=500):
     """
     response = requests.post(overpass_url, data=query)
     data = response.json()
-
     toilets = []
-    for element in data["elements"]:
-        if "lat" in element and "lon" in element:
-            t_lat, t_lon = element["lat"], element["lon"]
-        elif "center" in element:
-            t_lat, t_lon = element["center"]["lat"], element["center"]["lon"]
+    for item in data.get("elements", []):
+        if item["type"] == "node":
+            t_lat, t_lon = item["lat"], item["lon"]
+        elif "center" in item:
+            t_lat, t_lon = item["center"]["lat"], item["center"]["lon"]
         else:
             continue
-
-        name = element["tags"].get("name", "未命名廁所")
-        distance = round(haversine(lon, lat, t_lon, t_lat), 1)
+        distance = haversine(lat, lon, t_lat, t_lon)
+        name = item.get("tags", {}).get("name", "無名稱")
         toilets.append({
             "name": name,
+            "type": "osm",
             "lat": t_lat,
             "lon": t_lon,
             "distance": distance
         })
-    return toilets
+    return sorted(toilets, key=lambda x: x["distance"])
 
-# 判斷是否重複
-def is_duplicate(toilet, existing_list, threshold=30):
-    for t in existing_list:
-        d = haversine(toilet["lon"], toilet["lat"], t["lon"], t["lat"])
-        if d < threshold:
-            return True
-    return False
+@app.route("/")
+def home():
+    return "✅ LINE Bot is running!"
 
-# 整合查詢本地與 OSM
-def get_nearest_toilets_combined(lat, lon, radius=500):
-    local = get_local_toilets(lat, lon, radius)
-    if len(local) >= 3:
-        return sorted(local, key=lambda x: x["distance"])[:5]
-
-    osm = get_overpass_toilets(lat, lon, radius)
-    merged = local + [t for t in osm if not is_duplicate(t, local)]
-    return sorted(merged, key=lambda x: x["distance"])[:5]
-
-# LINE Webhook
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
+
+    hash = hmac.new(os.getenv("LINE_CHANNEL_SECRET").encode(), body.encode(), hashlib.sha256).digest()
+    if base64.b64encode(hash).decode() != signature:
+        abort(400)
 
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
+    except (InvalidSignatureError, LineBotApiError):
+        abort(500)
+
     return "OK"
 
-# 處理文字與位置訊息
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
-    if event.message.text.lower() == "hi":
-        reply = "哈囉！請傳送您的定位，我會幫您找附近的廁所 🚻"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    user_text = event.message.text.strip()
+    user_id = event.source.user_id
+
+    if "廁所" in user_text:
+        if user_id not in user_locations:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請先傳送您目前的位置，讓我幫您找附近的廁所喔！"))
+            return
+
+        lat, lon = user_locations[user_id]
+
+        # 優先查本地資料庫
+        toilets = query_local_toilets(lat, lon)
+        if not toilets:
+            toilets = query_overpass_toilets(lat, lon)
+
+        if not toilets:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🚽 很抱歉，未能找到附近的廁所。"))
+            return
+
+        toilet = toilets[0]
+        toilet_name = toilet["name"]
+        toilet_lat = toilet["lat"]
+        toilet_lon = toilet["lon"]
+        distance_str = f"{toilet['distance']:.2f} 公尺"
+        map_url = f"https://www.google.com/maps/search/?api=1&query={toilet_lat},{toilet_lon}"
+
+        source = "本地資料庫" if toilet["type"] == "local" else "OpenStreetMap"
+
+        flex_message = {
+            "type": "bubble",
+            "hero": {
+                "type": "image",
+                "url": "https://i.imgur.com/BRO9ZQw.png",
+                "size": "full",
+                "aspectRatio": "20:13",
+                "aspectMode": "cover"
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": toilet_name, "weight": "bold", "size": "lg"},
+                    {"type": "text", "text": f"距離你 {distance_str}", "size": "sm", "color": "#666666", "margin": "md"},
+                    {"type": "text", "text": f"來源：{source}", "size": "sm", "color": "#aaaaaa", "margin": "md"}
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "button",
+                        "style": "link",
+                        "height": "sm",
+                        "action": {
+                            "type": "uri",
+                            "label": "🗺 開啟地圖導航",
+                            "uri": map_url
+                        }
+                    }
+                ],
+                "flex": 0
+            }
+        }
+
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(alt_text="最近的廁所資訊", contents=flex_message)
+        )
+
+    else:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="請輸入「廁所」來查詢附近廁所，或先傳送您目前的位置。")
+        )
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location_message(event):
+    user_id = event.source.user_id
     lat, lon = event.message.latitude, event.message.longitude
-    toilets = get_nearest_toilets_combined(lat, lon)
-
-    if not toilets:
-        reply = "抱歉，500 公尺內找不到廁所 😢"
-    else:
-        reply = "最近的廁所有：\n"
-        for t in toilets:
-            reply += f"{t['name']}（約 {t['distance']} 公尺）\n"
-
+    user_locations[user_id] = (lat, lon)
+    reply = f"📍 位置已更新！\n緯度：{lat}\n經度：{lon}\n請輸入「廁所」查詢附近的廁所。"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
 if __name__ == "__main__":
-    app.run()
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
