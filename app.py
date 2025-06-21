@@ -28,6 +28,12 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 TOILETS_FILE_PATH = os.path.join(os.getcwd(), 'toilets.txt')  # 使用相對路徑
 FAVORITES_FILE_PATH = os.path.join(os.getcwd(), 'favorites.txt')  # 使用相對路徑
 
+# 檢查 toilets.txt 是否存在
+if not os.path.exists(TOILETS_FILE_PATH):
+    logging.error(f"檔案 {TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
+else:
+    logging.info(f"檔案 {TOILETS_FILE_PATH} 存在")
+
 # 建立 favorites.txt 如不存在
 def ensure_favorites_file():
     try:
@@ -244,58 +250,6 @@ def add_to_toilets_file(name, address, lat, lon):
     except Exception as e:
         logging.error(f"寫入檔案失敗：{e}")
 
-# 建立 Flex Message（使用 Google Map）
-def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
-    bubbles = []
-    for t in toilets[:MAX_TOILETS_REPLY]:
-        dist = haversine(user_lat, user_lon, t['lat'], t['lon'])
-        map_url = f"https://staticmap.openstreetmap.de/staticmap.php?center={t['lat']},{t['lon']}&zoom=15&size=600x300&markers={t['lat']},{t['lon']}&format=png"
-        google_map = f"https://www.google.com/maps/search/?api=1&query={t['lat']},{t['lon']}"
-        bubble = {
-            "type": "bubble",
-            "hero": {
-                "type": "image",
-                "url": map_url,
-                "size": "full",
-                "aspectMode": "cover",
-                "aspectRatio": "20:13"
-            },
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {"type": "text", "text": t['name'], "weight": "bold", "size": "lg"},
-                    {"type": "text", "text": f"距離：{dist:.1f} 公尺", "size": "sm", "color": "#555555"},
-                    {"type": "text", "text": f"地址：{t['address']}", "size": "sm", "wrap": True, "color": "#aaaaaa"},
-                    {"type": "text", "text": f"類型：{t['type']}", "size": "sm", "color": "#aaaaaa"}
-                ]
-            },
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "color": "#00BFFF",
-                        "action": URIAction(label="導航至最近廁所", uri=google_map)
-                    },
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "color": "#FFA07A",
-                        "action": {
-                            "type": "postback",
-                            "label": "刪除最愛" if show_delete else "加入最愛",
-                            "data": f"{'remove' if show_delete else 'add'}:{t['name']}:{t['lat']}:{t['lon']}"
-                        }
-                    }
-                ]
-            }
-        }
-        bubbles.append(bubble)
-    return {"type": "carousel", "contents": bubbles}
-
 # Webhook callback
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -310,6 +264,7 @@ def callback():
 @app.route("/")
 def index():
     return "Line Bot API is running!"
+
 
 # 文字訊息處理
 @handler.add(MessageEvent, message=TextMessage)
