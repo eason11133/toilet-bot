@@ -30,9 +30,9 @@ FAVORITES_FILE_PATH = os.path.join(os.getcwd(), 'favorites.txt')  # 使用相對
 
 # 檢查 toilets.txt 是否存在
 if not os.path.exists(TOILETS_FILE_PATH):
-    logging.error(f"檔案 {TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
+    logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
 else:
-    logging.info(f"檔案 {TOILETS_FILE_PATH} 存在")
+    logging.info(f"{TOILETS_FILE_PATH} 檔案存在")
 
 # 建立 favorites.txt 如不存在
 def ensure_favorites_file():
@@ -264,7 +264,6 @@ def callback():
 @app.route("/")
 def index():
     return "Line Bot API is running!"
-
 
 # 文字訊息處理
 @handler.add(MessageEvent, message=TextMessage)
