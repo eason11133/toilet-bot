@@ -288,7 +288,7 @@ def handle_text(event):
                 return
             pending_additions[uid]['name'] = text
             pending_additions[uid]['step'] = 2
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📍 請提供地址（格式：市區、區域、街道名、門牌號，例如：新北市三重區五華街282號）："))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📍 請提供地址 例如：新北市 三重區 五華街 282號(用空格隔開)："))
 
         elif step == 2:  # 收集地址
             if text == "取消":
