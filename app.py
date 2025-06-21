@@ -25,10 +25,7 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# 相對路徑設定
 TOILETS_FILE_PATH = '/opt/render/project/src/toilets.txt'
-  # 這裡加入 'huhsg' 目錄
-
 FAVORITES_FILE_PATH = os.path.join(os.getcwd(), 'favorites.txt')  # 使用相對路徑
 
 # 建立 favorites.txt 如不存在
