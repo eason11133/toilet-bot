@@ -349,6 +349,11 @@ def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
     action, name, lat, lon = data.split(":")
+    
+    if uid not in user_locations:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請先傳送位置"))
+        return
+
     if action == "add":
         for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
             if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
