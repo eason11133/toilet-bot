@@ -205,6 +205,7 @@ def add_to_toilets_file(name, address, lat, lon):
                 f.writelines(lines[1:])
     except Exception as e:
         logging.error(f"寫入檔案失敗：{e}")
+        raise
 
 def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
     bubbles = []
@@ -310,12 +311,17 @@ def handle_text(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 地址無法解析，請確認地址格式正確並重新輸入。\n若不想繼續新增廁所，請輸入「取消」來取消操作。"))
                 return
 
+            messages = []
             try:
                 add_to_toilets_file(name, address, lat, lon)
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ 已成功新增廁所：{name}"))
+                messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}"))
             except Exception as e:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 寫入檔案失敗"))
+                logging.error(f"寫入檔案失敗：{e}")
+                messages.append(TextSendMessage(text="❌ 寫入檔案失敗"))
+                # 用 push_message 補發提示，避免重複使用 reply_token
+                line_bot_api.push_message(uid, TextSendMessage(text="請稍後再試或聯絡管理員。"))
 
+            line_bot_api.reply_message(event.reply_token, messages)
             del pending_additions[uid]
 
     elif text == "回饋":
@@ -343,7 +349,6 @@ def handle_text(event):
         msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
         line_bot_api.reply_message(event.reply_token, FlexSendMessage("我的最愛", msg))
 
-
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
@@ -355,18 +360,22 @@ def handle_postback(event):
         return
 
     if action == "add":
+        added = False
         for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
             if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
                 add_to_favorites(uid, toilet)
+                added = True
                 break
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ 已收藏 {name}"))
+        if added:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ 已收藏 {name}"))
+        else:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找不到該廁所，收藏失敗"))
 
     elif action == "remove":
         if remove_from_favorites(uid, name, lat, lon):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ 已移除 {name}"))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找不到該收藏"))
-
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
