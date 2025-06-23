@@ -280,74 +280,71 @@ def handle_text(event):
     text = event.message.text.lower()
     uid = event.source.user_id
 
+    # 只在此處回覆一次
+    reply_messages = []
+
     if text.startswith("新增廁所"):
         pending_additions[uid] = {'step': 1}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔧 請提供廁所名稱："))
-        return
+        reply_messages.append(TextSendMessage(text="🔧 請提供廁所名稱："))
 
-    if uid in pending_additions:
+    elif uid in pending_additions:
         step = pending_additions[uid]['step']
 
-        if step == 1:
-            if text == "取消":
-                del pending_additions[uid]
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 新增廁所操作已取消，您可以繼續其他操作。"))
-                return
-            pending_additions[uid]['name'] = text
-            pending_additions[uid]['step'] = 2
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📍 請提供地址 例如：新北市 三重區 五華街 282號(用空格隔開)："))
-
-        elif step == 2:
-            if text == "取消":
-                del pending_additions[uid]
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 新增廁所操作已取消，您可以繼續其他操作。"))
-                return
-
-            name = pending_additions[uid]['name']
-            address = text
-            city, lat, lon = geocode_address(address, name)
-
-            if lat is None or lon is None:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 地址無法解析，請確認地址格式正確並重新輸入。\n若不想繼續新增廁所，請輸入「取消」來取消操作。"))
-                return
-
-            messages = []
-            try:
-                add_to_toilets_file(name, address, lat, lon)
-                messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}"))
-            except Exception as e:
-                logging.error(f"寫入檔案失敗：{e}")
-                messages.append(TextSendMessage(text="❌ 寫入檔案失敗"))
-                # 用 push_message 補發提示，避免重複使用 reply_token
-                line_bot_api.push_message(uid, TextSendMessage(text="請稍後再試或聯絡管理員。"))
-
-            line_bot_api.reply_message(event.reply_token, messages)
+        if text == "取消":
             del pending_additions[uid]
+            reply_messages.append(TextSendMessage(text="❌ 新增廁所操作已取消，您可以繼續其他操作。"))
+        else:
+            if step == 1:
+                pending_additions[uid]['name'] = text
+                pending_additions[uid]['step'] = 2
+                reply_messages.append(TextSendMessage(text="📍 請提供地址 例如：新北市 三重區 五華街 282號(用空格隔開)："))
+
+            elif step == 2:
+                name = pending_additions[uid]['name']
+                address = text
+                city, lat, lon = geocode_address(address, name)
+
+                if lat is None or lon is None:
+                    reply_messages.append(TextSendMessage(text="❌ 地址無法解析，請確認地址格式正確並重新輸入。\n若不想繼續新增廁所，請輸入「取消」來取消操作。"))
+                else:
+                    try:
+                        add_to_toilets_file(name, address, lat, lon)
+                        reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}"))
+                    except Exception as e:
+                        logging.error(f"寫入檔案失敗：{e}")
+                        # 改用 push_message 補發，避免重複回覆錯誤
+                        line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
+                    del pending_additions[uid]
 
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
+        reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
     elif text == "附近廁所":
         if uid not in user_locations:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請先傳送位置"))
-            return
-        lat, lon = user_locations[uid]
-        toilets = query_local_toilets(lat, lon) + query_overpass_toilets(lat, lon, radius=MAX_DISTANCE)
-        if not toilets:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="附近找不到廁所，看來只能原地解放了"))
-            return
-        msg = create_toilet_flex_messages(toilets, lat, lon)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage("附近廁所", msg))
+            reply_messages.append(TextSendMessage(text="請先傳送位置"))
+        else:
+            lat, lon = user_locations[uid]
+            toilets = query_local_toilets(lat, lon) + query_overpass_toilets(lat, lon, radius=MAX_DISTANCE)
+            if not toilets:
+                reply_messages.append(TextSendMessage(text="附近找不到廁所，看來只能原地解放了"))
+            else:
+                msg = create_toilet_flex_messages(toilets, lat, lon)
+                reply_messages.append(FlexSendMessage("附近廁所", msg))
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
         if not favs:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="你尚未收藏任何廁所"))
-            return
-        lat, lon = user_locations.get(uid, (0, 0))
-        msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage("我的最愛", msg))
+            reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
+        else:
+            lat, lon = user_locations.get(uid, (0, 0))
+            msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
+            reply_messages.append(FlexSendMessage("我的最愛", msg))
+
+    # 只呼叫一次 reply_message
+    if reply_messages:
+        line_bot_api.reply_message(event.reply_token, reply_messages)
+
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
@@ -355,27 +352,33 @@ def handle_postback(event):
     data = event.postback.data
     action, name, lat, lon = data.split(":")
 
+    # 只在此處回覆一次
+    reply_messages = []
+
     if uid not in user_locations:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請先傳送位置"))
-        return
+        reply_messages.append(TextSendMessage(text="請先傳送位置"))
+    else:
+        if action == "add":
+            added = False
+            for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
+                if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
+                    add_to_favorites(uid, toilet)
+                    added = True
+                    break
+            if added:
+                reply_messages.append(TextSendMessage(text=f"✅ 已收藏 {name}"))
+            else:
+                reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
 
-    if action == "add":
-        added = False
-        for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
-            if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
-                add_to_favorites(uid, toilet)
-                added = True
-                break
-        if added:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ 已收藏 {name}"))
-        else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找不到該廁所，收藏失敗"))
+        elif action == "remove":
+            if remove_from_favorites(uid, name, lat, lon):
+                reply_messages.append(TextSendMessage(text=f"❌ 已移除 {name}"))
+            else:
+                reply_messages.append(TextSendMessage(text="找不到該收藏"))
 
-    elif action == "remove":
-        if remove_from_favorites(uid, name, lat, lon):
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ 已移除 {name}"))
-        else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找不到該收藏"))
+    if reply_messages:
+        line_bot_api.reply_message(event.reply_token, reply_messages)
+
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
