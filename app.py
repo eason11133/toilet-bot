@@ -231,8 +231,8 @@ def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
                 "type": "box",
                 "layout": "vertical",
                 "contents": [
-                    {"type": "text", "text": toilet['name'], "weight": "bold", "size": "lg", "wrap": True},
-                    {"type": "text", "text": toilet['address'], "size": "sm", "color": "#666666", "wrap": True},
+                    {"type": "text", "text": toilet.get('name') or "無名稱", "weight": "bold", "size": "lg", "wrap": True},
+                    {"type": "text", "text": toilet.get('address') or "（無地址）", "size": "sm", "color": "#666666", "wrap": True},
                     {"type": "text", "text": distance_text, "size": "sm", "color": "#999999"},
                 ]
             },
