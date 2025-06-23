@@ -12,7 +12,6 @@ from linebot.models import (
     FlexSendMessage, PostbackEvent, TextSendMessage,
     URIAction
 )
-from datetime import timedelta
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +42,7 @@ ensure_favorites_file()
 
 user_locations = {}
 MAX_DISTANCE = 500
-MAX_TOILETS_REPLY = 5  # 加入這行
+MAX_TOILETS_REPLY = 5
 pending_additions = {}
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -175,31 +174,18 @@ def geocode_address(address, user_name):
         formatted_address = ' '.join(address.split())
         address_encoded = requests.utils.quote(formatted_address)
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={address_encoded}"
-
         headers = {
             "User-Agent": "YourAppName/1.0 (http://yourwebsite.com/contact)"
         }
-
         response = requests.get(url, headers=headers)
-
         if response.status_code == 200:
-            logging.info(f"Nominatim API 回應：{response.text}")
             data = response.json()
             if data:
                 lat = float(data[0]['lat'])
                 lon = float(data[0]['lon'])
-                name = data[0].get('name', '')
-                if not name:
-                    name = user_name
-                logging.info(f"Geocoded address: {formatted_address} -> lat: {lat}, lon: {lon}, name: {name}")
+                name = data[0].get('name', '') or user_name
                 return name, lat, lon
-            else:
-                logging.error(f"無法解析地址: {formatted_address}")
-                return None, None, None
-        else:
-            logging.error(f"API 請求失敗，狀態碼：{response.status_code}")
-            logging.error(f"回應內容：{response.text}")
-            return None, None, None
+        return None, None, None
     except Exception as e:
         logging.error(f"解析地址出錯：{e}")
         return None, None, None
@@ -207,22 +193,16 @@ def geocode_address(address, user_name):
 def add_to_toilets_file(name, address, lat, lon):
     try:
         if not os.path.exists(TOILETS_FILE_PATH):
-            logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
             return
-
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8", errors='ignore') as f:
             lines = f.readlines()
-
         new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
-
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8", errors='ignore') as f:
             if lines:
-                f.write(lines[0])  # 標題列
-            f.write(new_row)       # 新增資料
+                f.write(lines[0])
+            f.write(new_row)
             if len(lines) > 1:
-                f.writelines(lines[1:])  # 原資料
-
-        logging.info(f"成功將廁所 {name} 新增至檔案並放置於第一筆")
+                f.writelines(lines[1:])
     except Exception as e:
         logging.error(f"寫入檔案失敗：{e}")
 
@@ -232,19 +212,18 @@ def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
         distance_m = int(toilet['distance'])
         distance_text = f"{distance_m}公尺" if distance_m < 1000 else f"{distance_m/1000:.2f}公里"
         actions = []
+        data_str = f"{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
         if show_delete:
-            data_remove = f"remove:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             actions.append({
                 "type": "postback",
                 "label": "移除收藏",
-                "data": data_remove
+                "data": f"remove:{data_str}"
             })
         else:
-            data_add = f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             actions.append({
                 "type": "postback",
                 "label": "加入收藏",
-                "data": data_add
+                "data": f"add:{data_str}"
             })
         bubble = {
             "type": "bubble",
@@ -279,12 +258,7 @@ def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
             }
         }
         bubbles.append(bubble)
-
-    flex_message = {
-        "type": "carousel",
-        "contents": bubbles
-    }
-    return flex_message
+    return {"type": "carousel", "contents": bubbles}
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -369,6 +343,7 @@ def handle_text(event):
         msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
         line_bot_api.reply_message(event.reply_token, FlexSendMessage("我的最愛", msg))
 
+
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
@@ -385,11 +360,13 @@ def handle_postback(event):
                 add_to_favorites(uid, toilet)
                 break
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ 已收藏 {name}"))
+
     elif action == "remove":
         if remove_from_favorites(uid, name, lat, lon):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ 已移除 {name}"))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找不到該收藏"))
+
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
