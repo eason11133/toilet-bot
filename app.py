@@ -43,6 +43,7 @@ ensure_favorites_file()
 
 user_locations = {}
 MAX_DISTANCE = 500
+MAX_TOILETS_REPLY = 5  # 加入這行
 pending_additions = {}
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -232,7 +233,6 @@ def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
         distance_text = f"{distance_m}公尺" if distance_m < 1000 else f"{distance_m/1000:.2f}公里"
         actions = []
         if show_delete:
-            # 移除收藏
             data_remove = f"remove:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             actions.append({
                 "type": "postback",
@@ -240,7 +240,6 @@ def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
                 "data": data_remove
             })
         else:
-            # 加入收藏
             data_add = f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             actions.append({
                 "type": "postback",
@@ -375,7 +374,7 @@ def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
     action, name, lat, lon = data.split(":")
-    
+
     if uid not in user_locations:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請先傳送位置"))
         return
