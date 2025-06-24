@@ -20,8 +20,8 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-TOILETS_FILE_PATH = "/persistent/public_toilets.csv"
-FAVORITES_FILE_PATH = "/persistent/favorites.txt"
+TOILETS_FILE_PATH = os.path.join(os.getcwd(), "data", "public_toilets.csv")
+FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
 
 if not os.path.exists(TOILETS_FILE_PATH):
     logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
