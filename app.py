@@ -179,13 +179,13 @@ def query_overpass_toilets(lat, lon, radius=500):
         })
     return sorted(toilets, key=lambda x: x["distance"])
 
-# === 收藏管理 ===
+# === 最愛管理 ===
 def add_to_favorites(uid, toilet):
     try:
         with open(FAVORITES_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"{uid},{toilet['name']},{toilet['lat']},{toilet['lon']},{toilet['address']}\n")
     except Exception as e:
-        logging.error(f"收藏失敗: {e}")
+        logging.error(f"加入最愛失敗: {e}")
 
 def remove_from_favorites(uid, name, lat, lon):
     try:
@@ -198,7 +198,7 @@ def remove_from_favorites(uid, name, lat, lon):
                     f.write(line)
         return True
     except Exception as e:
-        logging.error(f"移除收藏失敗: {e}")
+        logging.error(f"移除最愛失敗: {e}")
         return False
 
 def get_user_favorites(uid):
@@ -217,7 +217,7 @@ def get_user_favorites(uid):
                         "type": "favorite"
                     })
     except Exception as e:
-        logging.error(f"讀取收藏失敗: {e}")
+        logging.error(f"讀取最愛失敗: {e}")
     return favs
 
 # === 地址轉經緯度 ===
@@ -338,11 +338,17 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         if toilet.get("type") == "user":
             # user新增廁所沒有加入收藏按鈕，改成第三個刪除按鈕
             pass
+        elif toilet.get("type") == "favorite" and uid is not None:
+            actions.append({
+            "type": "postback",
+            "label": "移除最愛",
+            "data": f"remove_fav:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
+        })
         else:
             # 非user新增，顯示加入收藏按鈕
             actions.append({
                 "type": "postback",
-                "label": "加入收藏",
+                "label": "加入最愛",
                 "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
 
@@ -390,10 +396,9 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return "OK"
-
-@app.route("/")
-def index():
-    return "ToiletBot is running!"
+@app.route("/", methods=["GET"])
+def home():
+    return "Toilet bot is running!", 200
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -483,27 +488,32 @@ def handle_text(event):
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
         else:
-            msg = create_toilet_flex_messages(favs, show_delete=True)
+            if uid in user_locations:
+                lat, lon = user_locations[uid]
+                for fav in favs:
+                    fav["distance"] = int(haversine(lat, lon, fav["lat"], fav["lon"]))
+            msg = create_toilet_flex_messages(favs, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
+
     elif text == "最近新增":
         recent_toilets = get_recent_added(uid)
         if not recent_toilets:
             reply_messages.append(TextSendMessage(text="❌ 找不到您最近新增的廁所"))
         else:
+            if uid in user_locations:
+                lat, lon = user_locations[uid]
+                for toilet in recent_toilets:
+                    toilet["distance"] = int(haversine(lat, lon, toilet["lat"], toilet["lon"]))
             msg = create_toilet_flex_messages(recent_toilets, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
 
-    if reply_messages:
-        try:
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-        except Exception as e:
-            logging.error(f"❌ 回覆訊息時失敗: {e}")
 
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
+
     # 分三種狀況：加入收藏、移除收藏、刪除廁所確認流程
     if data.startswith("add:"):
         try:
@@ -526,19 +536,34 @@ def handle_postback(event):
             reply_messages.append(TextSendMessage(text=f"✅ 已收藏 {name}"))
         else:
             reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
-        if reply_messages:      
+        if reply_messages:
             line_bot_api.reply_message(event.reply_token, reply_messages)
 
-    if data.startswith("confirm_delete:"):
+    elif data.startswith("remove_fav:"):
+        try:
+            _, name, lat, lon = data.split(":")
+            removed = remove_from_favorites(uid, name, lat, lon)
+            msg = f"✅ 已從最愛移除 {name}" if removed else "❌ 移除失敗，請稍後再試"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+        except:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 移除最愛失敗，格式錯誤"))
+
+    elif data.startswith("confirm_delete:"):
         try:
             _, name, address, lat, lon = data.split(":")
-            pending_delete_confirm[uid] = {"name": name, "address": address, "lat": lat, "lon": lon}
+            pending_delete_confirm[uid] = {
+                "name": name,
+                "address": address,
+                "lat": lat,
+                "lon": lon
+            }
             line_bot_api.reply_message(event.reply_token, [
-            TextSendMessage(text=f"⚠️ 確定要刪除廁所 {name} 嗎？"),
-            TextSendMessage(text="請輸入『確認刪除』或『取消』")
+                TextSendMessage(text=f"⚠️ 確定要刪除廁所 {name} 嗎？"),
+                TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
         except:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
+
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
