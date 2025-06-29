@@ -48,8 +48,34 @@ def init_gsheet():
     except Exception as e:
         logging.error(f"❌ Google Sheets 初始化失敗: {e}")
         worksheet = None
+def restore_csv_from_gsheet():
+    if worksheet is None:
+        logging.warning("🛑 無法從 Sheets 回復資料，因為 worksheet 尚未初始化")
+        return
+    try:
+        records = worksheet.get_all_records()
+        if not records:
+            logging.info("📭 Google Sheets 沒有任何資料可回復")
+            return
+
+        os.makedirs(os.path.dirname(TOILETS_FILE_PATH), exist_ok=True)
+        with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
+            # 寫入 header（跟原來 CSV 一樣，因為你讀檔時跳過了 header）
+            f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
+            for row in records:
+                name = row['name']
+                address = row['address']
+                lat = row['lat']
+                lon = row['lon']
+                new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
+                f.write(new_row)
+        logging.info("✅ 已從 Google Sheets 回復 public_toilets.csv")
+    except Exception as e:
+        logging.error(f"❌ 回復 CSV 失敗: {e}")
 
 init_gsheet()
+restore_csv_from_gsheet() 
+
 
 # === 本地檔案確認 ===
 if not os.path.exists(TOILETS_FILE_PATH):
