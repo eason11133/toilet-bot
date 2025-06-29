@@ -274,6 +274,29 @@ def delete_from_gsheet(uid, name, address, lat, lon):
     except Exception as e:
         logging.error(f"刪除 Sheets 失敗: {e}")
         return False
+def get_recent_added(uid, limit=5):
+    if worksheet is None:
+        logging.error("Sheets 未初始化")
+        return []
+    try:
+        records = worksheet.get_all_records()
+        user_records = [r for r in records if str(r.get('user_id', '')) == uid]
+        # 按 timestamp 倒序
+        sorted_records = sorted(user_records, key=lambda r: r.get("timestamp", ""), reverse=True)
+        recent = []
+        for r in sorted_records[:limit]:
+            recent.append({
+                "name": r["name"],
+                "address": r["address"],
+                "lat": float(r["lat"]),
+                "lon": float(r["lon"]),
+                "distance": 0,
+                "type": "user"  # 表示是用戶新增
+            })
+        return recent
+    except Exception as e:
+        logging.error(f"讀取最近新增失敗: {e}")
+        return []
 
 def delete_from_toilets_file(name, address, lat, lon):
     try:
@@ -300,23 +323,37 @@ def delete_from_toilets_file(name, address, lat, lon):
     return True
 
 # === 建立 Flex Message ===
-def create_toilet_flex_messages(toilets, show_delete=False):
+def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
         actions = []
-        if show_delete:
-            # 新增刪除按鈕，按下後要觸發確認流程
-            actions.append({
-                "type": "postback",
-                "label": "刪除廁所",
-                "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
-            })
+        # 第一個按鈕：導航（所有都要）
+        actions.append({
+            "type": "uri",
+            "label": "導航",
+            "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
+        })
+
+        # 第二個按鈕：
+        if toilet.get("type") == "user":
+            # user新增廁所沒有加入收藏按鈕，改成第三個刪除按鈕
+            pass
         else:
+            # 非user新增，顯示加入收藏按鈕
             actions.append({
                 "type": "postback",
                 "label": "加入收藏",
                 "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
+
+        # 第三個按鈕：
+        if show_delete and toilet.get("type") == "user" and uid is not None:
+            actions.append({
+                "type": "postback",
+                "label": "刪除廁所",
+                "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
+            })
+
         bubble = {
             "type": "bubble",
             "body": {
@@ -330,18 +367,18 @@ def create_toilet_flex_messages(toilets, show_delete=False):
             },
             "footer": {
                 "type": "box",
-                "layout": "vertical",
+                "layout": "horizontal",
+                "spacing": "sm",
                 "contents": [
-                    {"type": "button", "style": "primary", "action": {
-                        "type": "uri", "label": "導航",
-                        "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
-                    }},
-                    {"type": "button", "style": "secondary", "action": actions[0]}
+                    {"type": "button", "style": "primary", "action": actions[0]},
+                ] + [
+                    {"type": "button", "style": "secondary", "action": a} for a in actions[1:]
                 ]
             }
         }
         bubbles.append(bubble)
-    return { "type": "carousel", "contents": bubbles }
+    return {"type": "carousel", "contents": bubbles}
+
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
@@ -418,6 +455,7 @@ def handle_text(event):
                             reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name} 並同步至 Google Sheets"))
                         else:
                             reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}，但同步 Google Sheets 失敗"))
+                            del pending_additions[uid]  # <--- 這行是關鍵
                     except Exception as e:
                         logging.error(f"寫入檔案失敗：{e}")
                         line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
@@ -436,7 +474,8 @@ def handle_text(event):
             if not toilets:
                 reply_messages.append(TextSendMessage(text="附近找不到廁所，看來只能原地解放了"))
             else:
-                msg = create_toilet_flex_messages(toilets)
+                # 傳入 show_delete=True 並帶入 uid，這樣才會在附近廁所的Flex Message中，對user新增的廁所加上刪除按鈕
+                msg = create_toilet_flex_messages(toilets, show_delete=True, uid=uid)
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
 
     elif text == "我的最愛":
@@ -446,6 +485,13 @@ def handle_text(event):
         else:
             msg = create_toilet_flex_messages(favs, show_delete=True)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
+    elif text == "最近新增":
+        recent_toilets = get_recent_added(uid)
+        if not recent_toilets:
+            reply_messages.append(TextSendMessage(text="❌ 找不到您最近新增的廁所"))
+        else:
+            msg = create_toilet_flex_messages(recent_toilets, show_delete=True, uid=uid)
+            reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
 
     if reply_messages:
         try:
