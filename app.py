@@ -421,7 +421,7 @@ def handle_text(event):
                     except Exception as e:
                         logging.error(f"寫入檔案失敗：{e}")
                         line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
-                    del pending_additions[uid]
+                        return  # 🔥 加這一行，避免出現 Invalid reply token 錯誤
 
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
@@ -448,7 +448,11 @@ def handle_text(event):
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     if reply_messages:
-        line_bot_api.reply_message(event.reply_token, reply_messages)
+        try:
+            line_bot_api.reply_message(event.reply_token, reply_messages)
+        except Exception as e:
+            logging.error(f"❌ 回覆訊息時失敗: {e}")
+
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
