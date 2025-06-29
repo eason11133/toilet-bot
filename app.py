@@ -458,6 +458,7 @@ def handle_text(event):
                         success = add_to_gsheet(uid, name, address, lat, lon)
                         if success:
                             reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name} 並同步至 Google Sheets"))
+                            del pending_additions[uid]
                         else:
                             reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}，但同步 Google Sheets 失敗"))
                             del pending_additions[uid]  # <--- 這行是關鍵
@@ -506,6 +507,8 @@ def handle_text(event):
                     toilet["distance"] = int(haversine(lat, lon, toilet["lat"], toilet["lon"]))
             msg = create_toilet_flex_messages(recent_toilets, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
+if reply_messages:
+    line_bot_api.reply_message(event.reply_token, reply_messages)
 
 
 
