@@ -74,6 +74,7 @@ user_locations = {}
 MAX_DISTANCE = 500
 MAX_TOILETS_REPLY = 5
 pending_additions = {}
+pending_delete_confirm = {}
 
 # === 計算距離 ===
 def haversine(lat1, lon1, lat2, lon2):
@@ -209,17 +210,14 @@ def geocode_address(address, user_name):
 # === 寫入廁所 CSV 與 Sheets ===
 def add_to_toilets_file(name, address, lat, lon):
     try:
-        with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
         new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
-        with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
-            if lines:
-                f.write(lines[0])
+        with open(TOILETS_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(new_row)
-            f.writelines(lines[1:])
+        logging.info(f"✅ 成功寫入本地 CSV：{name} @ {address}")
     except Exception as e:
         logging.error(f"寫入廁所資料失敗: {e}")
         raise
+
 
 def add_to_gsheet(uid, name, address, lat, lon):
     if worksheet is None:
@@ -232,16 +230,68 @@ def add_to_gsheet(uid, name, address, lat, lon):
         logging.error(f"寫入 Sheets 失敗: {e}")
         return False
 
+def delete_from_gsheet(uid, name, address, lat, lon):
+    if worksheet is None:
+        logging.error("Sheets 未初始化")
+        return False
+    try:
+        records = worksheet.get_all_records()
+        for idx, row in enumerate(records, start=2):
+            if (str(row.get('user_id', '')) == uid and
+                row.get('name', '') == name and
+                row.get('address', '') == address and
+                str(row.get('lat', '')) == str(lat) and
+                str(row.get('lon', '')) == str(lon)):
+                worksheet.delete_rows(idx)
+                return True
+        return False
+    except Exception as e:
+        logging.error(f"刪除 Sheets 失敗: {e}")
+        return False
+
+def delete_from_toilets_file(name, address, lat, lon):
+    try:
+        with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(lines[0])  # header
+            for line in lines[1:]:
+                parts = line.strip().split(',')
+                if len(parts) < 15:
+                    continue
+                line_name = parts[4]
+                line_address = parts[5]
+                try:
+                    line_lat = float(parts[7])
+                    line_lon = float(parts[8])
+                except:
+                    continue
+                if not (line_name == name and line_address == address and abs(line_lat - float(lat)) < 1e-6 and abs(line_lon - float(lon)) < 1e-6):
+                    f.write(line)
+    except Exception as e:
+        logging.error(f"刪除 CSV 失敗: {e}")
+        return False
+    return True
+
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
-        actions = [{
-            "type": "postback",
-            "label": "移除收藏" if show_delete else "加入收藏",
-            "data": f"{'remove' if show_delete else 'add'}:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
-        }]
-        bubbles.append({
+        actions = []
+        if show_delete:
+            # 新增刪除按鈕，按下後要觸發確認流程
+            actions.append({
+                "type": "postback",
+                "label": "刪除廁所",
+                "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
+            })
+        else:
+            actions.append({
+                "type": "postback",
+                "label": "加入收藏",
+                "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
+            })
+        bubble = {
             "type": "bubble",
             "body": {
                 "type": "box",
@@ -263,7 +313,8 @@ def create_toilet_flex_messages(toilets, show_delete=False):
                     {"type": "button", "style": "secondary", "action": actions[0]}
                 ]
             }
-        })
+        }
+        bubbles.append(bubble)
     return { "type": "carousel", "contents": bubbles }
 
 # === Webhook ===
@@ -283,17 +334,42 @@ def index():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    text = event.message.text.lower()
+    text = event.message.text.strip().lower()
     uid = event.source.user_id
     reply_messages = []
 
+    # === 刪除確認流程 ===
+    if uid in pending_delete_confirm:
+        info = pending_delete_confirm[uid]
+        if text == "確認刪除":
+            deleted_sheet = delete_from_gsheet(uid, info["name"], info["address"], info["lat"], info["lon"])
+            deleted_csv = delete_from_toilets_file(info["name"], info["address"], info["lat"], info["lon"])
+            msg = "✅ 已刪除該廁所"
+            if not deleted_sheet:
+                msg += "（但 Google Sheets 刪除失敗）"
+            if not deleted_csv:
+                msg += "（但 CSV 刪除失敗）"
+            del pending_delete_confirm[uid]
+            reply_messages.append(TextSendMessage(text=msg))
+            line_bot_api.reply_message(event.reply_token, reply_messages)
+            return
+        elif text == "取消":
+            del pending_delete_confirm[uid]
+            reply_messages.append(TextSendMessage(text="❌ 已取消刪除操作"))
+            line_bot_api.reply_message(event.reply_token, reply_messages)
+            return
+        else:
+            reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
+            line_bot_api.reply_message(event.reply_token, reply_messages)
+            return
+
+    # === 新增廁所流程 ===
     if text.startswith("新增廁所"):
         pending_additions[uid] = {'step': 1}
         reply_messages.append(TextSendMessage(text="🔧 請提供廁所名稱："))
 
     elif uid in pending_additions:
         step = pending_additions[uid]['step']
-
         if text == "取消":
             del pending_additions[uid]
             reply_messages.append(TextSendMessage(text="❌ 新增廁所操作已取消，您可以繼續其他操作。"))
@@ -302,12 +378,10 @@ def handle_text(event):
                 pending_additions[uid]['name'] = text
                 pending_additions[uid]['step'] = 2
                 reply_messages.append(TextSendMessage(text="📍 請提供地址 例如：新北市 三重區 五華街 282號(用空格隔開)："))
-
             elif step == 2:
                 name = pending_additions[uid]['name']
                 address = text
                 city, lat, lon = geocode_address(address, name)
-
                 if lat is None or lon is None:
                     reply_messages.append(TextSendMessage(text="❌ 地址無法解析，請確認地址格式正確並重新輸入。\n若不想繼續新增廁所，請輸入「取消」來取消操作。"))
                 else:
@@ -354,37 +428,41 @@ def handle_text(event):
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
-    try:
-        action, name, lat, lon = data.split(":")
-    except ValueError:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
-        return
+    # 分三種狀況：加入收藏、移除收藏、刪除廁所確認流程
+    if data.startswith("add:"):
+        try:
+            _, name, lat, lon = data.split(":")
+        except ValueError:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
+            return
 
-    reply_messages = []
-
-    if uid not in user_locations:
-        reply_messages.append(TextSendMessage(text="請先傳送位置"))
-    else:
-        if action == "add":
+        reply_messages = []
+        if uid not in user_locations:
+            reply_messages.append(TextSendMessage(text="請先傳送位置"))
+        else:
             added = False
             for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
                 if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
                     add_to_favorites(uid, toilet)
                     added = True
                     break
-            if added:
-                reply_messages.append(TextSendMessage(text=f"✅ 已收藏 {name}"))
-            else:
-                reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
+        if added:
+            reply_messages.append(TextSendMessage(text=f"✅ 已收藏 {name}"))
+        else:
+            reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
+        if reply_messages:      
+            line_bot_api.reply_message(event.reply_token, reply_messages)
 
-        elif action == "remove":
-            if remove_from_favorites(uid, name, lat, lon):
-                reply_messages.append(TextSendMessage(text=f"❌ 已移除 {name}"))
-            else:
-                reply_messages.append(TextSendMessage(text="找不到該收藏"))
-
-    if reply_messages:
-        line_bot_api.reply_message(event.reply_token, reply_messages)
+    if data.startswith("confirm_delete:"):
+        try:
+            _, name, address, lat, lon = data.split(":")
+            pending_delete_confirm[uid] = {"name": name, "address": address, "lat": lat, "lon": lon}
+            line_bot_api.reply_message(event.reply_token, [
+            TextSendMessage(text=f"⚠️ 確定要刪除廁所 {name} 嗎？"),
+            TextSendMessage(text="請輸入『確認刪除』或『取消』")
+            ])
+        except:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
@@ -392,9 +470,6 @@ def handle_location(event):
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[uid] = (lat, lon)
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢"))
-
-
-# === 啟動伺服器 ===
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
