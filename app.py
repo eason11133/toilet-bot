@@ -465,7 +465,7 @@ def handle_text(event):
                     except Exception as e:
                         logging.error(f"寫入檔案失敗：{e}")
                         line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
-                        return  # 🔥 加這一行，避免出現 Invalid reply token 錯誤
+                        return  # 🔥 這裡要 return，避免後面重複回覆
 
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
@@ -507,10 +507,9 @@ def handle_text(event):
                     toilet["distance"] = int(haversine(lat, lon, toilet["lat"], toilet["lon"]))
             msg = create_toilet_flex_messages(recent_toilets, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
+
     if reply_messages:
         line_bot_api.reply_message(event.reply_token, reply_messages)
-
-
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
