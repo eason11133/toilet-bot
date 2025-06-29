@@ -509,7 +509,10 @@ def handle_text(event):
             reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
 
     if reply_messages:
-        line_bot_api.reply_message(event.reply_token, reply_messages)
+        try:
+            line_bot_api.reply_message(event.reply_token, reply_messages)
+        except Exception as e:
+            logging.error(f"❌ 回覆訊息失敗（TextMessage）: {e}")
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
@@ -518,6 +521,7 @@ def handle_postback(event):
 
     # 分三種狀況：加入收藏、移除收藏、刪除廁所確認流程
     if data.startswith("add:"):
+        added = False
         try:
             _, name, lat, lon = data.split(":")
         except ValueError:
@@ -528,7 +532,6 @@ def handle_postback(event):
         if uid not in user_locations:
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
-            added = False
             for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
                 if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
                     add_to_favorites(uid, toilet)
@@ -539,8 +542,10 @@ def handle_postback(event):
         else:
             reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
         if reply_messages:
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-
+            try:
+                line_bot_api.reply_message(event.reply_token, reply_messages)
+            except Exception as e:
+                logging.error(f"❌ 回覆訊息失敗（Postback add）: {e}")
     elif data.startswith("remove_fav:"):
         try:
             _, name, lat, lon = data.split(":")
