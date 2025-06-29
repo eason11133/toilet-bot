@@ -12,6 +12,9 @@ from linebot.models import (
     FlexSendMessage, PostbackEvent, TextSendMessage,
     URIAction
 )
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +25,28 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 TOILETS_FILE_PATH = os.path.join(os.getcwd(), "data", "public_toilets.csv")
 FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
+
+# Google Sheets 設定
+GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+GSHEET_CREDENTIALS_FILE = os.getenv("GSHEET_CREDENTIALS_JSON_PATH")  # 你的 json 憑證路徑
+GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
+
+gc = None
+sh = None
+worksheet = None
+
+def init_gsheet():
+    global gc, sh, worksheet
+    try:
+        creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS_FILE, GSHEET_SCOPE)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(GSHEET_SPREADSHEET_ID)
+        worksheet = sh.sheet1
+    except Exception as e:
+        logging.error(f"Google Sheets 初始化失敗: {e}")
+        worksheet = None
+
+init_gsheet()
 
 if not os.path.exists(TOILETS_FILE_PATH):
     logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
@@ -207,6 +232,19 @@ def add_to_toilets_file(name, address, lat, lon):
         logging.error(f"寫入檔案失敗：{e}")
         raise
 
+def add_to_gsheet(user_id, name, address, lat, lon):
+    if worksheet is None:
+        logging.error("Google Sheets worksheet 未初始化")
+        return False
+    try:
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        row = [user_id, name, address, lat, lon, timestamp]
+        worksheet.append_row(row)
+        return True
+    except Exception as e:
+        logging.error(f"寫入 Google Sheets 失敗：{e}")
+        return False
+
 def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
@@ -279,8 +317,6 @@ def index():
 def handle_text(event):
     text = event.message.text.lower()
     uid = event.source.user_id
-
-    # 只在此處回覆一次
     reply_messages = []
 
     if text.startswith("新增廁所"):
@@ -309,10 +345,13 @@ def handle_text(event):
                 else:
                     try:
                         add_to_toilets_file(name, address, lat, lon)
-                        reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}"))
+                        success = add_to_gsheet(uid, name, address, lat, lon)
+                        if success:
+                            reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name} 並同步至 Google Sheets"))
+                        else:
+                            reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}，但同步 Google Sheets 失敗"))
                     except Exception as e:
                         logging.error(f"寫入檔案失敗：{e}")
-                        # 改用 push_message 補發，避免重複回覆錯誤
                         line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
                     del pending_additions[uid]
 
@@ -341,7 +380,6 @@ def handle_text(event):
             msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
-    # 只呼叫一次 reply_message
     if reply_messages:
         line_bot_api.reply_message(event.reply_token, reply_messages)
 
@@ -352,7 +390,6 @@ def handle_postback(event):
     data = event.postback.data
     action, name, lat, lon = data.split(":")
 
-    # 只在此處回覆一次
     reply_messages = []
 
     if uid not in user_locations:
