@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import logging
 import requests
 from math import radians, cos, sin, asin, sqrt
@@ -9,16 +10,15 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
-    FlexSendMessage, PostbackEvent, TextSendMessage,
-    URIAction
+    FlexSendMessage, PostbackEvent, TextSendMessage
 )
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
+# === 初始化 ===
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
@@ -26,30 +26,34 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 TOILETS_FILE_PATH = os.path.join(os.getcwd(), "data", "public_toilets.csv")
 FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
 
-# Google Sheets 設定
+# === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-GSHEET_CREDENTIALS_FILE = os.getenv("GSHEET_CREDENTIALS_JSON_PATH")  # 你的 json 憑證路徑
+GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")  # 放在環境變數中
 GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
-gc = None
-sh = None
-worksheet = None
+gc = sh = worksheet = None
 
 def init_gsheet():
     global gc, sh, worksheet
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS_FILE, GSHEET_SCOPE)
+        if not GSHEET_CREDENTIALS_JSON:
+            logging.error("❌ GSHEET_CREDENTIALS_JSON 環境變數未設定")
+            return
+        credentials_dict = json.loads(GSHEET_CREDENTIALS_JSON)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(GSHEET_SPREADSHEET_ID)
         worksheet = sh.sheet1
+        logging.info("✅ Google Sheets 初始化成功")
     except Exception as e:
-        logging.error(f"Google Sheets 初始化失敗: {e}")
+        logging.error(f"❌ Google Sheets 初始化失敗: {e}")
         worksheet = None
 
 init_gsheet()
 
+# === 本地檔案確認 ===
 if not os.path.exists(TOILETS_FILE_PATH):
-    logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
+    logging.error(f"{TOILETS_FILE_PATH} 不存在")
 else:
     logging.info(f"{TOILETS_FILE_PATH} 檔案存在")
 
@@ -60,40 +64,39 @@ def ensure_favorites_file():
             with open(FAVORITES_FILE_PATH, "w", encoding="utf-8"):
                 pass
     except Exception as e:
-        logging.error(f"Error creating favorites.txt: {e}")
+        logging.error(f"建立 favorites.txt 時出錯: {e}")
         raise
 
 ensure_favorites_file()
 
+# === 全域資料 ===
 user_locations = {}
 MAX_DISTANCE = 500
 MAX_TOILETS_REPLY = 5
 pending_additions = {}
 
+# === 計算距離 ===
 def haversine(lat1, lon1, lat2, lon2):
     try:
         lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
         dlat = lat2 - lat1
         dlon = lon2 - lon1
-        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
         return 2 * asin(sqrt(a)) * 6371000
     except Exception as e:
-        logging.error(f"Error calculating distance: {e}")
+        logging.error(f"計算距離錯誤: {e}")
         return 0
 
+# === 查本地廁所資料 ===
 def query_local_toilets(lat, lon):
     toilets = []
     try:
-        if not os.path.exists(TOILETS_FILE_PATH):
-            logging.error(f"{TOILETS_FILE_PATH} 不存在，請確認檔案是否存在於指定路徑")
-            return []
         with open(TOILETS_FILE_PATH, 'r', encoding='utf-8') as file:
             reader = csv.reader(file)
-            header = next(reader, None)
+            next(reader, None)
             for row in reader:
                 if len(row) != 15:
                     continue
-                row = [col.strip() for col in row]
                 _, _, _, _, name, address, _, latitude, longitude, _, _, type_, _, _, _ = row
                 try:
                     t_lat, t_lon = float(latitude), float(longitude)
@@ -108,15 +111,13 @@ def query_local_toilets(lat, lon):
                             "type": type_
                         })
                 except Exception as e:
-                    logging.error(f"Error processing row: {e}")
-                    continue
+                    logging.error(f"處理 row 錯誤: {e}")
     except Exception as e:
-        logging.error(f"Error reading {TOILETS_FILE_PATH}: {e}")
-        return []
+        logging.error(f"讀取 CSV 錯誤: {e}")
     return sorted(toilets, key=lambda x: x['distance'])
 
+# === 查 OpenStreetMap 廁所資料 ===
 def query_overpass_toilets(lat, lon, radius=500):
-    url = "https://overpass-api.de/api/interpreter"
     query = f"""
     [out:json];
     (
@@ -127,11 +128,10 @@ def query_overpass_toilets(lat, lon, radius=500):
     out center;
     """
     try:
-        resp = requests.post(url, data=query, headers={"User-Agent": "LineBotToiletFinder/1.0"}, timeout=10)
-        resp.raise_for_status()
+        resp = requests.post("https://overpass-api.de/api/interpreter", data=query, headers={"User-Agent": "ToiletBot/1.0"}, timeout=10)
         data = resp.json()
     except Exception as e:
-        logging.error(f"Overpass API 查詢失敗：{e}")
+        logging.error(f"Overpass 查詢失敗: {e}")
         return []
 
     toilets = []
@@ -142,163 +142,131 @@ def query_overpass_toilets(lat, lon, radius=500):
             t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
         else:
             continue
-        dist = haversine(lat, lon, t_lat, t_lon)
-        name = elem.get("tags", {}).get("name", "無名稱")
         toilets.append({
-            "name": name,
+            "name": elem.get("tags", {}).get("name", "無名稱"),
             "lat": t_lat,
             "lon": t_lon,
             "address": "",
-            "distance": dist,
+            "distance": haversine(lat, lon, t_lat, t_lon),
             "type": "osm"
         })
     return sorted(toilets, key=lambda x: x["distance"])
 
-def add_to_favorites(user_id, toilet):
+# === 收藏管理 ===
+def add_to_favorites(uid, toilet):
     try:
-        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8") as file:
-            file.write(f"{user_id},{toilet['name']},{toilet['lat']},{toilet['lon']},{toilet['address']}\n")
+        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{uid},{toilet['name']},{toilet['lat']},{toilet['lon']},{toilet['address']}\n")
     except Exception as e:
-        logging.error(f"Error adding to favorites: {e}")
+        logging.error(f"收藏失敗: {e}")
 
-def remove_from_favorites(user_id, name, lat, lon):
+def remove_from_favorites(uid, name, lat, lon):
     try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as file:
-            lines = file.readlines()
-        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8") as file:
+        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8") as f:
             for line in lines:
                 data = line.strip().split(',')
-                if not (data[0] == user_id and data[1] == name and data[2] == str(lat) and data[3] == str(lon)):
-                    file.write(line)
+                if not (data[0] == uid and data[1] == name and data[2] == str(lat) and data[3] == str(lon)):
+                    f.write(line)
         return True
     except Exception as e:
-        logging.error(f"Error removing favorite: {e}")
+        logging.error(f"移除收藏失敗: {e}")
         return False
 
-def get_user_favorites(user_id):
-    favorites = []
+def get_user_favorites(uid):
+    favs = []
     try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as file:
-            for line in file:
+        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
+            for line in f:
                 data = line.strip().split(',')
-                if data[0] == user_id:
-                    favorites.append({
+                if data[0] == uid:
+                    favs.append({
                         "name": data[1],
                         "lat": float(data[2]),
                         "lon": float(data[3]),
                         "address": data[4],
-                        "type": "favorite",
-                        "distance": 0
+                        "distance": 0,
+                        "type": "favorite"
                     })
     except Exception as e:
-        logging.error(f"Error reading {FAVORITES_FILE_PATH}: {e}")
-    return favorites
+        logging.error(f"讀取收藏失敗: {e}")
+    return favs
 
+# === 地址轉經緯度 ===
 def geocode_address(address, user_name):
     try:
-        formatted_address = ' '.join(address.split())
-        address_encoded = requests.utils.quote(formatted_address)
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={address_encoded}"
-        headers = {
-            "User-Agent": "YourAppName/1.0 (http://yourwebsite.com/contact)"
-        }
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            if data:
-                lat = float(data[0]['lat'])
-                lon = float(data[0]['lon'])
-                name = data[0].get('name', '') or user_name
-                return name, lat, lon
-        return None, None, None
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address)}"
+        headers = { "User-Agent": "ToiletBot/1.0" }
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200 and resp.json():
+            data = resp.json()[0]
+            return user_name, float(data['lat']), float(data['lon'])
     except Exception as e:
-        logging.error(f"解析地址出錯：{e}")
-        return None, None, None
+        logging.error(f"地址解析失敗: {e}")
+    return None, None, None
 
+# === 寫入廁所 CSV 與 Sheets ===
 def add_to_toilets_file(name, address, lat, lon):
     try:
-        if not os.path.exists(TOILETS_FILE_PATH):
-            return
-        with open(TOILETS_FILE_PATH, "r", encoding="utf-8", errors='ignore') as f:
+        with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
             lines = f.readlines()
         new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
-        with open(TOILETS_FILE_PATH, "w", encoding="utf-8", errors='ignore') as f:
+        with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
             if lines:
                 f.write(lines[0])
             f.write(new_row)
-            if len(lines) > 1:
-                f.writelines(lines[1:])
+            f.writelines(lines[1:])
     except Exception as e:
-        logging.error(f"寫入檔案失敗：{e}")
+        logging.error(f"寫入廁所資料失敗: {e}")
         raise
 
-def add_to_gsheet(user_id, name, address, lat, lon):
+def add_to_gsheet(uid, name, address, lat, lon):
     if worksheet is None:
-        logging.error("Google Sheets worksheet 未初始化")
+        logging.error("Sheets 未初始化")
         return False
     try:
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        row = [user_id, name, address, lat, lon, timestamp]
-        worksheet.append_row(row)
+        worksheet.append_row([uid, name, address, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
         return True
     except Exception as e:
-        logging.error(f"寫入 Google Sheets 失敗：{e}")
+        logging.error(f"寫入 Sheets 失敗: {e}")
         return False
 
-def create_toilet_flex_messages(toilets, user_lat, user_lon, show_delete=False):
+# === 建立 Flex Message ===
+def create_toilet_flex_messages(toilets, show_delete=False):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
-        distance_m = int(toilet['distance'])
-        distance_text = f"{distance_m}公尺" if distance_m < 1000 else f"{distance_m/1000:.2f}公里"
-        actions = []
-        data_str = f"{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
-        if show_delete:
-            actions.append({
-                "type": "postback",
-                "label": "移除收藏",
-                "data": f"remove:{data_str}"
-            })
-        else:
-            actions.append({
-                "type": "postback",
-                "label": "加入收藏",
-                "data": f"add:{data_str}"
-            })
-        bubble = {
+        actions = [{
+            "type": "postback",
+            "label": "移除收藏" if show_delete else "加入收藏",
+            "data": f"{'remove' if show_delete else 'add'}:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
+        }]
+        bubbles.append({
             "type": "bubble",
             "body": {
                 "type": "box",
                 "layout": "vertical",
                 "contents": [
-                    {"type": "text", "text": toilet.get('name') or "無名稱", "weight": "bold", "size": "lg", "wrap": True},
-                    {"type": "text", "text": toilet.get('address') or "（無地址）", "size": "sm", "color": "#666666", "wrap": True},
-                    {"type": "text", "text": distance_text, "size": "sm", "color": "#999999"},
+                    {"type": "text", "text": toilet['name'], "weight": "bold", "size": "lg", "wrap": True},
+                    {"type": "text", "text": toilet['address'] or "無地址", "size": "sm", "color": "#666666", "wrap": True},
+                    {"type": "text", "text": f"{int(toilet['distance'])} 公尺", "size": "sm", "color": "#999999"}
                 ]
             },
             "footer": {
                 "type": "box",
                 "layout": "vertical",
                 "contents": [
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "action": {
-                            "type": "uri",
-                            "label": "導航",
-                            "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
-                        }
-                    },
-                    {
-                        "type": "button",
-                        "style": "secondary",
-                        "action": actions[0]
-                    }
+                    {"type": "button", "style": "primary", "action": {
+                        "type": "uri", "label": "導航",
+                        "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
+                    }},
+                    {"type": "button", "style": "secondary", "action": actions[0]}
                 ]
             }
-        }
-        bubbles.append(bubble)
-    return {"type": "carousel", "contents": bubbles}
+        })
+    return { "type": "carousel", "contents": bubbles }
 
+# === Webhook ===
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -307,11 +275,11 @@ def callback():
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-    return 'OK'
+    return "OK"
 
 @app.route("/")
 def index():
-    return "Line Bot API is running!"
+    return "ToiletBot is running!"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -368,7 +336,7 @@ def handle_text(event):
             if not toilets:
                 reply_messages.append(TextSendMessage(text="附近找不到廁所，看來只能原地解放了"))
             else:
-                msg = create_toilet_flex_messages(toilets, lat, lon)
+                msg = create_toilet_flex_messages(toilets)
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
 
     elif text == "我的最愛":
@@ -376,19 +344,21 @@ def handle_text(event):
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
         else:
-            lat, lon = user_locations.get(uid, (0, 0))
-            msg = create_toilet_flex_messages(favs, lat, lon, show_delete=True)
+            msg = create_toilet_flex_messages(favs, show_delete=True)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     if reply_messages:
         line_bot_api.reply_message(event.reply_token, reply_messages)
 
-
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
-    action, name, lat, lon = data.split(":")
+    try:
+        action, name, lat, lon = data.split(":")
+    except ValueError:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
+        return
 
     reply_messages = []
 
@@ -416,7 +386,6 @@ def handle_postback(event):
     if reply_messages:
         line_bot_api.reply_message(event.reply_token, reply_messages)
 
-
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     uid = event.source.user_id
@@ -424,6 +393,8 @@ def handle_location(event):
     user_locations[uid] = (lat, lon)
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢"))
 
+
+# === 啟動伺服器 ===
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
