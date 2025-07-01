@@ -20,70 +20,77 @@
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
-  async function init() {
-    try {
-      await liff.init({ liffId: "2007674330-LpvKBNGb" });
-    } catch (err) {
-      document.getElementById("msg").innerText = "❌ LIFF 初始化失敗：" + err;
-    }
-  }
-
-  function formatAddress(raw) {
-    return raw
-      .trim()
-      .replace(/([縣市區鄉鎮村里路街道段巷弄號樓])/g, '$1 ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  init();
-
-  document.getElementById("form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = document.getElementById("name").value.trim();
-    let address = document.getElementById("address").value.trim();
-    const msgDiv = document.getElementById("msg");
-
-    if (!name || !address) {
-      msgDiv.innerText = "❗請填寫所有欄位";
-      return;
-    }
-
-    address = formatAddress(address);
-
-    try {
-      const profile = await liff.getProfile();
-      const res = await fetch("https://school-i9co.onrender.com/submit_toilet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: profile.userId,
-          name: name,
-          address: address
-        })
-      });
-
-      let data = {};
+    async function init() {
       try {
-        data = await res.json();
+        await liff.init({ liffId: "2007674330-LpvKBNGb" });
+
+        // 確保登入
+        if (!liff.isLoggedIn()) {
+          liff.login();
+          return;
+        }
+
       } catch (err) {
-        msgDiv.innerText = "❌ 回傳格式錯誤，可能不是 JSON\n" + err;
+        document.getElementById("msg").innerText = "❌ LIFF 初始化失敗：" + err;
+      }
+    }
+
+    function formatAddress(raw) {
+      return raw
+        .trim()
+        .replace(/([縣市區鄉鎮村里路街道段巷弄號樓])/g, '$1 ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    init();
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("name").value.trim();
+      let address = document.getElementById("address").value.trim();
+      const msgDiv = document.getElementById("msg");
+
+      if (!name || !address) {
+        msgDiv.innerText = "❗請填寫所有欄位";
         return;
       }
 
-      if (res.ok && data.success) {
-        msgDiv.style.color = "#0a0";
-        msgDiv.innerText = data.message || "✅ 提交成功";
-      } else {
+      address = formatAddress(address);
+
+      try {
+        const profile = await liff.getProfile();
+        const res = await fetch("https://school-i9co.onrender.com/submit_toilet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: profile.userId,
+            name: name,
+            address: address
+          })
+        });
+
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (err) {
+          msgDiv.innerText = "❌ 回傳格式錯誤，可能不是 JSON\n" + err;
+          return;
+        }
+
+        if (res.ok && data.success) {
+          msgDiv.style.color = "#0a0";
+          msgDiv.innerText = data.message || "✅ 提交成功";
+        } else {
+          msgDiv.style.color = "#c00";
+          msgDiv.innerText = "❌ " + (data.message || "提交失敗（未知錯誤）");
+        }
+      } catch (err) {
+        console.error("❌ Fetch 發生錯誤：", err);
         msgDiv.style.color = "#c00";
-        msgDiv.innerText = "❌ " + (data.message || "提交失敗（未知錯誤）");
+        msgDiv.innerText = "❌ 提交失敗（連線或伺服器錯誤）\n" + err;
       }
-    } catch (err) {
-      console.error("❌ Fetch 發生錯誤：", err);
-      msgDiv.style.color = "#c00";
-      msgDiv.innerText = "❌ 提交失敗（連線或伺服器錯誤）\n" + err;
-    }
-  });
-</script>
+    });
+  </script>
 </body>
 </html>
