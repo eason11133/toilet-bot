@@ -410,25 +410,31 @@ def render_add_page():
 def submit_toilet():
     try:
         data = request.get_json()
+        logging.info(f"📝 收到資料: {data}")  # ✅ 看到用戶送過來的內容
+
         uid = data.get("user_id")
         name = data.get("name")
         address = data.get("address")
 
         if not all([uid, name, address]):
+            logging.warning(f"❗ 缺參數: uid={uid}, name={name}, address={address}")
             return {"success": False, "message": "缺少參數"}, 400
 
         _, lat, lon = geocode_address(address, name)
         if lat is None or lon is None:
+            logging.warning(f"❗ 地址解析失敗: {address}")
             return {"success": False, "message": "無法解析地址"}, 400
 
         add_to_toilets_file(name, address, lat, lon)
         ok = add_to_gsheet(uid, name, address, lat, lon)
         if not ok:
+            logging.error("❌ 寫入 Google Sheets 失敗")
             return {"success": False, "message": "寫入 Google Sheets 失敗"}, 500
 
+        logging.info(f"✅ 廁所新增成功: {name} @ {address}")
         return {"success": True, "message": f"✅ 已新增廁所 {name}"}
     except Exception as e:
-        logging.error(f"表單提交錯誤: {e}")
+        logging.error(f"❌ submit_toilet 例外錯誤: {e}", exc_info=True)
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
 
 @handler.add(MessageEvent, message=TextMessage)
