@@ -6,7 +6,7 @@
   <style>
     body { font-family: Arial; padding: 20px; }
     input, button { display: block; margin: 10px 0; width: 100%; padding: 10px; font-size: 16px; }
-    #msg { margin-top: 20px; }
+    #msg { margin-top: 20px; color: red; }
   </style>
 </head>
 <body>
@@ -14,26 +14,48 @@
   <form id="form">
     <input type="text" id="name" placeholder="廁所名稱（可自訂）" required>
     <input type="text" id="address" placeholder="地址（例如：台北市信義區市府路45號）" required>
-    <button type="submit">提交</button>
+    <button type="submit" id="submit-btn">提交</button>
   </form>
   <div id="msg"></div>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
     async function init() {
-      await liff.init({ liffId: "2007674330-LpvKBNGb" });  // <--- 把這裡換成你自己的 LIFF ID
+      try {
+        await liff.init({ liffId: "2007674330-LpvKBNGb" });
+        if (!liff.isLoggedIn()) {
+          liff.login();
+        }
+      } catch (e) {
+        console.error("❌ LIFF 初始化失敗", e);
+        document.getElementById("msg").innerText = "❌ LIFF 初始化失敗，請重新開啟";
+      }
     }
 
     init();
 
     document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
+
+      const btn = document.getElementById("submit-btn");
       const name = document.getElementById("name").value.trim();
       const address = document.getElementById("address").value.trim();
-      if (!name || !address) return;
+      const msg = document.getElementById("msg");
+      msg.innerText = "";
+      btn.disabled = true;
+      btn.innerText = "提交中...";
+
+      if (!name || !address) {
+        msg.innerText = "❗名稱與地址皆為必填";
+        btn.disabled = false;
+        btn.innerText = "提交";
+        return;
+      }
 
       try {
         const profile = await liff.getProfile();
+        console.log("👤 使用者資訊:", profile);
+
         const res = await fetch("https://school-i9co.onrender.com/submit_toilet", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -44,11 +66,22 @@
           })
         });
 
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error("伺服器錯誤：" + errorText);
+        }
+
         const data = await res.json();
-        document.getElementById("msg").innerText = data.message || "提交成功";
+        console.log("✅ 成功提交:", data);
+        msg.style.color = "green";
+        msg.innerText = data.message || "✅ 提交成功";
       } catch (err) {
-        console.error(err);
-        document.getElementById("msg").innerText = "❌ 提交失敗";
+        console.error("❌ 提交失敗:", err);
+        msg.style.color = "red";
+        msg.innerText = "❌ 提交失敗：" + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "提交";
       }
     });
   </script>
