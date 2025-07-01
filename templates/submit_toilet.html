@@ -6,14 +6,14 @@
   <style>
     body { font-family: Arial; padding: 20px; }
     input, button { display: block; margin: 10px 0; width: 100%; padding: 10px; font-size: 16px; }
-    #msg { margin-top: 20px; }
+    #msg { margin-top: 20px; color: green; font-weight: bold; }
   </style>
 </head>
 <body>
   <h2>新增廁所</h2>
   <form id="form">
     <input type="text" id="name" placeholder="廁所名稱（可自訂）" required>
-    <input type="text" id="address" placeholder="地址（例如：台北市信義區市府路45號）" required>
+    <input type="text" id="address" placeholder="地址（例如：台北市 信義區 市府路 45 號）" required>
     <button type="submit">提交</button>
   </form>
   <div id="msg"></div>
@@ -21,15 +21,16 @@
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
     async function init() {
-      await liff.init({ liffId: "2007674330-LpvKBNGb" });  // 換成你的 LIFF ID
+      await liff.init({ liffId: "2007674330-LpvKBNGb" });
     }
 
-    // 將地址加空格處理函式（例如「台北市信義區市府路45號」→「台北市 信義區 市府路 45號」）
+    // 強化地址格式化處理
     function formatAddress(raw) {
       return raw
         .trim()
-        .replace(/([縣市區鄉鎮村里路街道段巷弄號樓])/g, '$1 ')  // 在常見地址單位後加空格
-        .replace(/\s+/g, ' ')  // 移除多餘空格
+        .replace(/([縣市區鄉鎮村里路街道段巷弄號樓])/g, '$1 ')  // 在單位後加空格
+        .replace(/ +/g, ' ')  // 移除多餘空格
+        .replace(/(\d)([號樓])/g, '$1 $2')  // 數字後的「號」、「樓」也加空格
         .trim();
     }
 

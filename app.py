@@ -224,13 +224,18 @@ def geocode_address(address, user_name):
     try:
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address)}"
         headers = { "User-Agent": "ToiletBot/1.0" }
+        logging.info(f"📡 查詢地址：{address} → {url}")  # 加這行
+
         resp = requests.get(url, headers=headers)
-        if resp.status_code == 200 and resp.json():
-            data = resp.json()[0]
-            return user_name, float(data['lat']), float(data['lon'])
+        data = resp.json()
+        logging.info(f"📦 查詢結果：{data}")  # 加這行
+
+        if resp.status_code == 200 and data:
+            return user_name, float(data[0]['lat']), float(data[0]['lon'])
     except Exception as e:
         logging.error(f"地址解析失敗: {e}")
     return None, None, None
+
 
 # === 寫入廁所 CSV 與 Sheets ===
 def add_to_toilets_file(name, address, lat, lon):
