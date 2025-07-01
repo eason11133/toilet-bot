@@ -4,7 +4,7 @@ import json
 import logging
 import requests
 from math import radians, cos, sin, asin, sqrt
-from flask import Flask, request, abort
+from flask import Flask, request, abort, render_template
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -99,7 +99,6 @@ ensure_favorites_file()
 user_locations = {}
 MAX_DISTANCE = 500
 MAX_TOILETS_REPLY = 5
-pending_additions = {}
 pending_delete_confirm = {}
 
 # === 計算距離 ===
@@ -399,6 +398,33 @@ def callback():
 @app.route("/", methods=["GET"])
 def home():
     return "Toilet bot is running!", 200
+@app.route("/add")
+def render_add_page():
+    return render_template("submit_toilet.html")
+@app.route("/submit_toilet", methods=["POST"])
+def submit_toilet():
+    try:
+        data = request.get_json()
+        uid = data.get("user_id")
+        name = data.get("name")
+        address = data.get("address")
+
+        if not all([uid, name, address]):
+            return {"success": False, "message": "缺少參數"}, 400
+
+        _, lat, lon = geocode_address(address, name)
+        if lat is None or lon is None:
+            return {"success": False, "message": "無法解析地址"}, 400
+
+        add_to_toilets_file(name, address, lat, lon)
+        ok = add_to_gsheet(uid, name, address, lat, lon)
+        if not ok:
+            return {"success": False, "message": "寫入 Google Sheets 失敗"}, 500
+
+        return {"success": True, "message": f"✅ 已新增廁所 {name}"}
+    except Exception as e:
+        logging.error(f"表單提交錯誤: {e}")
+        return {"success": False, "message": "❌ 伺服器錯誤"}, 500
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -430,42 +456,6 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
             line_bot_api.reply_message(event.reply_token, reply_messages)
             return
-
-    # === 新增廁所流程 ===
-    if text.startswith("新增廁所"):
-        pending_additions[uid] = {'step': 1}
-        reply_messages.append(TextSendMessage(text="🔧 請提供廁所名稱："))
-
-    elif uid in pending_additions:
-        step = pending_additions[uid]['step']
-        if text == "取消":
-            del pending_additions[uid]
-            reply_messages.append(TextSendMessage(text="❌ 新增廁所操作已取消，您可以繼續其他操作。"))
-        else:
-            if step == 1:
-                pending_additions[uid]['name'] = text
-                pending_additions[uid]['step'] = 2
-                reply_messages.append(TextSendMessage(text="📍 請提供地址 例如：新北市 三重區 五華街 282號(用空格隔開)："))
-            elif step == 2:
-                name = pending_additions[uid]['name']
-                address = text
-                city, lat, lon = geocode_address(address, name)
-                if lat is None or lon is None:
-                    reply_messages.append(TextSendMessage(text="❌ 地址無法解析，請確認地址格式正確並重新輸入。\n若不想繼續新增廁所，請輸入「取消」來取消操作。"))
-                else:
-                    try:
-                        add_to_toilets_file(name, address, lat, lon)
-                        success = add_to_gsheet(uid, name, address, lat, lon)
-                        if success:
-                            reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name} 並同步至 Google Sheets"))
-                            del pending_additions[uid]
-                        else:
-                            reply_messages.append(TextSendMessage(text=f"✅ 已成功新增廁所：{name}，但同步 Google Sheets 失敗"))
-                            del pending_additions[uid]  # <--- 這行是關鍵
-                    except Exception as e:
-                        logging.error(f"寫入檔案失敗：{e}")
-                        line_bot_api.push_message(uid, TextSendMessage(text="❌ 寫入檔案失敗，請稍後再試或聯絡管理員。"))
-                        return  # 🔥 這裡要 return，避免後面重複回覆
 
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
