@@ -456,7 +456,13 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
             line_bot_api.reply_message(event.reply_token, reply_messages)
             return
-
+    elif text == "新增廁所":
+        # 這邊可以回覆一個帶表單網址的文字訊息，讓用戶點擊去填寫
+        reply_messages.append(TextSendMessage(
+            text="請點擊以下連結新增廁所：\nhttps://你的網域/add"
+        ))
+        line_bot_api.reply_message(event.reply_token, reply_messages)
+        return
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
