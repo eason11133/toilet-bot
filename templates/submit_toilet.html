@@ -25,10 +25,15 @@
         await liff.init({ liffId: "2007674330-LpvKBNGb" });
 
         if (!liff.isLoggedIn()) {
+          console.warn("⚠️ 尚未登入，將跳轉登入頁面");
           liff.login();
           return;
         }
+
+        const profile = await liff.getProfile();
+        console.log("✅ 使用者 ID:", profile.userId);
       } catch (err) {
+        console.error("❌ LIFF 初始化錯誤:", err);
         document.getElementById("msg").innerText = "❌ LIFF 初始化失敗：" + err;
       }
     }
@@ -58,14 +63,17 @@
 
       try {
         const profile = await liff.getProfile();
+        const payload = {
+          user_id: profile.userId,
+          name: name,
+          address: address
+        };
+        console.log("📦 傳送資料:", payload);
+
         const res = await fetch("https://school-i9co.onrender.com/submit_toilet", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: profile.userId,
-            name: name,
-            address: address
-          })
+          body: JSON.stringify(payload)
         });
 
         let data = {};
@@ -73,8 +81,11 @@
           data = await res.json();
         } catch (err) {
           msgDiv.innerText = "❌ 回傳格式錯誤，可能不是 JSON\n" + err;
+          console.error("❌ JSON 解析錯誤:", err);
           return;
         }
+
+        console.log("✅ 伺服器回應:", data);
 
         if (res.ok && data.success) {
           msgDiv.style.color = "#0a0";
