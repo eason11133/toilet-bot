@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>新增廁所</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    input, button { display: block; margin: 10px 0; width: 100%; padding: 10px; font-size: 16px; }
+    #msg { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>新增廁所</h2>
+  <form id="form">
+    <input type="text" id="name" placeholder="廁所名稱（可自訂）" required>
+    <input type="text" id="address" placeholder="地址（例如：台北市信義區市府路45號）" required>
+    <button type="submit">提交</button>
+  </form>
+  <div id="msg"></div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    async function init() {
+      await liff.init({ liffId: "2007674330-LpvKBNGb" });  // <--- 把這裡換成你自己的 LIFF ID
+    }
+
+    init();
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("name").value.trim();
+      const address = document.getElementById("address").value.trim();
+      if (!name || !address) return;
+
+      try {
+        const profile = await liff.getProfile();
+        const res = await fetch("https://school-i9co.onrender.com/submit_toilet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: profile.userId,
+            name: name,
+            address: address
+          })
+        });
+
+        const data = await res.json();
+        document.getElementById("msg").innerText = data.message || "提交成功";
+      } catch (err) {
+        console.error(err);
+        document.getElementById("msg").innerText = "❌ 提交失敗";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -459,7 +459,7 @@ def handle_text(event):
     elif text == "新增廁所":
         # 這邊可以回覆一個帶表單網址的文字訊息，讓用戶點擊去填寫
         reply_messages.append(TextSendMessage(
-            text="請點擊以下連結新增廁所：\nhttps://你的網域/add"
+            text="請點擊以下連結新增廁所：\nhttps://school-i9co.onrender.com/add"
         ))
         line_bot_api.reply_message(event.reply_token, reply_messages)
         return
