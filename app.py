@@ -3,7 +3,9 @@ import csv
 import json
 import logging
 import requests
+import traceback
 from math import radians, cos, sin, asin, sqrt
+from flask_cors import CORS
 from flask import Flask, request, abort, render_template
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
@@ -20,6 +22,7 @@ from datetime import datetime
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
+CORS(app)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
@@ -227,6 +230,9 @@ def geocode_address(address, user_name):
         logging.info(f"📡 查詢地址：{address} → {url}")  # 加這行
 
         resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            logging.error(f"❌ Geocode API 回應碼: {resp.status_code}")
+            return None, None, None
         data = resp.json()
         logging.info(f"📦 查詢結果：{data}")  # 加這行
 
@@ -435,7 +441,7 @@ def submit_toilet():
 
         return {"success": True, "message": f"✅ 已新增廁所 {name}"}
     except Exception as e:
-        logging.error(f"❌ 表單提交錯誤: {e}")
+        logging.error(f"❌ 表單提交錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
 
 @handler.add(MessageEvent, message=TextMessage)
