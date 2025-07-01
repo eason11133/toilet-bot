@@ -24,12 +24,10 @@
       try {
         await liff.init({ liffId: "2007674330-LpvKBNGb" });
 
-        // 確保登入
         if (!liff.isLoggedIn()) {
           liff.login();
           return;
         }
-
       } catch (err) {
         document.getElementById("msg").innerText = "❌ LIFF 初始化失敗：" + err;
       }
