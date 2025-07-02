@@ -38,12 +38,9 @@
       }
     }
 
+    // 移除空格格式化，保留原始地址
     function formatAddress(raw) {
-      return raw
-        .trim()
-        .replace(/([縣市區鄉鎮村里路街道段巷弄號樓])/g, '$1 ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      return raw.trim();  // 只去掉首尾空格，不做其他處理
     }
 
     init();
