@@ -7,6 +7,7 @@
     body { font-family: Arial; padding: 20px; }
     input, button { display: block; margin: 10px 0; width: 100%; padding: 10px; font-size: 16px; }
     #msg { margin-top: 20px; color: #c00; white-space: pre-wrap; }
+    #guide { margin-top: 10px; font-size: 14px; color: #666; }
   </style>
 </head>
 <body>
@@ -17,6 +18,16 @@
     <button type="submit">提交</button>
   </form>
   <div id="msg"></div>
+  
+  <!-- 使用者提示 -->
+  <div id="guide">
+    <p>提示：請依照以下格式填寫地址：</p>
+    <ul>
+      <li>區域、街道、巷弄號碼之間應加上空格。</li>
+      <li>例如：台北市 信義區 市府路 45號。</li>
+      <li>避免在巷弄、街道等名词之间添加不必要的空格。</li>
+    </ul>
+  </div>
 
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
@@ -38,17 +49,6 @@
       }
     }
 
-    // 自動格式化地址：將連續的地址部分分隔
-    function formatAddress(raw) {
-      // 將每一個「區、路、街、段、巷、號」加上空格
-      return raw
-        .replace(/([市區鄉鎮村][^市區鄉鎮村]+)(?=[0-9a-zA-Z])/g, "$1 ")  // 加空格：如台北市中山區 → 台北市 中山區
-        .replace(/([0-9]+)([段巷弄號]+)/g, "$1 $2")  // 保證號碼和巷弄段之間有空格
-        .replace(/([巷弄])([0-9]+)/g, "$1 $2")  // 保證巷弄後有空格
-        .replace(/\s+/g, " ") // 去掉多餘的空格
-        .trim();
-    }
-
     init();
 
     document.getElementById("form").addEventListener("submit", async (e) => {
@@ -62,8 +62,7 @@
         return;
       }
 
-      address = formatAddress(address);
-
+      // 無需自動格式化地址，讓使用者自己負責正確格式
       try {
         const profile = await liff.getProfile();
         const payload = {
