@@ -361,7 +361,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
 
-        # 刪除按鈕（僅限 user 新增）
+        # 刪除按鈕
         if show_delete and toilet.get("type") == "user" and uid is not None:
             actions.append({
                 "type": "postback",
@@ -369,7 +369,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
             })
 
-        # 回饋按鈕（所有類型都加）
+        # 廁所回饋表單按鈕
         name_for_feedback = toilet['name'] or f"無名稱@{toilet['lat']:.5f},{toilet['lon']:.5f}"
         addr_for_feedback = toilet['address'] or "無地址"
         feedback_url = (
@@ -383,7 +383,19 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "uri": feedback_url
         })
 
-        # 組合 Bubble（footer 改為垂直排版）
+        # ✅ 查看回饋（留言）按鈕
+        comments_url = (
+            "https://school-i9co.onrender.com/view_comments"
+            f"?name={requests.utils.quote(name_for_feedback)}"
+            f"&address={requests.utils.quote(addr_for_feedback)}"
+        )
+        actions.append({
+            "type": "uri",
+            "label": "查看留言",
+            "uri": comments_url
+        })
+
+        # 組合 Flex Bubble
         bubble = {
             "type": "bubble",
             "body": {
@@ -466,6 +478,25 @@ def submit_toilet():
     except Exception as e:
         logging.error(f"❌ 表單提交錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
+
+@app.route("/view_comments")
+def view_comments():
+    name = request.args.get("name", "")
+    address = request.args.get("address", "")
+
+    if worksheet is None:
+        return "留言資料尚未初始化", 500
+
+    try:
+        all_rows = worksheet.get_all_records()
+        matched_rows = [
+            r for r in all_rows
+            if r.get("name") == name and r.get("address") == address
+        ]
+        return render_template("comments.html", name=name, address=address, comments=matched_rows)
+    except Exception as e:
+        logging.error(f"留言頁面錯誤: {e}")
+        return "發生錯誤", 500
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
