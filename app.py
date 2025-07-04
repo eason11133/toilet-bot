@@ -9,7 +9,8 @@ from flask_cors import CORS
 from flask import Flask, request, abort, render_template
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from linebot.exceptions import InvalidSignatureError, LineBotApiError
+
 from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     FlexSendMessage, PostbackEvent, TextSendMessage
@@ -52,6 +53,7 @@ def safe_reply(token, messages, uid=None):
                 logging.error(f"❌ push_message 備援也失敗: {ex}")
     except Exception as e:
         logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
+
 
 def init_gsheet():
     global gc, sh, worksheet
