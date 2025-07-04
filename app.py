@@ -21,10 +21,6 @@ from datetime import datetime
 import time
 from collections import OrderedDict
 
-# 儲存處理過的事件，含過期自動清理
-event_cache = OrderedDict()  # 儲存最近的 event id 或 reply_token
-EVENT_CACHE_DURATION = 60  # 秒
-
 # === 初始化 ===
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +55,12 @@ def safe_reply(token, messages, uid=None):
             except Exception as ex:
                 logging.error(f"❌ push_message 備援也失敗: {ex}")
 
+# 儲存處理過的事件，含過期自動清理
+event_cache = OrderedDict()  # 儲存最近的 event id 或 reply_token
+EVENT_CACHE_DURATION = 60  # 秒
+
 def is_duplicate_event(event_id):
+    """確保每個事件或訊息只處理一次，避免重複"""
     now = time.time()
     for key in list(event_cache):
         if now - event_cache[key] > EVENT_CACHE_DURATION:
@@ -587,6 +588,7 @@ def view_comments():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
+    # 防止重複事件
     event_id = f"{event.source.user_id}_{event.message.id}"
     if is_duplicate_event(event_id):
         return
@@ -595,29 +597,11 @@ def handle_text(event):
     uid = event.source.user_id
     reply_messages = []
 
-    # === 刪除確認流程 ===
-    if uid in pending_delete_confirm:
-        info = pending_delete_confirm[uid]
-        if text == "確認刪除":
-            deleted_sheet = delete_from_gsheet(uid, info["name"], info["address"], info["lat"], info["lon"])
-            deleted_csv = delete_from_toilets_file(info["name"], info["address"], info["lat"], info["lon"])
-            msg = "✅ 已刪除該廁所"
-            if not deleted_sheet:
-                msg += "（但 Google Sheets 刪除失敗）"
-            if not deleted_csv:
-                msg += "（但 CSV 刪除失敗）"
-            del pending_delete_confirm[uid]
-            reply_messages.append(TextSendMessage(text=msg))
-        elif text == "取消":
-            del pending_delete_confirm[uid]
-            reply_messages.append(TextSendMessage(text="❌ 已取消刪除操作"))
-        else:
-            reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
-
-    elif text == "新增廁所":
+    if text == "新增廁所":
         reply_messages.append(TextSendMessage(
             text="請點擊以下連結新增廁所：\nhttps://school-i9co.onrender.com/add"
         ))
+
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
@@ -643,6 +627,7 @@ def handle_text(event):
                 lat, lon = user_locations[uid]
                 for fav in favs:
                     fav["distance"] = int(haversine(lat, lon, fav["lat"], fav["lon"]))
+
             msg = create_toilet_flex_messages(favs, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
@@ -723,6 +708,7 @@ def handle_postback(event):
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    # 防止重複事件
     event_id = f"{event.source.user_id}_{event.message.id}"
     if is_duplicate_event(event_id):
         return
