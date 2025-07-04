@@ -10,7 +10,6 @@ from flask import Flask, request, abort, render_template
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
-
 from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     FlexSendMessage, PostbackEvent, TextSendMessage
@@ -38,38 +37,6 @@ GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")  # 放在環境�
 GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
 gc = sh = worksheet = None
-
-def safe_reply(token, messages, uid=None):
-    try:
-        if not token or token == "00000000000000000000000000000000":
-            logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
-            return
-        line_bot_api.reply_message(token, messages)
-        logging.info("✅ reply_message 成功")
-    except LineBotApiError as e:
-        logging.error(f"❌ LineBotApiError 回覆失敗: {e}")
-        if uid:
-            try:
-                line_bot_api.push_message(uid, messages)
-                logging.info("✅ 改為 push_message 成功")
-            except Exception as ex:
-                logging.error(f"❌ push_message 備援也失敗: {ex}")
-
-# 儲存處理過的事件，含過期自動清理
-event_cache = OrderedDict()  # 儲存最近的 event id 或 reply_token
-EVENT_CACHE_DURATION = 60  # 秒
-
-def is_duplicate_event(event_id):
-    """確保每個事件或訊息只處理一次，避免重複"""
-    now = time.time()
-    for key in list(event_cache):
-        if now - event_cache[key] > EVENT_CACHE_DURATION:
-            del event_cache[key]
-    if event_id in event_cache:
-        logging.warning(f"⚠️ 重複事件 event_id={event_id}，跳過")
-        return True
-    event_cache[event_id] = now
-    return False
 
 def init_gsheet():
     global gc, sh, worksheet
@@ -190,8 +157,8 @@ def query_local_toilets(lat, lon):
                             "distance": dist,
                             "type": type_
                         })
-                except Exception as e:
-                    logging.error(f"處理 row 錯誤: {e}")
+                except ValueError:
+                    logging.warning(f"無效的數據格式: {row}")
     except Exception as e:
         logging.error(f"讀取 CSV 錯誤: {e}")
     return sorted(toilets, key=lambda x: x['distance'])
@@ -210,7 +177,7 @@ def query_overpass_toilets(lat, lon, radius=500):
     try:
         resp = requests.post("https://overpass-api.de/api/interpreter", data=query, headers={"User-Agent": "ToiletBot/1.0"}, timeout=10)
         data = resp.json()
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         logging.error(f"Overpass 查詢失敗: {e}")
         return []
 
@@ -232,164 +199,33 @@ def query_overpass_toilets(lat, lon, radius=500):
         })
     return sorted(toilets, key=lambda x: x["distance"])
 
-# === 最愛管理 ===
-def add_to_favorites(uid, toilet):
-    try:
-        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{uid},{toilet['name']},{toilet['lat']},{toilet['lon']},{toilet['address']}\n")
-    except Exception as e:
-        logging.error(f"加入最愛失敗: {e}")
-
-def remove_from_favorites(uid, name, lat, lon):
-    try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8") as f:
-            for line in lines:
-                data = line.strip().split(',')
-                if not (data[0] == uid and data[1] == name and data[2] == str(lat) and data[3] == str(lon)):
-                    f.write(line)
-        return True
-    except Exception as e:
-        logging.error(f"移除最愛失敗: {e}")
-        return False
-
-def get_user_favorites(uid):
-    favs = []
-    try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                data = line.strip().split(',')
-                if data[0] == uid:
-                    favs.append({
-                        "name": data[1],
-                        "lat": float(data[2]),
-                        "lon": float(data[3]),
-                        "address": data[4],
-                        "distance": 0,
-                        "type": "favorite"
-                    })
-    except Exception as e:
-        logging.error(f"讀取最愛失敗: {e}")
-    return favs
-
 # === 地址轉經緯度 ===
 def geocode_address(address, user_name):
     try:
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address)}"
         headers = { "User-Agent": "ToiletBot/1.0" }
-        logging.info(f"📡 查詢地址：{address} → {url}")  # 加這行
+        logging.info(f"📡 查詢地址：{address} → {url}")
 
         resp = requests.get(url, headers=headers)
         if resp.status_code != 200:
             logging.error(f"❌ Geocode API 回應碼: {resp.status_code}")
             return None, None, None
         data = resp.json()
-        logging.info(f"📦 查詢結果：{data}")  # 加這行
 
-        if resp.status_code == 200 and data:
+        if data:
             return user_name, float(data[0]['lat']), float(data[0]['lon'])
+        else:
+            logging.warning(f"無法解析地址: {address}")
+            return None, None, None
     except Exception as e:
         logging.error(f"地址解析失敗: {e}")
     return None, None, None
 
-
-# === 寫入廁所 CSV 與 Sheets ===
-def add_to_toilets_file(name, address, lat, lon):
-    try:
-        new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
-        with open(TOILETS_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(new_row)
-        logging.info(f"✅ 成功寫入本地 CSV：{name} @ {address}")
-    except Exception as e:
-        logging.error(f"寫入廁所資料失敗: {e}")
-        raise
-
-
-def add_to_gsheet(uid, name, address, lat, lon):
-    if worksheet is None:
-        logging.error("Sheets 未初始化")
-        return False
-    try:
-        worksheet.append_row([uid, name, address, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
-        return True
-    except Exception as e:
-        logging.error(f"寫入 Sheets 失敗: {e}")
-        return False
-
-def delete_from_gsheet(uid, name, address, lat, lon):
-    if worksheet is None:
-        logging.error("Sheets 未初始化")
-        return False
-    try:
-        records = worksheet.get_all_records()
-        for idx, row in enumerate(records, start=2):
-            if (str(row.get('user_id', '')) == uid and
-                row.get('name', '') == name and
-                row.get('address', '') == address and
-                str(row.get('lat', '')) == str(lat) and
-                str(row.get('lon', '')) == str(lon)):
-                worksheet.delete_rows(idx)
-                return True
-        return False
-    except Exception as e:
-        logging.error(f"刪除 Sheets 失敗: {e}")
-        return False
-def get_recent_added(uid, limit=5):
-    if worksheet is None:
-        logging.error("Sheets 未初始化")
-        return []
-    try:
-        records = worksheet.get_all_records()
-        user_records = [r for r in records if str(r.get('user_id', '')) == uid]
-        # 按 timestamp 倒序
-        sorted_records = sorted(user_records, key=lambda r: r.get("timestamp", ""), reverse=True)
-        recent = []
-        for r in sorted_records[:limit]:
-            recent.append({
-                "name": r["name"],
-                "address": r["address"],
-                "lat": float(r["lat"]),
-                "lon": float(r["lon"]),
-                "distance": 0,
-                "type": "user"  # 表示是用戶新增
-            })
-        return recent
-    except Exception as e:
-        logging.error(f"讀取最近新增失敗: {e}")
-        return []
-
-def delete_from_toilets_file(name, address, lat, lon):
-    try:
-        with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
-            f.write(lines[0])  # header
-            for line in lines[1:]:
-                parts = line.strip().split(',')
-                if len(parts) < 15:
-                    continue
-                line_name = parts[4]
-                line_address = parts[5]
-                try:
-                    line_lat = float(parts[7])
-                    line_lon = float(parts[8])
-                except:
-                    continue
-                if not (line_name == name and line_address == address and abs(line_lat - float(lat)) < 1e-6 and abs(line_lon - float(lon)) < 1e-6):
-                    f.write(line)
-    except Exception as e:
-        logging.error(f"刪除 CSV 失敗: {e}")
-        return False
-    return True
-
-# === 建立 Flex Message ===
+# === Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
         actions = []
-
-        # 導航按鈕
         actions.append({
             "type": "uri",
             "label": "導航",
@@ -586,6 +422,54 @@ def view_comments():
         logging.error(f"留言頁面錯誤: {e}")
         return "發生錯誤", 500
 
+# 儲存處理過的事件，含過期自動清理
+event_cache = OrderedDict()  # 儲存最近的 event id 或 reply_token
+EVENT_CACHE_DURATION = 60  # 秒
+
+def is_duplicate_event(event_id):
+    """確保每個事件或訊息只處理一次，避免重複"""
+    now = time.time()
+    # 清理過期事件
+    for key in list(event_cache):
+        if now - event_cache[key] > EVENT_CACHE_DURATION:
+            del event_cache[key]
+    # 如果事件已處理過，則跳過
+    if event_id in event_cache:
+        logging.warning(f"⚠️ 重複事件 event_id={event_id}，跳過")
+        return True
+    event_cache[event_id] = now
+    return False
+
+# 儲存每個用戶的最後回覆時間
+user_last_reply = {}
+
+def safe_reply(token, messages, uid=None):
+    """回覆訊息，並限制同一用戶在1分鐘內只回覆一次"""
+    current_time = time.time()
+
+    # 檢查用戶是否在1分鐘內發送過消息
+    if uid in user_last_reply and current_time - user_last_reply[uid] < 60:
+        logging.warning(f"⚠️ 用戶 {uid} 1分鐘內只回覆一次，跳過")
+        return
+
+    try:
+        if not token or token == "00000000000000000000000000000000":
+            logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
+            return
+        line_bot_api.reply_message(token, messages)
+        logging.info("✅ reply_message 成功")
+        
+        # 更新最後一次回覆時間
+        user_last_reply[uid] = current_time
+    except LineBotApiError as e:
+        logging.error(f"❌ LineBotApiError 回覆失敗: {e}")
+        if uid:
+            try:
+                line_bot_api.push_message(uid, messages)
+                logging.info("✅ 改為 push_message 成功")
+            except Exception as ex:
+                logging.error(f"❌ push_message 備援也失敗: {ex}")
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     # 防止重複事件
@@ -617,7 +501,6 @@ def handle_text(event):
             else:
                 msg = create_toilet_flex_messages(toilets, show_delete=True, uid=uid)
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
-
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
         if not favs:
@@ -627,7 +510,6 @@ def handle_text(event):
                 lat, lon = user_locations[uid]
                 for fav in favs:
                     fav["distance"] = int(haversine(lat, lon, fav["lat"], fav["lon"]))
-
             msg = create_toilet_flex_messages(favs, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
@@ -706,6 +588,27 @@ def handle_postback(event):
         except:
             safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")], uid=uid)
 
+    # 當使用者輸入 "確認刪除"
+    if event.message.text == "確認刪除":
+        if uid in pending_delete_confirm:
+            # 進行刪除操作
+            name = pending_delete_confirm[uid]["name"]
+            address = pending_delete_confirm[uid]["address"]
+            lat = pending_delete_confirm[uid]["lat"]
+            lon = pending_delete_confirm[uid]["lon"]
+        
+            # 從 CSV 和 Sheets 中刪除
+            delete_from_toilets_file(name, address, lat, lon)
+            delete_from_gsheet(uid, name, address, lat, lon)
+
+            reply_messages = [TextSendMessage(text=f"✅ 已刪除廁所 {name}")]
+            del pending_delete_confirm[uid]  # 清除刪除確認狀態
+        else:
+            reply_messages = [TextSendMessage(text="⚠️ 沒有找到待刪除的廁所")]
+
+        safe_reply(event.reply_token, reply_messages, uid=uid)
+
+# === 處理位置訊息 ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     # 防止重複事件
@@ -713,10 +616,11 @@ def handle_location(event):
     if is_duplicate_event(event_id):
         return
     uid = event.source.user_id
-    lat, lon = event.message.latitude, event.message.longitude
+    lat, lon = event.message.latitude, event.message.longitude 
     user_locations[uid] = (lat, lon)
     safe_reply(event.reply_token, [TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢")], uid=uid)
 
+# === 開啟 Flask 伺服器 ===
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
