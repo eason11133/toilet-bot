@@ -444,23 +444,13 @@ def is_duplicate_event(event_id):
 user_last_reply = {}
 
 def safe_reply(token, messages, uid=None):
-    """回覆訊息，並限制同一用戶在1分鐘內只回覆一次"""
-    current_time = time.time()
-
-    # 檢查用戶是否在1分鐘內發送過消息
-    if uid in user_last_reply and current_time - user_last_reply[uid] < 60:
-        logging.warning(f"⚠️ 用戶 {uid} 1分鐘內只回覆一次，跳過")
-        return
-
+    """回覆訊息，不限制回覆頻率"""
     try:
         if not token or token == "00000000000000000000000000000000":
             logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
             return
         line_bot_api.reply_message(token, messages)
         logging.info("✅ reply_message 成功")
-        
-        # 更新最後一次回覆時間
-        user_last_reply[uid] = current_time
     except LineBotApiError as e:
         logging.error(f"❌ LineBotApiError 回覆失敗: {e}")
         if uid:
