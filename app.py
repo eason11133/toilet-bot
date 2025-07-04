@@ -22,9 +22,8 @@ import time
 from collections import OrderedDict
 
 # 儲存處理過的事件，含過期自動清理
-event_cache = OrderedDict()
-EVENT_CACHE_DURATION = 60  # 記憶 60 秒內的事件
-
+event_cache = OrderedDict()  # 儲存最近的 event id 或 reply_token
+EVENT_CACHE_DURATION = 60  # 秒
 
 # === 初始化 ===
 load_dotenv()
@@ -63,17 +62,15 @@ def safe_reply(token, messages, uid=None):
     except Exception as e:
         logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
 
-def is_duplicate_event(delivery_id):
+def is_duplicate_event(event_id):
     now = time.time()
-    # 清理過期事件
     for key in list(event_cache):
         if now - event_cache[key] > EVENT_CACHE_DURATION:
             del event_cache[key]
-    # 判斷是否重複
-    if delivery_id in event_cache:
-        logging.warning(f"⚠️ 重複事件 delivery_id={delivery_id}，跳過")
+    if event_id in event_cache:
+        logging.warning(f"⚠️ 重複事件 event_id={event_id}，跳過")
         return True
-    event_cache[delivery_id] = now
+    event_cache[event_id] = now
     return False
 
 def init_gsheet():
@@ -594,6 +591,10 @@ def view_comments():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
+    event_id = f"{event.source.user_id}_{event.message.id}"
+    if is_duplicate_event(event_id):
+        return
+
     text = event.message.text.strip().lower()
     uid = event.source.user_id
     reply_messages = []
