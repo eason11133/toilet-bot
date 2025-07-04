@@ -36,14 +36,20 @@ GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
 gc = sh = worksheet = None
 
-def safe_reply(token, messages):
+def safe_reply(token, messages, uid=None):
     try:
         if token == "00000000000000000000000000000000":
             logging.warning("⚠️ 無效的 reply_token，不進行回覆")
             return
         line_bot_api.reply_message(token, messages)
-    except Exception as e:
+    except LineBotApiError as e:
         logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
+        if uid:
+            try:
+                line_bot_api.push_message(uid, messages)
+                logging.info("✅ 已改為 push_message 傳送成功")
+            except Exception as ex:
+                logging.error(f"❌ push_message 也失敗: {ex}")
 
 def init_gsheet():
     global gc, sh, worksheet
@@ -60,6 +66,7 @@ def init_gsheet():
     except Exception as e:
         logging.error(f"❌ Google Sheets 初始化失敗: {e}")
         worksheet = None
+
 def restore_csv_from_gsheet():
     if worksheet is None:
         logging.warning("🛑 無法從 Sheets 回復資料，因為 worksheet 尚未初始化")
@@ -505,35 +512,47 @@ def submit_toilet():
 
 @app.route("/view_comments")
 def view_comments():
-    name = request.args.get("name", "")
-    address = request.args.get("address", "")
+    name = request.args.get("name", "").strip().lower()
+    address = request.args.get("address", "").strip().lower()
 
     if feedback_sheet is None:
         return "留言資料尚未初始化", 500
 
     try:
         all_rows = feedback_sheet.get_all_records()
+
+        # 自動找到包含名稱與地址的欄位（用來容錯）
+        if not all_rows:
+            return "尚無留言", 200
+
+        first_row = all_rows[0]
+        name_key = next((k for k in first_row if "廁所名稱" in k), None)
+        address_key = next((k for k in first_row if "廁所地址" in k), None)
+        comment_key = next((k for k in first_row if "留言" in k), None)
+        rating_key = next((k for k in first_row if "清潔度" in k), None)
+        timestamp_key = next((k for k in first_row if "時間" in k), None)
+
+        if not name_key or not address_key:
+            return "⚠️ 表單欄位名稱無法解析，請確認欄位包含『廁所名稱』與『廁所地址』", 500
+
         matched_rows = [
             r for r in all_rows
-            if r.get("廁所名稱（請輸入或貼上廁所名稱；或選擇）") == name and
-               r.get("廁所地址（可由 Bot 產生）") == address
+            if r.get(name_key, "").strip().lower() == name
+            and r.get(address_key, "").strip().lower() == address
         ]
 
-        # 格式化留言資訊
         comments = []
         for row in matched_rows:
             comments.append({
-                "rating": row.get("清潔度評分", "未填寫"),
-                "comment": row.get("使用者留言（建議根據）", "無留言"),
-                "timestamp": row.get("時間戳記", "未知")
+                "rating": row.get(rating_key, "未填寫") if rating_key else "未填寫",
+                "comment": row.get(comment_key, "無留言") if comment_key else "無留言",
+                "timestamp": row.get(timestamp_key, "未知") if timestamp_key else "未知"
             })
 
         return render_template("comments.html", name=name, address=address, comments=comments)
     except Exception as e:
         logging.error(f"留言頁面錯誤: {e}")
         return "發生錯誤", 500
-
-
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -606,7 +625,7 @@ def handle_text(event):
 
     # ✅ 統一回覆
     if reply_messages:
-        safe_reply(event.reply_token, reply_messages)
+        safe_reply(event.reply_token, reply_messages, uid=uid)
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
@@ -668,6 +687,13 @@ def handle_location(event):
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[uid] = (lat, lon)
     safe_reply(event.reply_token, [TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢")])
+
+@handler.add(MessageEvent, message=LocationMessage)
+def handle_location(event):
+    uid = event.source.user_id
+    lat, lon = event.message.latitude, event.message.longitude
+    user_locations[uid] = (lat, lon)
+    safe_reply(event.reply_token, [TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢")], uid=uid)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
