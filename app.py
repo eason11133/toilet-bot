@@ -506,12 +506,24 @@ def view_comments():
         all_rows = feedback_sheet.get_all_records()
         matched_rows = [
             r for r in all_rows
-            if r.get("name") == name and r.get("address") == address
+            if r.get("廁所名稱（請輸入或貼上廁所名稱；或選擇）") == name and
+               r.get("廁所地址（可由 Bot 產生）") == address
         ]
-        return render_template("comments.html", name=name, address=address, comments=matched_rows)
+
+        # 格式化留言資訊
+        comments = []
+        for row in matched_rows:
+            comments.append({
+                "rating": row.get("清潔度評分", "未填寫"),
+                "comment": row.get("使用者留言（建議根據）", "無留言"),
+                "timestamp": row.get("時間戳記", "未知")
+            })
+
+        return render_template("comments.html", name=name, address=address, comments=comments)
     except Exception as e:
         logging.error(f"留言頁面錯誤: {e}")
         return "發生錯誤", 500
+
 
 
 @handler.add(MessageEvent, message=TextMessage)
