@@ -337,32 +337,31 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
     for toilet in toilets[:MAX_TOILETS_REPLY]:
         actions = []
-        # 第一個按鈕：導航（所有都要）
+
+        # 導航按鈕
         actions.append({
             "type": "uri",
             "label": "導航",
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
         })
 
-        # 第二個按鈕：
+        # 加入 / 移除 最愛
         if toilet.get("type") == "user":
-            # user新增廁所沒有加入收藏按鈕，改成第三個刪除按鈕
             pass
         elif toilet.get("type") == "favorite" and uid is not None:
             actions.append({
-            "type": "postback",
-            "label": "移除最愛",
-            "data": f"remove_fav:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
-        })
+                "type": "postback",
+                "label": "移除最愛",
+                "data": f"remove_fav:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
+            })
         else:
-            # 非user新增，顯示加入收藏按鈕
             actions.append({
                 "type": "postback",
                 "label": "加入最愛",
                 "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
 
-        # 第三個按鈕：
+        # 刪除按鈕（僅限 user 新增）
         if show_delete and toilet.get("type") == "user" and uid is not None:
             actions.append({
                 "type": "postback",
@@ -370,6 +369,23 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
             })
 
+        # 回饋按鈕（所有類型都加）
+        name_for_feedback = toilet['name'] or f"無名稱@{toilet['lat']:.5f},{toilet['lon']:.5f}"
+        addr_for_feedback = toilet['address'] or "無地址"
+        feedback_url = (
+            "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform"
+            f"?usp=pp_url"
+            f"&entry.1234567890={name_for_feedback}"
+            f"&entry.0987654321={addr_for_feedback}"
+        )
+
+        actions.append({
+            "type": "uri",
+            "label": "廁所回饋",
+            "uri": feedback_url
+        })
+
+        # 組合 Bubble
         bubble = {
             "type": "bubble",
             "body": {
@@ -394,6 +410,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         }
         bubbles.append(bubble)
     return {"type": "carousel", "contents": bubbles}
+
 
 
 # === Webhook ===
