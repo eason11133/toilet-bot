@@ -668,6 +668,11 @@ def handle_text(event):
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
+    # 加上這段：以 postback data 當作唯一識別符，避免重複處理
+    event_id = f"{event.source.user_id}_{event.postback.data}"
+    if is_duplicate_event(event_id):
+        return
+
     uid = event.source.user_id
     data = event.postback.data
 
@@ -676,7 +681,7 @@ def handle_postback(event):
         try:
             _, name, lat, lon = data.split(":")
         except ValueError:
-            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")])
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")], uid=uid)
             return
 
         reply_messages = []
@@ -693,16 +698,16 @@ def handle_postback(event):
         else:
             reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
         if reply_messages:
-            safe_reply(event.reply_token, reply_messages)
+            safe_reply(event.reply_token, reply_messages, uid=uid)
 
     elif data.startswith("remove_fav:"):
         try:
             _, name, lat, lon = data.split(":")
             removed = remove_from_favorites(uid, name, lat, lon)
             msg = f"✅ 已從最愛移除 {name}" if removed else "❌ 移除失敗，請稍後再試"
-            safe_reply(event.reply_token, [TextSendMessage(text=msg)])
+            safe_reply(event.reply_token, [TextSendMessage(text=msg)], uid=uid)
         except:
-            safe_reply(event.reply_token, [TextSendMessage(text="❌ 移除最愛失敗，格式錯誤")])
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 移除最愛失敗，格式錯誤")], uid=uid)
 
     elif data.startswith("confirm_delete:"):
         try:
@@ -716,12 +721,15 @@ def handle_postback(event):
             safe_reply(event.reply_token, [
                 TextSendMessage(text=f"⚠️ 確定要刪除廁所 {name} 嗎？"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
-            ])
+            ], uid=uid)
         except:
-            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")])
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")], uid=uid)
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    event_id = f"{event.source.user_id}_{event.message.id}"
+    if is_duplicate_event(event_id):
+        return
     uid = event.source.user_id
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[uid] = (lat, lon)
