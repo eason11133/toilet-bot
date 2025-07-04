@@ -38,11 +38,13 @@ GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 gc = sh = worksheet = None
 
 def safe_reply(token, messages, uid=None):
+    if not token or token == "00000000000000000000000000000000":
+        logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
+        return
+
     try:
-        if token == "00000000000000000000000000000000":
-            logging.warning("⚠️ 無效的 reply_token，不進行回覆")
-            return
         line_bot_api.reply_message(token, messages)
+        logging.info("✅ reply_message 成功")
     except LineBotApiError as e:
         logging.error(f"❌ LineBotApiError 回覆失敗: {e}")
         if uid:
@@ -53,7 +55,6 @@ def safe_reply(token, messages, uid=None):
                 logging.error(f"❌ push_message 備援也失敗: {ex}")
     except Exception as e:
         logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
-
 
 def init_gsheet():
     global gc, sh, worksheet
@@ -467,8 +468,16 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     return {"type": "carousel", "contents": bubbles}
 
 # === Webhook ===
+# 用來記錄處理過的事件
+processed_events = set()
+
 @app.route("/callback", methods=["POST"])
 def callback():
+    delivery_id = request.headers.get("X-Line-Delivery-ID")
+    if delivery_id in processed_events:
+        return "Already processed", 200
+    processed_events.add(delivery_id)
+
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
     try:
@@ -476,6 +485,7 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return "OK"
+
 @app.route("/", methods=["GET"])
 def home():
     return "Toilet bot is running!", 200
@@ -684,13 +694,6 @@ def handle_postback(event):
             ])
         except:
             safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")])
-
-@handler.add(MessageEvent, message=LocationMessage)
-def handle_location(event):
-    uid = event.source.user_id
-    lat, lon = event.message.latitude, event.message.longitude
-    user_locations[uid] = (lat, lon)
-    safe_reply(event.reply_token, [TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢")])
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
