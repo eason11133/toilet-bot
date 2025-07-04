@@ -18,6 +18,13 @@ from linebot.models import (
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import time
+from collections import OrderedDict
+
+# 儲存處理過的事件，含過期自動清理
+event_cache = OrderedDict()
+EVENT_CACHE_DURATION = 60  # 記憶 60 秒內的事件
+
 
 # === 初始化 ===
 load_dotenv()
@@ -55,6 +62,19 @@ def safe_reply(token, messages, uid=None):
                 logging.error(f"❌ push_message 備援也失敗: {ex}")
     except Exception as e:
         logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
+
+def is_duplicate_event(delivery_id):
+    now = time.time()
+    # 清理過期事件
+    for key in list(event_cache):
+        if now - event_cache[key] > EVENT_CACHE_DURATION:
+            del event_cache[key]
+    # 判斷是否重複
+    if delivery_id in event_cache:
+        logging.warning(f"⚠️ 重複事件 delivery_id={delivery_id}，跳過")
+        return True
+    event_cache[delivery_id] = now
+    return False
 
 def init_gsheet():
     global gc, sh, worksheet
@@ -474,17 +494,21 @@ processed_events = set()
 @app.route("/callback", methods=["POST"])
 def callback():
     delivery_id = request.headers.get("X-Line-Delivery-ID")
-    if delivery_id in processed_events:
+    if delivery_id and is_duplicate_event(delivery_id):
         return "Already processed", 200
-    processed_events.add(delivery_id)
 
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-    return "OK"
+    except Exception as e:
+        logging.error(f"❌ Webhook 處理錯誤: {e}")
+        return "Internal Server Error", 500
+
+    return "OK", 200
 
 @app.route("/", methods=["GET"])
 def home():
