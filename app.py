@@ -77,7 +77,6 @@ def restore_csv_from_gsheet():
         logging.error(f"❌ 回復 CSV 失敗: {e}")
 
 init_gsheet()
-init_feedback_sheet()
 restore_csv_from_gsheet()
 
 FEEDBACK_SHEET_ID = os.getenv("FEEDBACK_SHEET_ID")
@@ -93,6 +92,8 @@ def init_feedback_sheet():
             logging.warning("⚠️ FEEDBACK_SHEET_ID 環境變數未設定")
     except Exception as e:
         logging.error(f"❌ Feedback Sheet 初始化失敗: {e}")
+
+init_feedback_sheet()
 
 # === 本地檔案確認 ===
 if not os.path.exists(TOILETS_FILE_PATH):
