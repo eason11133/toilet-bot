@@ -36,6 +36,15 @@ GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
 gc = sh = worksheet = None
 
+def safe_reply(token, messages):
+    try:
+        if token == "00000000000000000000000000000000":
+            logging.warning("⚠️ 無效的 reply_token，不進行回覆")
+            return
+        line_bot_api.reply_message(token, messages)
+    except Exception as e:
+        logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
+
 def init_gsheet():
     global gc, sh, worksheet
     try:
@@ -597,24 +606,19 @@ def handle_text(event):
 
     # ✅ 統一回覆
     if reply_messages:
-        try:
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-        except Exception as e:
-            logging.error(f"❌ 回覆訊息失敗（TextMessage）: {e}")
-
+        safe_reply(event.reply_token, reply_messages)
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
 
-    # 分三種狀況：加入收藏、移除收藏、刪除廁所確認流程
     if data.startswith("add:"):
         added = False
         try:
             _, name, lat, lon = data.split(":")
         except ValueError:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")])
             return
 
         reply_messages = []
@@ -631,18 +635,16 @@ def handle_postback(event):
         else:
             reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
         if reply_messages:
-            try:
-                line_bot_api.reply_message(event.reply_token, reply_messages)
-            except Exception as e:
-                logging.error(f"❌ 回覆訊息失敗（Postback add）: {e}")
+            safe_reply(event.reply_token, reply_messages)
+
     elif data.startswith("remove_fav:"):
         try:
             _, name, lat, lon = data.split(":")
             removed = remove_from_favorites(uid, name, lat, lon)
             msg = f"✅ 已從最愛移除 {name}" if removed else "❌ 移除失敗，請稍後再試"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+            safe_reply(event.reply_token, [TextSendMessage(text=msg)])
         except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 移除最愛失敗，格式錯誤"))
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 移除最愛失敗，格式錯誤")])
 
     elif data.startswith("confirm_delete:"):
         try:
@@ -653,20 +655,20 @@ def handle_postback(event):
                 "lat": lat,
                 "lon": lon
             }
-            line_bot_api.reply_message(event.reply_token, [
+            safe_reply(event.reply_token, [
                 TextSendMessage(text=f"⚠️ 確定要刪除廁所 {name} 嗎？"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
         except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
-
+            safe_reply(event.reply_token, [TextSendMessage(text="❌ 格式錯誤，請重新操作")])
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     uid = event.source.user_id
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[uid] = (lat, lon)
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢"))
+    safe_reply(event.reply_token, [TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢")])
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
