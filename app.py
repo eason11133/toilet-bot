@@ -43,13 +43,15 @@ def safe_reply(token, messages, uid=None):
             return
         line_bot_api.reply_message(token, messages)
     except LineBotApiError as e:
-        logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
+        logging.error(f"❌ LineBotApiError 回覆失敗: {e}")
         if uid:
             try:
                 line_bot_api.push_message(uid, messages)
-                logging.info("✅ 已改為 push_message 傳送成功")
+                logging.info("✅ 改為 push_message 成功")
             except Exception as ex:
-                logging.error(f"❌ push_message 也失敗: {ex}")
+                logging.error(f"❌ push_message 備援也失敗: {ex}")
+    except Exception as e:
+        logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
 
 def init_gsheet():
     global gc, sh, worksheet
