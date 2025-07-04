@@ -77,8 +77,22 @@ def restore_csv_from_gsheet():
         logging.error(f"❌ 回復 CSV 失敗: {e}")
 
 init_gsheet()
-restore_csv_from_gsheet() 
+init_feedback_sheet()
+restore_csv_from_gsheet()
 
+FEEDBACK_SHEET_ID = os.getenv("FEEDBACK_SHEET_ID")
+feedback_sheet = None
+
+def init_feedback_sheet():
+    global feedback_sheet
+    try:
+        if FEEDBACK_SHEET_ID:
+            feedback_sheet = gc.open_by_key(FEEDBACK_SHEET_ID).sheet1
+            logging.info("✅ Feedback Sheet 初始化成功")
+        else:
+            logging.warning("⚠️ FEEDBACK_SHEET_ID 環境變數未設定")
+    except Exception as e:
+        logging.error(f"❌ Feedback Sheet 初始化失敗: {e}")
 
 # === 本地檔案確認 ===
 if not os.path.exists(TOILETS_FILE_PATH):
@@ -484,11 +498,11 @@ def view_comments():
     name = request.args.get("name", "")
     address = request.args.get("address", "")
 
-    if worksheet is None:
+    if feedback_sheet is None:
         return "留言資料尚未初始化", 500
 
     try:
-        all_rows = worksheet.get_all_records()
+        all_rows = feedback_sheet.get_all_records()
         matched_rows = [
             r for r in all_rows
             if r.get("name") == name and r.get("address") == address
@@ -497,6 +511,7 @@ def view_comments():
     except Exception as e:
         logging.error(f"留言頁面錯誤: {e}")
         return "發生錯誤", 500
+
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
