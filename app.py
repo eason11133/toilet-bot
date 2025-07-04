@@ -4,7 +4,6 @@ import json
 import logging
 import requests
 import traceback
-import hashlib
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template
@@ -43,28 +42,12 @@ GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")  # 放在環境�
 GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
 gc = sh = worksheet = None
-# 全域
-recent_message_cache = set()
-
-def hash_messages(messages):
-    try:
-        content = ''.join(m.text for m in messages if isinstance(m, TextSendMessage))
-        return hashlib.md5(content.encode()).hexdigest()
-    except Exception:
-        return str(messages)
 
 def safe_reply(token, messages, uid=None):
-    cache_key = f"{uid}:{hash_messages(messages)}"
-    if cache_key in recent_message_cache:
-        logging.warning("⚠️ 重複訊息，略過傳送")
-        return
-    recent_message_cache.add(cache_key)
-
-    if not token or token == "00000000000000000000000000000000":
-        logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
-        return
-
     try:
+        if not token or token == "00000000000000000000000000000000":
+            logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
+            return
         line_bot_api.reply_message(token, messages)
         logging.info("✅ reply_message 成功")
     except LineBotApiError as e:
@@ -499,7 +482,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     return {"type": "carousel", "contents": bubbles}
 
 # === Webhook ===
-# 用來記錄處理過的事件
 processed_events = set()
 
 @app.route("/callback", methods=["POST"])
