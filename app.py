@@ -373,12 +373,10 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         name_for_feedback = toilet['name'] or f"無名稱@{toilet['lat']:.5f},{toilet['lon']:.5f}"
         addr_for_feedback = toilet['address'] or "無地址"
         feedback_url = (
-            "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform"
-            f"?usp=pp_url"
-            f"&entry.1234567890={name_for_feedback}"
-            f"&entry.0987654321={addr_for_feedback}"
+            "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform?usp=pp_url"
+            f"&entry.1461963858={requests.utils.quote(name_for_feedback)}"
+            f"&entry.1048755567={requests.utils.quote(addr_for_feedback)}"
         )
-
         actions.append({
             "type": "uri",
             "label": "廁所回饋",
@@ -410,8 +408,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         }
         bubbles.append(bubble)
     return {"type": "carousel", "contents": bubbles}
-
-
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
