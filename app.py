@@ -66,7 +66,6 @@ def restore_csv_from_gsheet():
 
         os.makedirs(os.path.dirname(TOILETS_FILE_PATH), exist_ok=True)
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
-            # 寫入 header（跟原來 CSV 一樣，因為你讀檔時跳過了 header）
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
                 name = row['name']
@@ -343,9 +342,11 @@ def callback():
 @app.route("/", methods=["GET"])
 def home():
     return "Toilet bot is running!", 200
+
 @app.route("/add")
 def render_add_page():
     return render_template("submit_toilet.html")
+
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     try:
@@ -389,7 +390,6 @@ def view_comments():
     try:
         all_rows = feedback_sheet.get_all_records()
 
-        # 自動找到包含名稱與地址的欄位（用來容錯）
         if not all_rows:
             return "尚無留言", 200
 
