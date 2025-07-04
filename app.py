@@ -4,6 +4,7 @@ import json
 import logging
 import requests
 import traceback
+import hashlib
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template
@@ -42,8 +43,23 @@ GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")  # 放在環境�
 GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 
 gc = sh = worksheet = None
+# 全域
+recent_message_cache = set()
+
+def hash_messages(messages):
+    try:
+        content = ''.join(m.text for m in messages if isinstance(m, TextSendMessage))
+        return hashlib.md5(content.encode()).hexdigest()
+    except Exception:
+        return str(messages)
 
 def safe_reply(token, messages, uid=None):
+    cache_key = f"{uid}:{hash_messages(messages)}"
+    if cache_key in recent_message_cache:
+        logging.warning("⚠️ 重複訊息，略過傳送")
+        return
+    recent_message_cache.add(cache_key)
+
     if not token or token == "00000000000000000000000000000000":
         logging.warning("⚠️ 無效或空的 reply_token，略過回覆")
         return
@@ -59,8 +75,6 @@ def safe_reply(token, messages, uid=None):
                 logging.info("✅ 改為 push_message 成功")
             except Exception as ex:
                 logging.error(f"❌ push_message 備援也失敗: {ex}")
-    except Exception as e:
-        logging.error(f"❌ 回覆訊息失敗（safe_reply）: {e}")
 
 def is_duplicate_event(event_id):
     now = time.time()
