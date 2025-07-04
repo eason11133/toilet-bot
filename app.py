@@ -383,7 +383,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "uri": feedback_url
         })
 
-        # 組合 Bubble
+        # 組合 Bubble（footer 改為垂直排版）
         bubble = {
             "type": "bubble",
             "body": {
@@ -397,12 +397,22 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             },
             "footer": {
                 "type": "box",
-                "layout": "horizontal",
+                "layout": "vertical",
                 "spacing": "sm",
                 "contents": [
-                    {"type": "button", "style": "primary", "action": actions[0]},
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "action": actions[0]
+                    }
                 ] + [
-                    {"type": "button", "style": "secondary", "action": a} for a in actions[1:]
+                    {
+                        "type": "button",
+                        "style": "secondary",
+                        "height": "sm",
+                        "action": a
+                    } for a in actions[1:]
                 ]
             }
         }
@@ -476,24 +486,16 @@ def handle_text(event):
                 msg += "（但 CSV 刪除失敗）"
             del pending_delete_confirm[uid]
             reply_messages.append(TextSendMessage(text=msg))
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-            return
         elif text == "取消":
             del pending_delete_confirm[uid]
             reply_messages.append(TextSendMessage(text="❌ 已取消刪除操作"))
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-            return
         else:
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
-            line_bot_api.reply_message(event.reply_token, reply_messages)
-            return
+
     elif text == "新增廁所":
-        # 這邊可以回覆一個帶表單網址的文字訊息，讓用戶點擊去填寫
         reply_messages.append(TextSendMessage(
             text="請點擊以下連結新增廁所：\nhttps://school-i9co.onrender.com/add"
         ))
-        line_bot_api.reply_message(event.reply_token, reply_messages)
-        return
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
@@ -507,7 +509,6 @@ def handle_text(event):
             if not toilets:
                 reply_messages.append(TextSendMessage(text="附近找不到廁所，看來只能原地解放了"))
             else:
-                # 傳入 show_delete=True 並帶入 uid，這樣才會在附近廁所的Flex Message中，對user新增的廁所加上刪除按鈕
                 msg = create_toilet_flex_messages(toilets, show_delete=True, uid=uid)
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
 
@@ -535,11 +536,13 @@ def handle_text(event):
             msg = create_toilet_flex_messages(recent_toilets, show_delete=True, uid=uid)
             reply_messages.append(FlexSendMessage("最近新增的廁所", msg))
 
+    # ✅ 統一回覆
     if reply_messages:
         try:
             line_bot_api.reply_message(event.reply_token, reply_messages)
         except Exception as e:
             logging.error(f"❌ 回覆訊息失敗（TextMessage）: {e}")
+
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
