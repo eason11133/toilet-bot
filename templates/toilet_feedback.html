@@ -1,54 +1,27 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>廁所回饋 - {{ name }}</title>
-    <style>
-        body { font-family: sans-serif; max-width: 600px; margin: auto; padding: 2em; }
-        h1 { font-size: 24px; }
-        .form-group { margin-bottom: 1.5em; }
-        label { display: block; font-weight: bold; }
-        select, input[type="radio"] { margin-top: 0.5em; }
-        .submit-btn { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; }
-        .submit-btn:hover { background-color: #45a049; }
-    </style>
+    <title>廁所回饋</title>
 </head>
 <body>
-    <h1>「{{ name }}」廁所回饋</h1>
-    <p><strong>地址：</strong>{{ address }}</p>
-    <form action="/submit_feedback" method="post">
-        <div class="form-group">
-            <label for="rating">清潔度評分：</label>
-            <select name="rating" id="rating" required>
-                <option value="1">1 - 很差</option>
-                <option value="2">2 - 還可以</option>
-                <option value="3">3 - 普通</option>
-                <option value="4">4 - 好</option>
-                <option value="5">5 - 很好</option>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label>是否有衛生紙：</label>
-            <label><input type="radio" name="toilet_paper" value="有" required> 有</label>
-            <label><input type="radio" name="toilet_paper" value="沒有"> 沒有</label>
-            <label><input type="radio" name="toilet_paper" value="不確定"> 不確定</label>
-        </div>
-
-        <div class="form-group">
-            <label>無障礙設施情況：</label>
-            <label><input type="radio" name="accessibility" value="有" required> 有</label>
-            <label><input type="radio" name="accessibility" value="沒有"> 沒有</label>
-            <label><input type="radio" name="accessibility" value="不確定"> 不確定</label>
-        </div>
-
-        <div class="form-group">
-            <label for="comment">留言：</label>
-            <textarea name="comment" id="comment" rows="4" placeholder="請留下您的回饋..."></textarea>
-        </div>
-
-        <button type="submit" class="submit-btn">提交回饋</button>
-    </form>
+    <h1>{{ name }} 廁所的回饋</h1>
+    <p>地址：{{ address }}</p>
+    <h3>所有回饋：</h3>
+    <ul>
+        {% for feedback in comments %}
+            <li>
+                <strong>清潔度評分:</strong> {{ feedback.rating }} <br>
+                <strong>衛生紙:</strong> {{ feedback.toilet_paper }} <br>
+                <strong>無障礙設施情況:</strong> {{ feedback.accessibility }} <br>
+                <strong>使用廁所時間:</strong> {{ feedback.time_of_use }} <br>
+                <strong>留言:</strong> {{ feedback.comment }} <br>
+                <hr>
+            </li>
+        {% else %}
+            <li>目前沒有回饋。</li>
+        {% endfor %}
+    </ul>
 </body>
 </html>
