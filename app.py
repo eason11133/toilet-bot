@@ -8,6 +8,7 @@ from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template
 from dotenv import load_dotenv
+from urllib.parse import quote
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -360,11 +361,11 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
         })
 
-        # 查看留言按鈕
+        # 查看留言按鈕（使用 urllib.parse.quote 編碼）
         actions.append({
             "type": "uri",
             "label": "查看留言",
-            "uri": f"https://school-i9co.onrender.com/toilet_feedback/{toilet['name']}"
+            "uri": f"https://school-i9co.onrender.com/toilet_feedback/{quote(toilet['name'])}"
         })
 
         # 加入 / 移除 最愛
@@ -396,8 +397,8 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         addr_for_feedback = toilet['address'] or "無地址"
         feedback_url = (
             "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform?usp=pp_url"
-            f"&entry.1461963858={requests.utils.quote(name_for_feedback)}"
-            f"&entry.1048755567={requests.utils.quote(addr_for_feedback)}"
+            f"&entry.1461963858={quote(name_for_feedback)}"
+            f"&entry.1048755567={quote(addr_for_feedback)}"
         )
         actions.append({
             "type": "uri",
