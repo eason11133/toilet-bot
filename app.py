@@ -339,11 +339,14 @@ def get_feedback_for_toilet(toilet_name):
         records = worksheet.get_all_records()  # 從 Google Sheets 讀取資料
         for row in records:
             if row.get("name") == toilet_name:  # 根據廁所名稱篩選資料
-                feedbacks.append({
-                    "rating": row.get("rating"),  # 評分欄位
-                    "comment": row.get("comment"),  # 留言欄位
-                    "timestamp": row.get("timestamp")  # 時間戳
-                })
+                feedback = {
+                    "rating": row.get("rating"),  # 清潔度評分
+                    "toilet_paper": row.get("toilet_paper"),  # 是否有衛生紙
+                    "accessibility": row.get("accessibility"),  # 無障礙設施情況
+                    "time_of_use": row.get("time_of_use", "未填寫"),  # 使用廁所時間 (可選)
+                    "comment": row.get("comment", "無留言")  # 使用者留言 (可選)
+                }
+                feedbacks.append(feedback)
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return feedbacks
@@ -370,10 +373,10 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
         })
 
-        # 查看留言按鈕（使用 urllib.parse.quote 編碼）
+        # 查看回饋按鈕（使用 urllib.parse.quote 編碼）
         actions.append({
             "type": "uri",
-            "label": "查看留言",
+            "label": "查看回饋",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback/{quote(toilet['name'])}"
         })
 
@@ -480,15 +483,16 @@ def submit_feedback(toilet_name):
         rating = request.form.get("rating")
         toilet_paper = request.form.get("toilet_paper")
         accessibility = request.form.get("accessibility")
-        comment = request.form.get("comment")
+        time_of_use = request.form.get("time_of_use")  # 使用廁所時間
+        comment = request.form.get("comment")  # 使用者留言
         
-        # 確保所有表單欄位都有填寫
-        if not all([rating, toilet_paper, accessibility, comment]):
-            flash("請填寫所有的回饋項目！", "warning")
+        # 確保所有必填欄位都有填寫
+        if not all([rating, toilet_paper, accessibility]):
+            flash("請填寫所有必填欄位！", "warning")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
         
         # 儲存回饋資料到 Google Sheets 或資料庫
-        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, comment)
+        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment)
         
         flash("感謝您的回饋！", "success")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
@@ -497,6 +501,15 @@ def submit_feedback(toilet_name):
         logging.error(f"回饋提交錯誤: {e}")
         flash("提交失敗，請稍後再試！", "danger")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
+
+def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment):
+    try:
+        # 假設您已經初始化了 worksheet
+        worksheet.append_row([toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        return True
+    except Exception as e:
+        logging.error(f"寫入 Google Sheets 失敗: {e}")
+        return False
 
 @app.route("/add")
 def render_add_page():
