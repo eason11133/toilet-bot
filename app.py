@@ -471,9 +471,24 @@ def home():
 
 @app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
 def toilet_feedback(toilet_name):
-    feedbacks = get_feedback_for_toilet(toilet_name)
-    # 從資料庫獲取廁所的詳細地址
-    address = "某個地址"  # 這裡需要從資料庫或其他資料來源獲取廁所地址
+    feedbacks = []
+    address = "某個地址"
+    try:
+        records = worksheet.get_all_records()
+        for row in records:
+            name = row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)", "").strip()
+            if name == toilet_name.strip():
+                feedbacks.append({
+                    "rating": row.get("清潔度評分", "無"),
+                    "toilet_paper": row.get("是否有衛生紙？", "無資料"),
+                    "accessibility": row.get("無障礙設施情況", "無資料"),
+                    "time_of_use": row.get("您使用廁所的時間", "未填寫"),
+                    "comment": row.get("使用者留言(建議根據實際經驗填寫)", "無留言")
+                })
+                if address == "某個地址":
+                    address = row.get("廁所地址（可由 Bot 產生）", "無地址")
+    except Exception as e:
+        logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
 
 @app.route("/submit_feedback/<toilet_name>", methods=["POST"])
