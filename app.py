@@ -38,7 +38,7 @@ GSHEET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 gc = sh = worksheet = None
 
 def init_gsheet():
-    global gc, sh, worksheet
+    global gc, sh, worksheet, feedback_worksheet
     try:
         if not GSHEET_CREDENTIALS_JSON:
             logging.error("❌ GSHEET_CREDENTIALS_JSON 環境變數未設定")
@@ -47,11 +47,22 @@ def init_gsheet():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(GSHEET_SPREADSHEET_ID)
+
         worksheet = sh.sheet1
-        logging.info("✅ Google Sheets 初始化成功")
+        logging.info("✅ Google Sheets 主工作表初始化成功")
+
+        # === 初始化 feedback 回饋表單工作表 ===
+        try:
+            feedback_worksheet = sh.worksheet("廁所清潔回饋表單 (回應)")  # ← 請確認這是你表單的實際名稱
+            logging.info("✅ 回饋表單 worksheet 初始化成功")
+        except Exception as e:
+            feedback_worksheet = None
+            logging.error(f"❌ 回饋表單 worksheet 初始化失敗: {e}")
+
     except Exception as e:
         logging.error(f"❌ Google Sheets 初始化失敗: {e}")
         worksheet = None
+        feedback_worksheet = None
 
 def restore_csv_from_gsheet():
     if worksheet is None:
@@ -335,17 +346,21 @@ def delete_from_toilets_file(name, address, lat, lon):
     return True
 def get_feedback_for_toilet(toilet_name):
     feedbacks = []
+    if feedback_worksheet is None:
+        logging.error("🛑 回饋表單 worksheet 尚未初始化")
+        return []
+
     try:
-        records = worksheet.get_all_records()
+        records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)", "").strip()
+            name = row.get("廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）", "").strip()
             if name == toilet_name.strip():
                 feedback = {
                     "rating": row.get("清潔度評分", "無"),
                     "toilet_paper": row.get("是否有衛生紙？", "無資料"),
                     "accessibility": row.get("無障礙設施情況", "無資料"),
                     "time_of_use": row.get("您使用廁所的時間", "未填寫"),
-                    "comment": row.get("使用者留言(建議根據實際經驗填寫)", "無留言")
+                    "comment": row.get("使用者留言（建議根據真實使用情況自由回答）", "無留言")
                 }
                 feedbacks.append(feedback)
         logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")
@@ -475,20 +490,24 @@ def home():
 def toilet_feedback(toilet_name):
     feedbacks = []
     address = "某個地址"
+    if feedback_worksheet is None:
+        logging.error("🛑 回饋 worksheet 未初始化")
+        return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[])
+
     try:
-        records = worksheet.get_all_records()
+        records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)", "").strip()
+            name = row.get("廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）", "").strip()
             if name == toilet_name.strip():
                 feedbacks.append({
                     "rating": row.get("清潔度評分", "無"),
                     "toilet_paper": row.get("是否有衛生紙？", "無資料"),
                     "accessibility": row.get("無障礙設施情況", "無資料"),
                     "time_of_use": row.get("您使用廁所的時間", "未填寫"),
-                    "comment": row.get("使用者留言(建議根據實際經驗填寫)", "無留言")
+                    "comment": row.get("使用者留言（建議根據真實使用情況自由回答）", "無留言")
                 })
                 if address == "某個地址":
-                    address = row.get("廁所地址（可由 Bot 產生）", "無地址")
+                    address = row.get("廁所地址（可由 Bot 產生建議，也可手動填）", "無地址")
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
@@ -521,8 +540,18 @@ def submit_feedback(toilet_name):
 
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment):
     try:
-        # 假設您已經初始化了 worksheet
-        worksheet.append_row([toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        if feedback_worksheet is None:
+            logging.error("🛑 回饋 worksheet 尚未初始化")
+            return False
+        feedback_worksheet.append_row([
+            toilet_name,
+            rating,
+            toilet_paper,
+            accessibility,
+            time_of_use,
+            comment,
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ])
         return True
     except Exception as e:
         logging.error(f"寫入 Google Sheets 失敗: {e}")
