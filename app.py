@@ -28,7 +28,6 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 TOILETS_FILE_PATH = os.path.join(os.getcwd(), "data", "public_toilets.csv")
 FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
-FEEDBACK_FILE_PATH = os.path.join(os.getcwd(), "data", "feedbacks.csv")  # 新增留言儲存檔案
 
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -333,6 +332,7 @@ def delete_from_toilets_file(name, address, lat, lon):
         logging.error(f"刪除 CSV 失敗: {e}")
         return False
     return True
+
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
@@ -401,9 +401,19 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "layout": "vertical",
                 "spacing": "sm",
                 "contents": [
-                    {"type": "button", "style": "primary", "height": "sm", "action": actions[0]}
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "action": actions[0]
+                    }
                 ] + [
-                    {"type": "button", "style": "secondary", "height": "sm", "action": a} for a in actions[1:]
+                    {
+                        "type": "button",
+                        "style": "secondary",
+                        "height": "sm",
+                        "action": a
+                    } for a in actions[1:]
                 ]
             }
         }
