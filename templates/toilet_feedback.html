@@ -14,7 +14,11 @@
             {% for c in comments %}
                 <li>
                     🌟 評分: {{ c.rating }}｜🧻 衛生紙: {{ c.toilet_paper }}｜♿ 無障礙設施: {{ c.accessibility }}｜🕒 使用時間: {{ c.time_of_use or '未填寫' }}<br>
-                    💬 留言: {{ c.comment if c.comment.strip() else '（無留言）' }}
+                    {% if c.comment.strip() %}
+                        💬 留言: {{ c.comment }}
+                    {% else %}
+                        💬 留言: （無留言）
+                    {% endif %}
                 </li>
             {% endfor %}
         {% else %}
