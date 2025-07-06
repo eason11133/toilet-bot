@@ -10,11 +10,16 @@
     <p>{{ address }}</p>
     <hr>
     <ul>
-        {% for c in comments %}
-            <li>🌟 評分: {{ c.rating }}｜留言: {{ c.comment }}</li>
+        {% if comments %}
+            {% for c in comments %}
+                <li>
+                    🌟 評分: {{ c.rating }}｜🧻 衛生紙: {{ c.toilet_paper }}｜♿ 無障礙設施: {{ c.accessibility }}｜🕒 使用時間: {{ c.time_of_use or '未填寫' }}<br>
+                    💬 留言: {{ c.comment if c.comment.strip() else '（無留言）' }}
+                </li>
+            {% endfor %}
         {% else %}
-            <li>（目前尚無留言）</li>
-        {% endfor %}
+            <li>（目前尚無任何回饋）</li>
+        {% endif %}
     </ul>
 </body>
 </html>
