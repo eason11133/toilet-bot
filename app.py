@@ -33,12 +33,13 @@ FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")  # 放在環境變數中
-GSHEET_SPREADSHEET_ID = "1vEdk4IV1aaLUjvYSdQsM5SVl0eqn5WosY5ZB3y7GTbg"
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 廁所主資料（含經緯度）
+FEEDBACK_SPREADSHEET_ID = "1vEdk4IV1aaLUjvYSdQsM5SVl0eqn5WosY5ZB3y7GTbg"  # 回饋表單回應
 
 gc = sh = worksheet = None
 
 def init_gsheet():
-    global gc, sh, worksheet, feedback_worksheet
+    global gc, worksheet, feedback_worksheet
     try:
         if not GSHEET_CREDENTIALS_JSON:
             logging.error("❌ GSHEET_CREDENTIALS_JSON 環境變數未設定")
@@ -46,18 +47,16 @@ def init_gsheet():
         credentials_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
-        sh = gc.open_by_key(GSHEET_SPREADSHEET_ID)
 
-        worksheet = sh.sheet1
-        logging.info("✅ Google Sheets 主工作表初始化成功")
+        # ✅ 廁所主表單（for 新增、回復 CSV）
+        toilet_sh = gc.open_by_key(TOILET_SPREADSHEET_ID)
+        worksheet = toilet_sh.sheet1
+        logging.info("✅ 廁所主表單 worksheet 初始化成功")
 
-        # === 初始化 feedback 回饋表單工作表 ===
-        try:
-            feedback_worksheet = sh.worksheet("表單回應 1")  # ← 請確認這是你表單的實際名稱
-            logging.info("✅ 回饋表單 worksheet 初始化成功")
-        except Exception as e:
-            feedback_worksheet = None
-            logging.error(f"❌ 回饋表單 worksheet 初始化失敗: {e}")
+        # ✅ 回饋表單（for 查詢回饋）
+        feedback_sh = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
+        feedback_worksheet = feedback_sh.worksheet("表單回應 1")  # 表單名稱要正確
+        logging.info("✅ 回饋表單 worksheet 初始化成功")
 
     except Exception as e:
         logging.error(f"❌ Google Sheets 初始化失敗: {e}")
@@ -74,21 +73,20 @@ def restore_csv_from_gsheet():
             logging.info("📭 Google Sheets 沒有任何資料可回復")
             return
 
-        # ➤ 印出欄位供 debug（可刪）
-        logging.info(f"欄位名稱為：{records[0].keys()}")
+        logging.info(f"欄位名稱為：{records[0].keys()}")  # Debug 用
 
         os.makedirs(os.path.dirname(TOILETS_FILE_PATH), exist_ok=True)
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
-                name = row.get('廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）', '').strip()
-                address = row.get('廁所地址（可由 Bot 產生建議，也可手動填）', '').strip()
-                lat = row.get('經度', '').strip()
-                lon = row.get('緯度', '').strip()
+                name = row.get('name', '').strip()
+                address = row.get('address', '').strip()
+                lat = str(row.get('lat', '')).strip()
+                lon = str(row.get('lon', '')).strip()
                 
                 if not name or not lat or not lon:
                     logging.warning(f"⚠️ 跳過缺欄位資料：{row}")
-                    continue  # 若有缺經緯度或名稱就略過
+                    continue  # 若有缺欄位則跳過
 
                 new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
                 f.write(new_row)
