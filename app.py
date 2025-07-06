@@ -53,7 +53,7 @@ def init_gsheet():
 
         # === 初始化 feedback 回饋表單工作表 ===
         try:
-            feedback_worksheet = sh.worksheet("廁所清潔回饋表單")  # ← 請確認這是你表單的實際名稱
+            feedback_worksheet = sh.worksheet("廁所回饋")  # ← 請確認這是你表單的實際名稱
             logging.info("✅ 回饋表單 worksheet 初始化成功")
         except Exception as e:
             feedback_worksheet = None
