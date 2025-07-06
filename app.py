@@ -338,7 +338,8 @@ def get_feedback_for_toilet(toilet_name):
     try:
         records = worksheet.get_all_records()
         for row in records:
-            if row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)") == toilet_name:
+            name = row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)", "").strip()
+            if name == toilet_name.strip():
                 feedback = {
                     "rating": row.get("清潔度評分", "無"),
                     "toilet_paper": row.get("是否有衛生紙？", "無資料"),
@@ -347,6 +348,7 @@ def get_feedback_for_toilet(toilet_name):
                     "comment": row.get("使用者留言(建議根據實際經驗填寫)", "無留言")
                 }
                 feedbacks.append(feedback)
+        logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return feedbacks
