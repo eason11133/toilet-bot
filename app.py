@@ -78,8 +78,8 @@ def restore_csv_from_gsheet():
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
-                name = row['名稱']
-                address = row['地址']
+                name = row['廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）']
+                address = row['廁所地址（可由 Bot 產生建議，也可手動填）']
                 lat = row['經度']
                 lon = row['緯度']
                 new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
