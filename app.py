@@ -359,16 +359,25 @@ def get_feedback_for_toilet(toilet_name):
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱", "").strip()
-            if name == toilet_name.strip():
-                feedback = {
-                    "rating": row.get("清潔度評分", "無"),
-                    "toilet_paper": row.get("是否有衛生紙？", "無資料"),
-                    "accessibility": row.get("無障礙設施情況", "無資料"),
-                    "time_of_use": row.get("您使用廁所的時間", "未填寫"),
-                    "comment": row.get("使用者留言（建議根據真實使用情況自由回答）", "無留言")
-                }
-                feedbacks.append(feedback)
+            # 模糊找欄位名稱
+            name_field = next((k for k in row if "廁所名稱" in k), None)
+            rating_field = next((k for k in row if "清潔度" in k), None)
+            paper_field = next((k for k in row if "衛生紙" in k), None)
+            access_field = next((k for k in row if "無障礙" in k), None)
+            time_field = next((k for k in row if "使用廁所的時間" in k), None)
+            comment_field = next((k for k in row if "使用者留言" in k), None)
+
+            if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
+                continue
+
+            feedback = {
+                "rating": row.get(rating_field, "無"),
+                "toilet_paper": row.get(paper_field, "無資料"),
+                "accessibility": row.get(access_field, "無資料"),
+                "time_of_use": row.get(time_field, "未填寫"),
+                "comment": row.get(comment_field, "無留言")
+            }
+            feedbacks.append(feedback)
         logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
@@ -496,6 +505,7 @@ def home():
 def toilet_feedback(toilet_name):
     feedbacks = []
     address = "某個地址"
+    
     if feedback_worksheet is None:
         logging.error("🛑 回饋 worksheet 未初始化")
         return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[])
@@ -503,19 +513,33 @@ def toilet_feedback(toilet_name):
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱", "").strip()
-            if name == toilet_name.strip():
-                feedbacks.append({
-                    "rating": row.get("清潔度評分", "無"),
-                    "toilet_paper": row.get("是否有衛生紙？", "無資料"),
-                    "accessibility": row.get("無障礙設施情況", "無資料"),
-                    "time_of_use": row.get("您使用廁所的時間", "未填寫"),
-                    "comment": row.get("使用者留言（建議根據真實使用情況自由回答）", "無留言")
-                })
-                if address == "某個地址":
-                    address = row.get("廁所地址（可由 Bot 產生建議，也可手動填）", "無地址")
+            # 使用模糊欄位名稱抓取（避免抓不到）
+            name_field = next((k for k in row if "廁所名稱" in k), None)
+            rating_field = next((k for k in row if "清潔度" in k), None)
+            paper_field = next((k for k in row if "衛生紙" in k), None)
+            access_field = next((k for k in row if "無障礙" in k), None)
+            time_field = next((k for k in row if "使用廁所的時間" in k), None)
+            comment_field = next((k for k in row if "使用者留言" in k), None)
+            address_field = next((k for k in row if "廁所地址" in k), None)
+
+            if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
+                continue
+
+            feedbacks.append({
+                "rating": row.get(rating_field, "無"),
+                "toilet_paper": row.get(paper_field, "無資料"),
+                "accessibility": row.get(access_field, "無資料"),
+                "time_of_use": row.get(time_field, "未填寫"),
+                "comment": row.get(comment_field, "無留言")
+            })
+
+            if address == "某個地址" and address_field:
+                address = row.get(address_field, "無地址")
+
+        logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
+
     return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
 
 @app.route("/submit_feedback/<toilet_name>", methods=["POST"])
