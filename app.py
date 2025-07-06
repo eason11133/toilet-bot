@@ -332,6 +332,20 @@ def delete_from_toilets_file(name, address, lat, lon):
         logging.error(f"刪除 CSV 失敗: {e}")
         return False
     return True
+def get_feedback_for_toilet(toilet_name):
+    feedbacks = []
+    try:
+        records = worksheet.get_all_records()  # 從 Google Sheets 讀取資料
+        for row in records:
+            if row.get("name") == toilet_name:  # 根據廁所名稱篩選資料
+                feedbacks.append({
+                    "rating": row.get("rating"),  # 評分欄位
+                    "comment": row.get("comment"),  # 留言欄位
+                    "timestamp": row.get("timestamp")  # 時間戳
+                })
+    except Exception as e:
+        logging.error(f"❌ 讀取回饋資料失敗: {e}")
+    return feedbacks
 
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
@@ -344,6 +358,13 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "type": "uri",
             "label": "導航",
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
+        })
+
+        # 查看留言按鈕
+        actions.append({
+            "type": "uri",
+            "label": "查看留言",
+            "uri": f"https://https://school-i9co.onrender.com/toilet_feedback/{toilet['name']}"  # 這裡是新增的部分，URL 根據您的實際情況設置
         })
 
         # 加入 / 移除 最愛
@@ -434,6 +455,15 @@ def callback():
 @app.route("/", methods=["GET"])
 def home():
     return "Toilet bot is running!", 200
+
+@app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
+def toilet_feedback(toilet_name):
+    # 從 Google Sheets 獲取回饋資料
+    feedbacks = get_feedback_for_toilet(toilet_name)
+    address = "某個地址"  # 這裡需要根據實際情況調整
+
+    # 渲染模板
+    return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
 
 @app.route("/add")
 def render_add_page():
