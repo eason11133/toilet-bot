@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>廁所留言 - {{ name }}</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: auto; padding: 2em; }
+        h1 { font-size: 24px; }
+        .comment { border-bottom: 1px solid #ccc; margin: 1em 0; padding-bottom: 1em; }
+        .score { color: #f39c12; }
+    </style>
+</head>
+<body>
+    <h1>「{{ name }}」留言紀錄</h1>
+    <p><strong>地址：</strong>{{ address }}</p>
+    <hr>
+    {% if comments %}
+        {% for c in comments %}
+            <div class="comment">
+                <p class="score">🌟 清潔度評分：{{ c.get("rating", "未填寫") }}</p>
+                <p>🗨️ 留言：{{ c.get("comment", "無留言") }}</p>
+                <p><small>📅 時間：{{ c.get("timestamp", "未知") }}</small></p>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p>目前尚無留言紀錄。</p>
+    {% endif %}
+</body>
+</html>
