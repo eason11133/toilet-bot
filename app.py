@@ -373,7 +373,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
         })
 
-        # 查看回饋按鈕（使用 urllib.parse.quote 編碼）
+        # 查看回饋按鈕（跳轉到回饋頁面）
         actions.append({
             "type": "uri",
             "label": "查看回饋",
