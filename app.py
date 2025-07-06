@@ -64,7 +64,6 @@ def restore_csv_from_gsheet():
 
         os.makedirs(os.path.dirname(TOILETS_FILE_PATH), exist_ok=True)
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
-            # 寫入 header（跟原來 CSV 一樣，因為你讀檔時跳過了 header）
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
                 name = row['name']
@@ -285,6 +284,7 @@ def delete_from_gsheet(uid, name, address, lat, lon):
     except Exception as e:
         logging.error(f"刪除 Sheets 失敗: {e}")
         return False
+
 def get_recent_added(uid, limit=5):
     if worksheet is None:
         logging.error("Sheets 未初始化")
