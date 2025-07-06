@@ -53,7 +53,7 @@ def init_gsheet():
 
         # === 初始化 feedback 回饋表單工作表 ===
         try:
-            feedback_worksheet = sh.worksheet("廁所回饋")  # ← 請確認這是你表單的實際名稱
+            feedback_worksheet = sh.worksheet("表單回應 1")  # ← 請確認這是你表單的實際名稱
             logging.info("✅ 回饋表單 worksheet 初始化成功")
         except Exception as e:
             feedback_worksheet = None
@@ -78,10 +78,10 @@ def restore_csv_from_gsheet():
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
-                name = row['name']
-                address = row['address']
-                lat = row['lat']
-                lon = row['lon']
+                name = row['名稱']
+                address = row['地址']
+                lat = row['經度']
+                lon = row['緯度']
                 new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
                 f.write(new_row)
         logging.info("✅ 已從 Google Sheets 回復 public_toilets.csv")
