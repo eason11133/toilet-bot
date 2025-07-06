@@ -336,15 +336,15 @@ def delete_from_toilets_file(name, address, lat, lon):
 def get_feedback_for_toilet(toilet_name):
     feedbacks = []
     try:
-        records = worksheet.get_all_records()  # 從 Google Sheets 讀取資料
+        records = worksheet.get_all_records()
         for row in records:
-            if row.get("name") == toilet_name:  # 根據廁所名稱篩選資料
+            if row.get("廁所名稱(請輸入或貼上廁所名稱；或留空將以地圖標記)") == toilet_name:
                 feedback = {
-                    "rating": row.get("rating"),  # 清潔度評分
-                    "toilet_paper": row.get("toilet_paper"),  # 是否有衛生紙
-                    "accessibility": row.get("accessibility"),  # 無障礙設施情況
-                    "time_of_use": row.get("time_of_use", "未填寫"),  # 使用廁所時間 (可選)
-                    "comment": row.get("comment", "無留言")  # 使用者留言 (可選)
+                    "rating": row.get("清潔度評分", "無"),
+                    "toilet_paper": row.get("是否有衛生紙？", "無資料"),
+                    "accessibility": row.get("無障礙設施情況", "無資料"),
+                    "time_of_use": row.get("您使用廁所的時間", "未填寫"),
+                    "comment": row.get("使用者留言(建議根據實際經驗填寫)", "無留言")
                 }
                 feedbacks.append(feedback)
     except Exception as e:
