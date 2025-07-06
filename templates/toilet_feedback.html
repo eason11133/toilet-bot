@@ -1,27 +1,27 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>廁所回饋</title>
+    <title>{{ name }} 的回饋資料</title>
 </head>
 <body>
-    <h1>{{ name }} 廁所的回饋</h1>
-    <p>地址：{{ address }}</p>
-    <h3>所有回饋：</h3>
-    <ul>
-        {% for feedback in comments %}
+    <h1>{{ name }} 的回饋資料</h1>
+
+    {% if comments %}
+        <ul>
+        {% for comment in comments %}
             <li>
-                <strong>清潔度評分:</strong> {{ feedback.rating }} <br>
-                <strong>衛生紙:</strong> {{ feedback.toilet_paper }} <br>
-                <strong>無障礙設施情況:</strong> {{ feedback.accessibility }} <br>
-                <strong>使用廁所時間:</strong> {{ feedback.time_of_use }} <br>
-                <strong>留言:</strong> {{ feedback.comment }} <br>
-                <hr>
+                <strong>評分:</strong> {{ comment.rating }} <br>
+                <strong>衛生紙:</strong> {{ comment.toilet_paper }} <br>
+                <strong>無障礙設施:</strong> {{ comment.accessibility }} <br>
+                <strong>使用時間:</strong> {{ comment.use_time }} <br>
+                <strong>留言:</strong> {{ comment.comment }} <br>
             </li>
-        {% else %}
-            <li>目前沒有回饋。</li>
         {% endfor %}
-    </ul>
+        </ul>
+    {% else %}
+        <p>沒有回饋資料。</p>
+    {% endif %}
 </body>
 </html>
