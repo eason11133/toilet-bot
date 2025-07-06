@@ -364,7 +364,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         actions.append({
             "type": "uri",
             "label": "查看留言",
-            "uri": f"https://https://school-i9co.onrender.com/toilet_feedback/{toilet['name']}"  # 這裡是新增的部分，URL 根據您的實際情況設置
+            "uri": f"https://school-i9co.onrender.com/toilet_feedback/{toilet['name']}"
         })
 
         # 加入 / 移除 最愛
