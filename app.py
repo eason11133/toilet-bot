@@ -359,7 +359,7 @@ def get_feedback_for_toilet(toilet_name):
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）", "").strip()
+            name = row.get("廁所名稱", "").strip()
             if name == toilet_name.strip():
                 feedback = {
                     "rating": row.get("清潔度評分", "無"),
@@ -503,7 +503,7 @@ def toilet_feedback(toilet_name):
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            name = row.get("廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）", "").strip()
+            name = row.get("廁所名稱", "").strip()
             if name == toilet_name.strip():
                 feedbacks.append({
                     "rating": row.get("清潔度評分", "無"),
