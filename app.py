@@ -74,14 +74,22 @@ def restore_csv_from_gsheet():
             logging.info("📭 Google Sheets 沒有任何資料可回復")
             return
 
+        # ➤ 印出欄位供 debug（可刪）
+        logging.info(f"欄位名稱為：{records[0].keys()}")
+
         os.makedirs(os.path.dirname(TOILETS_FILE_PATH), exist_ok=True)
         with open(TOILETS_FILE_PATH, "w", encoding="utf-8") as f:
             f.write("code,villagecode,village,source,name,address,note,lat,lon,level,category,open,provider,count,\n")
             for row in records:
-                name = row['廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）']
-                address = row['廁所地址（可由 Bot 產生建議，也可手動填）']
-                lat = row['經度']
-                lon = row['緯度']
+                name = row.get('廁所名稱（請輸入或貼上廁所名稱；或由 Flex Message 帶入）', '').strip()
+                address = row.get('廁所地址（可由 Bot 產生建議，也可手動填）', '').strip()
+                lat = row.get('經度', '').strip()
+                lon = row.get('緯度', '').strip()
+                
+                if not name or not lat or not lon:
+                    logging.warning(f"⚠️ 跳過缺欄位資料：{row}")
+                    continue  # 若有缺經緯度或名稱就略過
+
                 new_row = f"00000,0000000,未知里,USERADD,{name},{address},使用者補充,{lat},{lon},普通級,公共場所,未知,使用者,0,\n"
                 f.write(new_row)
         logging.info("✅ 已從 Google Sheets 回復 public_toilets.csv")
