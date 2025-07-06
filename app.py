@@ -348,6 +348,15 @@ def get_feedback_for_toilet(toilet_name):
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return feedbacks
 
+def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, comment):
+    try:
+        # 假設您已經初始化了 worksheet
+        worksheet.append_row([toilet_name, rating, toilet_paper, accessibility, comment, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        return True
+    except Exception as e:
+        logging.error(f"寫入 Google Sheets 失敗: {e}")
+        return False
+
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
@@ -459,12 +468,35 @@ def home():
 
 @app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
 def toilet_feedback(toilet_name):
-    # 從 Google Sheets 獲取回饋資料
     feedbacks = get_feedback_for_toilet(toilet_name)
-    address = "某個地址"  # 這裡需要根據實際情況調整
-
-    # 渲染模板
+    # 從資料庫獲取廁所的詳細地址
+    address = "某個地址"  # 這裡需要從資料庫或其他資料來源獲取廁所地址
     return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
+
+@app.route("/submit_feedback/<toilet_name>", methods=["POST"])
+def submit_feedback(toilet_name):
+    try:
+        # 獲取表單資料
+        rating = request.form.get("rating")
+        toilet_paper = request.form.get("toilet_paper")
+        accessibility = request.form.get("accessibility")
+        comment = request.form.get("comment")
+        
+        # 確保所有表單欄位都有填寫
+        if not all([rating, toilet_paper, accessibility, comment]):
+            flash("請填寫所有的回饋項目！", "warning")
+            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
+        
+        # 儲存回饋資料到 Google Sheets 或資料庫
+        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, comment)
+        
+        flash("感謝您的回饋！", "success")
+        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
+    
+    except Exception as e:
+        logging.error(f"回饋提交錯誤: {e}")
+        flash("提交失敗，請稍後再試！", "danger")
+        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
 @app.route("/add")
 def render_add_page():
