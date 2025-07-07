@@ -42,6 +42,18 @@ FEEDBACK_SPREADSHEET_ID = "1vEdk4IV1aaLUjvYSdQsM5SVl0eqn5WosY5ZB3y7GTbg"  # 回�
 gc = sh = worksheet = None
 
 # 假設模型保存在 'cleanliness_model.pkl'
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+def load_cleanliness_model():
+    try:
+        model_path = os.path.join(BASE_DIR, 'models', 'clean_model.pkl')
+        model = joblib.load(model_path)
+        logging.info("✅ 清潔度預測模型已載入")
+        return model
+    except Exception as e:
+        logging.error(f"❌ 清潔度模型載入失敗: {e}")
+        return None
+
 def load_label_encoder():
     try:
         encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
