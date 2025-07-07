@@ -480,7 +480,12 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
             cleanliness_score, # 清潔度預測
             ""                 # 使用者 ID
         ]
+        
         feedback_worksheet.append_row(row_data)
+        
+        # 強制設置清潔度預測欄位格式為文字（避免數字自動右對齊）
+        feedback_worksheet.format('D2:D',{'horizontalAlignment': 'LEFT', 'textFormat': {'foregroundColor': {'red': 0, 'green': 0, 'blue': 0}}})  # 設置文字顏色為黑色
+        
         logging.info("✅ 回饋結果已成功寫入第 10 欄")
         return True
     except Exception as e:
