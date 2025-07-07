@@ -419,20 +419,28 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
         if feedback_worksheet is None:
             logging.error("🛑 回饋 worksheet 尚未初始化")
             return False
-        feedback_worksheet.append_row([
-            toilet_name,
-            rating,
-            toilet_paper,
-            accessibility,
-            time_of_use,
-            comment,
-            cleanliness_score,  # 儲存清潔度預測結果
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        ])
-        logging.info(f"成功將回饋和預測結果儲存到 Google Sheets")
+
+        # 🟨 正確的填寫順序，共 11 欄，其中第 10 欄為清潔度預測
+        row_data = [
+            datetime.utcnow().strftime("%Y/%m/%d %p %I:%M:%S"),  # 第 1 欄：時間戳記
+            toilet_name,      # 第 2 欄：廁所名稱
+            "",               # 第 3 欄：廁所地址（暫空）
+            rating,           # 第 4 欄：清潔度評分
+            toilet_paper,     # 第 5 欄：是否有衛生紙
+            accessibility,    # 第 6 欄：無障礙設施
+            time_of_use,      # 第 7 欄：使用廁所的時間
+            comment,          # 第 8 欄：使用者留言
+            "",               # 第 9 欄：電子郵件地址（暫空）
+            cleanliness_score,  # ✅ 第 10 欄：清潔度預測
+            ""                # 第 11 欄：使用者 ID（暫空）
+        ]
+
+        feedback_worksheet.append_row(row_data)
+        logging.info("✅ 清潔度預測結果已正確寫入第 10 欄")
         return True
+
     except Exception as e:
-        logging.error(f"寫入 Google Sheets 失敗: {e}")
+        logging.error(f"❌ 寫入 Google Sheets 失敗: {e}")
         return False
 
 # === 建立 Flex Message ===

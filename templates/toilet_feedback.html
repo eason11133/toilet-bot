@@ -47,22 +47,35 @@
         .collapsed {
             display: none;
         }
+        .no-feedback {
+            color: #999;
+        }
     </style>
 </head>
 <body>
     <h2>{{ name }}</h2>
     <p>{{ address }}</p>
 
-    {% if comments and comments[0].cleanliness_score %}
-        <div class="cleanliness-score">預測清潔分數：{{ comments[0].cleanliness_score }}</div>
-    {% endif %}
+    <!-- 顯示預測分數 -->
+    <div class="cleanliness-score">
+        預測清潔分數：
+        {% if comments and comments[0].cleanliness_score %}
+            {{ comments[0].cleanliness_score }}
+        {% else %}
+            未預測
+        {% endif %}
+    </div>
 
+    <!-- 顯示留言展開按鈕 -->
     {% if comments|length > 1 %}
-        <button class="toggle-button" onclick="toggleComments()">▶️ 展開其他使用者回饋</button>
+        <button class="toggle-button" onclick="toggleComments()">
+            ▶️ 展開其他 {{ comments|length - 1 }} 筆使用者回饋
+        </button>
     {% endif %}
 
     <ul>
         {% if comments %}
+            <!-- 第一筆留言預設顯示 -->
             <li>
                 <p><strong>🌟 評分:</strong> {{ comments[0].rating }} ｜ 
                    <strong>🧻 衛生紙:</strong> {{ comments[0].toilet_paper }} ｜ 
@@ -76,6 +89,7 @@
                     {% endif %}
                 </p>
             </li>
+            <!-- 其他留言預設收起 -->
             {% for c in comments[1:] %}
                 <li class="collapsed">
                     <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
