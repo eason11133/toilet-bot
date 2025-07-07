@@ -47,7 +47,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 def load_cleanliness_model():
     try:
         model_path = os.path.join(BASE_DIR, 'models', 'clean_model.pkl')
-        model = joblib.load(model_path)
+        model = joblib.load(model_path)  # 載入模型
         logging.info("✅ 清潔度預測模型已載入")
         return model
     except Exception as e:
@@ -57,7 +57,7 @@ def load_cleanliness_model():
 def load_label_encoder():
     try:
         encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
-        encoder = joblib.load(encoder_path)
+        encoder = joblib.load(encoder_path)  # 載入LabelEncoder
         logging.info("✅ LabelEncoder 已載入")
         return encoder
     except Exception as e:
@@ -452,7 +452,6 @@ def predict_cleanliness(features):
         logging.error(f"預測清潔度失敗: {e}")
         return None
 
-
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score):
     try:
         if feedback_worksheet is None:
@@ -461,7 +460,7 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
 
         # 取得該廁所資料
         toilet = get_toilet_data_by_name(toilet_name)
-        
+
         # 如果是無地址，將經緯度填入
         if toilet.get("address_status") == "經緯度作為地址":
             toilet["address"] = f"{toilet['lat']},{toilet['lon']}"
@@ -480,12 +479,7 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
             cleanliness_score, # 清潔度預測
             ""                 # 使用者 ID
         ]
-        
         feedback_worksheet.append_row(row_data)
-        
-        # 強制設置清潔度預測欄位格式為文字（避免數字自動右對齊）
-        feedback_worksheet.format('D2:D',{'horizontalAlignment': 'LEFT', 'textFormat': {'foregroundColor': {'red': 0, 'green': 0, 'blue': 0}}})  # 設置文字顏色為黑色
-        
         logging.info("✅ 回饋結果已成功寫入第 10 欄")
         return True
     except Exception as e:
@@ -685,10 +679,13 @@ def submit_feedback(toilet_name):
             flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # ✅ 模型預測
+        # 模型預測清潔度
         cleanliness_score = predict_cleanliness(features)
+        if cleanliness_score is None:
+            flash("預測清潔度時發生錯誤，模型未正確加載或預測失敗", "danger")
+            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # ✅ 儲存至 Google Sheets
+        # 儲存至 Google Sheets
         save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
 
         flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
