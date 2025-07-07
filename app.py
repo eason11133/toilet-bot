@@ -44,7 +44,8 @@ gc = sh = worksheet = None
 # 假設模型保存在 'cleanliness_model.pkl'
 def load_cleanliness_model():
     try:
-        model = joblib.load('D:/school/toilet-bot/models/cleanliness_model.pkl')
+        model_path = os.path.join(os.path.dirname(__file__), 'models', 'cleanliness_model.pkl')
+        model = joblib.load(model_path)
         logging.info("✅ 清潔度預測模型已載入")
         return model
     except Exception as e:
