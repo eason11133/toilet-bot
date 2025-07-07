@@ -4,6 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ name }} 回饋</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        h2 {
+            color: #2C3E50;
+        }
+        p {
+            font-size: 1.1em;
+            color: #555;
+        }
+        hr {
+            margin: 20px 0;
+            border: 1px solid #ddd;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            background-color: #fff;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        li p {
+            margin: 5px 0;
+            color: #555;
+        }
+        .comment {
+            font-style: italic;
+            color: #888;
+        }
+        .no-feedback {
+            color: #999;
+        }
+    </style>
 </head>
 <body>
     <h2>{{ name }}</h2>
@@ -13,16 +54,21 @@
         {% if comments %}
             {% for c in comments %}
                 <li>
-                    🌟 評分: {{ c.rating }}｜🧻 衛生紙: {{ c.toilet_paper }}｜♿ 無障礙設施: {{ c.accessibility }}｜🕒 使用時間: {{ c.time_of_use or '未填寫' }}<br>
-                    {% if c.comment.strip() %}
-                        💬 留言: {{ c.comment }}
-                    {% else %}
-                        💬 留言: （無留言）
-                    {% endif %}
+                    <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
+                       <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
+                       <strong>♿ 無障礙設施:</strong> {{ c.accessibility }} ｜ 
+                       <strong>🕒 使用時間:</strong> {{ c.time_of_use or '未填寫' }}</p>
+                    <p class="comment">
+                        {% if c.comment.strip() %}
+                            <strong>💬 留言:</strong> {{ c.comment }}
+                        {% else %}
+                            <strong>💬 留言:</strong> （無留言）
+                        {% endif %}
+                    </p>
                 </li>
             {% endfor %}
         {% else %}
-            <li>（目前尚無任何回饋）</li>
+            <li class="no-feedback">（目前尚無任何回饋）</li>
         {% endif %}
     </ul>
 </body>

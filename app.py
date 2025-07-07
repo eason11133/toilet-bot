@@ -353,7 +353,7 @@ def delete_from_toilets_file(name, address, lat, lon):
 def get_feedback_for_toilet(toilet_name):
     feedbacks = []
     if feedback_worksheet is None:
-        logging.error("🛑 回饋表單 worksheet 尚未初始化")
+        logging.error("🛑 回饋 worksheet 尚未初始化")
         return []
 
     try:
@@ -382,6 +382,7 @@ def get_feedback_for_toilet(toilet_name):
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return feedbacks
+
 
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, comment):
     try:
@@ -503,43 +504,29 @@ def home():
 
 @app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
 def toilet_feedback(toilet_name):
-    feedbacks = []
-    address = "某個地址"
+    feedbacks = get_feedback_for_toilet(toilet_name)
+    address = "某個地址"  # 預設地址，如果無法找到會覆蓋
     
     if feedback_worksheet is None:
-        logging.error("🛑 回饋 worksheet 未初始化")
+        logging.error("🛑 回饋 worksheet 尚未初始化")
         return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[])
 
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            # 使用模糊欄位名稱抓取（避免抓不到）
             name_field = next((k for k in row if "廁所名稱" in k), None)
-            rating_field = next((k for k in row if "清潔度" in k), None)
-            paper_field = next((k for k in row if "衛生紙" in k), None)
-            access_field = next((k for k in row if "無障礙" in k), None)
-            time_field = next((k for k in row if "使用廁所的時間" in k), None)
-            comment_field = next((k for k in row if "使用者留言" in k), None)
             address_field = next((k for k in row if "廁所地址" in k), None)
 
             if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
                 continue
 
-            feedbacks.append({
-                "rating": row.get(rating_field, "無"),
-                "toilet_paper": row.get(paper_field, "無資料"),
-                "accessibility": row.get(access_field, "無資料"),
-                "time_of_use": row.get(time_field, "未填寫"),
-                "comment": row.get(comment_field, "無留言")
-            })
-
+            # 嘗試從回饋資料中獲取地址
             if address == "某個地址" and address_field:
                 address = row.get(address_field, "無地址")
-
-        logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")
     except Exception as e:
-        logging.error(f"❌ 讀取回饋資料失敗: {e}")
+        logging.error(f"❌ 讀取回饋資料時抓取地址失敗: {e}")
 
+    # 返回渲染頁面並傳遞回饋資料
     return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
 
 @app.route("/submit_feedback/<toilet_name>", methods=["POST"])
