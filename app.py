@@ -62,7 +62,7 @@ def init_gsheet():
         if not GSHEET_CREDENTIALS_JSON:
             logging.error("❌ GSHEET_CREDENTIALS_JSON 環境變數未設定")
             return
-        credentials_dict = json.loads(GSHEET_CREDENTIALS_JSON.replace('\\n', '\n'))
+        credentials_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
 
