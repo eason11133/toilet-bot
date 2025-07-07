@@ -435,6 +435,7 @@ def predict_cleanliness(features):
         logging.error(f"預測清潔度失敗: {e}")
         return None
 
+
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score):
     try:
         if feedback_worksheet is None:
@@ -465,79 +466,64 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
         return False
 
 # === 建立 Flex Message ===
-def create_toilet_flex_messages(toilets, expanded_names=set(), show_delete=False, uid=None):
-    from urllib.parse import quote
+def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
-
     for toilet in toilets[:MAX_TOILETS_REPLY]:
-        is_expanded = toilet["name"] in expanded_names
         actions = []
 
-        # 基本按鈕：導航 + 查看回饋
+        # 導航按鈕
         actions.append({
             "type": "uri",
             "label": "導航",
             "uri": f"https://www.google.com/maps/search/?api=1&query={toilet['lat']},{toilet['lon']}"
         })
+
+        # 查看回饋按鈕（跳轉到回饋頁面）
         actions.append({
             "type": "uri",
             "label": "查看回饋",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback/{quote(toilet['name'])}"
         })
 
-        # 展開狀態下：加入其他操作按鈕
-        if is_expanded:
-            # 收藏邏輯
-            if toilet.get("type") == "favorite" and uid is not None:
-                actions.append({
-                    "type": "postback",
-                    "label": "移除最愛",
-                    "data": f"remove_fav:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
-                })
-            elif uid is not None:
-                actions.append({
-                    "type": "postback",
-                    "label": "加入最愛",
-                    "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
-                })
-
-            # 刪除廁所（只限 user 新增）
-            if show_delete and toilet.get("type") == "user" and uid is not None:
-                actions.append({
-                    "type": "postback",
-                    "label": "刪除廁所",
-                    "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
-                })
-
-            # 廁所回饋表單
-            name_for_feedback = toilet['name'] or f"無名稱@{toilet['lat']:.5f},{toilet['lon']:.5f}"
-            addr_for_feedback = toilet['address'] or "無地址"
-            feedback_url = (
-                "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform?usp=pp_url"
-                f"&entry.1461963858={quote(name_for_feedback)}"
-                f"&entry.1048755567={quote(addr_for_feedback)}"
-            )
-            actions.append({
-                "type": "uri",
-                "label": "廁所回饋",
-                "uri": feedback_url
-            })
-
-            # 收起按鈕
+        # 加入 / 移除 最愛
+        if toilet.get("type") == "user":
+            pass
+        elif toilet.get("type") == "favorite" and uid is not None:
             actions.append({
                 "type": "postback",
-                "label": "▲ 收起",
-                "data": f"collapse:{toilet['name']}"
+                "label": "移除最愛",
+                "data": f"remove_fav:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
         else:
-            # 預設折疊狀態下加上「展開」按鈕
             actions.append({
                 "type": "postback",
-                "label": "▼ 更多",
-                "data": f"expand:{toilet['name']}"
+                "label": "加入最愛",
+                "data": f"add:{toilet['name']}:{toilet['lat']}:{toilet['lon']}"
             })
 
-        # 組合 Bubble
+        # 刪除按鈕（僅限 user 新增）
+        if show_delete and toilet.get("type") == "user" and uid is not None:
+            actions.append({
+                "type": "postback",
+                "label": "刪除廁所",
+                "data": f"confirm_delete:{toilet['name']}:{toilet['address']}:{toilet['lat']}:{toilet['lon']}"
+            })
+
+        # 回饋按鈕（所有類型都加）
+        name_for_feedback = toilet['name'] or f"無名稱@{toilet['lat']:.5f},{toilet['lon']:.5f}"
+        addr_for_feedback = toilet['address'] or "無地址"
+        feedback_url = (
+            "https://docs.google.com/forms/d/e/1FAIpQLSdx33f9m2GnI2PNRKr-frsskw8lLG6L4gEnew-Ornes4sWquA/viewform?usp=pp_url"
+            f"&entry.1461963858={quote(name_for_feedback)}"
+            f"&entry.1048755567={quote(addr_for_feedback)}"
+        )
+        actions.append({
+            "type": "uri",
+            "label": "廁所回饋",
+            "uri": feedback_url
+        })
+
+        # 組合 Bubble（footer 改為垂直排版）
         bubble = {
             "type": "bubble",
             "body": {
@@ -556,16 +542,21 @@ def create_toilet_flex_messages(toilets, expanded_names=set(), show_delete=False
                 "contents": [
                     {
                         "type": "button",
-                        "style": "primary" if i == 0 else "secondary",
+                        "style": "primary",
+                        "height": "sm",
+                        "action": actions[0]
+                    }
+                ] + [
+                    {
+                        "type": "button",
+                        "style": "secondary",
                         "height": "sm",
                         "action": a
-                    } for i, a in enumerate(actions)
+                    } for a in actions[1:]
                 ]
             }
         }
-
         bubbles.append(bubble)
-
     return {"type": "carousel", "contents": bubbles}
 
 # === Webhook ===
@@ -799,66 +790,42 @@ def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
 
-    # --- 展開更多 ---
-    if data.startswith("expand:"):
-        name = data.split(":")[1]
-        if uid not in user_locations:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("請先傳送位置"))
-            return
-        lat, lon = user_locations[uid]
-        toilets = query_local_toilets(lat, lon) + query_overpass_toilets(lat, lon)
-        flex = create_toilet_flex_messages(toilets, expanded_names={name}, uid=uid)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage("廁所資訊", flex))
-        return
-
-    # --- 收起 ---
-    elif data.startswith("collapse:"):
-        name = data.split(":")[1]
-        if uid not in user_locations:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("請先傳送位置"))
-            return
-        lat, lon = user_locations[uid]
-        toilets = query_local_toilets(lat, lon) + query_overpass_toilets(lat, lon)
-        flex = create_toilet_flex_messages(toilets, expanded_names=set(), uid=uid)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage("廁所資訊", flex))
-        return
-
-    # --- 加入收藏 ---
-    elif data.startswith("add:"):
+    # 分三種狀況：加入收藏、移除收藏、刪除廁所確認流程
+    if data.startswith("add:"):
+        added = False
         try:
             _, name, lat, lon = data.split(":")
         except ValueError:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("❌ 格式錯誤，請重新操作"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
             return
 
+        reply_messages = []
         if uid not in user_locations:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("請先傳送位置"))
-            return
-
-        found = False
-        lat_user, lon_user = user_locations[uid]
-        all_toilets = query_local_toilets(lat_user, lon_user) + query_overpass_toilets(lat_user, lon_user)
-        for toilet in all_toilets:
-            if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
-                add_to_favorites(uid, toilet)
-                found = True
-                break
-        msg = f"✅ 已收藏 {name}" if found else "找不到該廁所，收藏失敗"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
-        return
-
-    # --- 移除收藏 ---
+            reply_messages.append(TextSendMessage(text="請先傳送位置"))
+        else:
+            for toilet in query_local_toilets(*user_locations[uid]) + query_overpass_toilets(*user_locations[uid]):
+                if toilet['name'] == name and str(toilet['lat']) == lat and str(toilet['lon']) == lon:
+                    add_to_favorites(uid, toilet)
+                    added = True
+                    break
+        if added:
+            reply_messages.append(TextSendMessage(text=f"✅ 已收藏 {name}"))
+        else:
+            reply_messages.append(TextSendMessage(text="找不到該廁所，收藏失敗"))
+        if reply_messages:
+            try:
+                line_bot_api.reply_message(event.reply_token, reply_messages)
+            except Exception as e:
+                logging.error(f"❌ 回覆訊息失敗（Postback add）: {e}")
     elif data.startswith("remove_fav:"):
         try:
             _, name, lat, lon = data.split(":")
             removed = remove_from_favorites(uid, name, lat, lon)
             msg = f"✅ 已從最愛移除 {name}" if removed else "❌ 移除失敗，請稍後再試"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(msg))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
         except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("❌ 移除最愛失敗，格式錯誤"))
-        return
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 移除最愛失敗，格式錯誤"))
 
-    # --- 確認刪除 ---
     elif data.startswith("confirm_delete:"):
         try:
             _, name, address, lat, lon = data.split(":")
@@ -873,8 +840,7 @@ def handle_postback(event):
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
         except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage("❌ 格式錯誤，請重新操作"))
-        return
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 格式錯誤，請重新操作"))
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
