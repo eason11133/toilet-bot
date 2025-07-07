@@ -418,9 +418,19 @@ def predict_cleanliness(features):
         if cleanliness_model is None:
             logging.error("❌ 無法預測，模型尚未載入")
             return None
-        prediction = cleanliness_model.predict([features])
-        logging.info(f"預測的清潔度: {prediction[0]}")
-        return prediction[0]
+
+        # 載入 label encoder（用來還原數值）
+        encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
+        label_encoder = joblib.load(encoder_path)
+
+        # 取得分類的機率分布
+        probs = cleanliness_model.predict_proba([features])[0]
+        labels = label_encoder.inverse_transform(range(len(probs)))
+        expected_score = round(sum(p * l for p, l in zip(probs, labels)), 2)
+
+        logging.info(f"預測期望清潔度: {expected_score}")
+        return expected_score
+
     except Exception as e:
         logging.error(f"預測清潔度失敗: {e}")
         return None
