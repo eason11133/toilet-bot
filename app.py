@@ -6,7 +6,7 @@ import requests
 import traceback
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
-from flask import Flask, request, abort, render_template
+from flask import Flask, request, abort, render_template, redirect, url_for, flash
 from dotenv import load_dotenv
 from urllib.parse import quote
 from linebot import LineBotApi, WebhookHandler
@@ -18,6 +18,9 @@ from linebot.models import (
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import joblib  # 用於載入與保存模型
+from sklearn.linear_model import LinearRegression  # 若需要使用回歸模型進行預測
+
 
 # === 初始化 ===
 load_dotenv()
@@ -37,6 +40,19 @@ TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 廁所
 FEEDBACK_SPREADSHEET_ID = "1vEdk4IV1aaLUjvYSdQsM5SVl0eqn5WosY5ZB3y7GTbg"  # 回饋表單回應
 
 gc = sh = worksheet = None
+
+# 假設模型保存在 'cleanliness_model.pkl'
+def load_cleanliness_model():
+    try:
+        model = joblib.load('D:/school/toilet-bot/models/cleanliness_model.pkl')
+        logging.info("✅ 清潔度預測模型已載入")
+        return model
+    except Exception as e:
+        logging.error(f"❌ 模型載入失敗: {e}")
+        return None
+
+# 載入模型
+cleanliness_model = load_cleanliness_model()
 
 def init_gsheet():
     global gc, worksheet, feedback_worksheet
@@ -383,11 +399,33 @@ def get_feedback_for_toilet(toilet_name):
         logging.error(f"❌ 讀取回饋資料失敗: {e}")
     return feedbacks
 
-
-def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, comment):
+def predict_cleanliness(features):
     try:
-        # 假設您已經初始化了 worksheet
-        worksheet.append_row([toilet_name, rating, toilet_paper, accessibility, comment, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        # 假設 features 是一個列表，包含需要預測的特徵
+        prediction = cleanliness_model.predict([features])
+        logging.info(f"預測的清潔度: {prediction[0]}")
+        return prediction[0]
+    except Exception as e:
+        logging.error(f"預測清潔度失敗: {e}")
+        return None
+
+
+def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score):
+    try:
+        if feedback_worksheet is None:
+            logging.error("🛑 回饋 worksheet 尚未初始化")
+            return False
+        feedback_worksheet.append_row([
+            toilet_name,
+            rating,
+            toilet_paper,
+            accessibility,
+            time_of_use,
+            comment,
+            cleanliness_score,  # 儲存清潔度預測結果
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+        logging.info(f"成功將回饋和預測結果儲存到 Google Sheets")
         return True
     except Exception as e:
         logging.error(f"寫入 Google Sheets 失敗: {e}")
@@ -538,16 +576,22 @@ def submit_feedback(toilet_name):
         accessibility = request.form.get("accessibility")
         time_of_use = request.form.get("time_of_use")  # 使用廁所時間
         comment = request.form.get("comment")  # 使用者留言
-        
-        # 確保所有必填欄位都有填寫
+
+        # 假設我們將 "rating", "toilet_paper", 和 "accessibility" 當作預測特徵
         if not all([rating, toilet_paper, accessibility]):
             flash("請填寫所有必填欄位！", "warning")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-        
-        # 儲存回饋資料到 Google Sheets 或資料庫
-        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment)
-        
-        flash("感謝您的回饋！", "success")
+
+        # 轉換為數值型特徵，這裡假設 rating, toilet_paper, accessibility 是數值
+        features = [float(rating), float(toilet_paper), float(accessibility)]
+
+        # 利用模型進行預測
+        cleanliness_score = predict_cleanliness(features)
+
+        # 儲存回饋資料和清潔度預測結果到 Google Sheets 或資料庫
+        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
+
+        flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
     
     except Exception as e:
