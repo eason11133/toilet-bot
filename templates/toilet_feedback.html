@@ -136,7 +136,7 @@
                     const chart = new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: data.data.map(entry => new Date(entry.time).toLocaleString()),
+                            labels: data.data.map((entry, index) => `回饋 #${index + 1}`),  // 用回饋的索引作為橫軸標籤
                             datasets: [{
                                 label: '清潔度預測',
                                 data: data.data.map(entry => entry.score),
@@ -150,7 +150,7 @@
                                 x: {
                                     title: {
                                         display: true,
-                                        text: '時間'
+                                        text: '回饋索引'  // 改成 "回饋索引"
                                     }
                                 },
                                 y: {
