@@ -1,0 +1,22 @@
+import joblib
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# 假設數據
+X = np.array([
+    [5, 1, 1],
+    [4, 1, 0],
+    [3, 0, 1],
+    [2, 0, 0],
+    [5, 1, 1]
+])
+y = np.array([5, 4, 3, 2, 5])
+
+# 訓練模型
+model = LinearRegression()
+model.fit(X, y)
+
+# 儲存訓練好的模型到 'models' 資料夾
+joblib.dump(model, 'models/cleanliness_model.pkl')
+
+print("模型已儲存為 'models/cleanliness_model.pkl'")
