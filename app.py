@@ -222,11 +222,17 @@ def query_overpass_toilets(lat, lon, radius=500):
             t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
         else:
             continue
+
+        # 嘗試獲取地址，若無，則填入經緯度
+        address = elem.get("tags", {}).get("name", "無地址")
+        if not address or address == "無地址":
+            address = f"{t_lat},{t_lon}"
+
         toilets.append({
             "name": elem.get("tags", {}).get("name", "無名稱"),
             "lat": t_lat,
             "lon": t_lon,
-            "address": "",
+            "address": address,
             "distance": haversine(lat, lon, t_lat, t_lon),
             "type": "osm"
         })
