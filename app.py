@@ -113,6 +113,10 @@ def restore_csv_from_gsheet():
                 lat = str(row.get('lat', '')).strip()
                 lon = str(row.get('lon', '')).strip()
                 
+                # 如果沒有地址，則填入經緯度
+                if not address:
+                    address = f"{lat},{lon}"
+
                 if not name or not lat or not lon:
                     logging.warning(f"⚠️ 跳過缺欄位資料：{row}")
                     continue  # 若有缺欄位則跳過
@@ -285,10 +289,13 @@ def geocode_address(address, user_name):
 
         if resp.status_code == 200 and data:
             return user_name, float(data[0]['lat']), float(data[0]['lon'])
+        else:
+            # 地址無法找到，返回經緯度作為地址
+            return user_name, float(data[0]['lat']), float(data[0]['lon'])
+
     except Exception as e:
         logging.error(f"地址解析失敗: {e}")
     return None, None, None
-
 
 # === 寫入廁所 CSV 與 Sheets ===
 def add_to_toilets_file(name, address, lat, lon):
@@ -307,6 +314,10 @@ def add_to_gsheet(uid, name, address, lat, lon):
         logging.error("Sheets 未初始化")
         return False
     try:
+        # 如果沒有地址，填入經緯度
+        if not address:
+            address = f"{lat},{lon}"
+
         worksheet.append_row([uid, name, address, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
         return True
     except Exception as e:
@@ -442,25 +453,30 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
             logging.error("🛑 回饋 worksheet 尚未初始化")
             return False
 
-        # 🟨 正確的填寫順序，共 11 欄，其中第 10 欄為清潔度預測
+        # 取得該廁所資料
+        toilet = get_toilet_data_by_name(toilet_name)
+        
+        # 如果是無地址，將經緯度填入
+        if toilet.get("address_status") == "經緯度作為地址":
+            toilet["address"] = f"{toilet['lat']},{toilet['lon']}"
+
+        # 寫入 Google Sheets 的資料
         row_data = [
-            datetime.utcnow().strftime("%Y/%m/%d %p %I:%M:%S"),  # 第 1 欄：時間戳記
-            toilet_name,       # 第 2 欄：廁所名稱
-            "",                # 第 3 欄：廁所地址（由 Bot 自動填，暫空）
-            rating,            # 第 4 欄：清潔度評分
-            toilet_paper,      # 第 5 欄：是否有衛生紙
-            accessibility,     # 第 6 欄：無障礙設施
-            time_of_use,       # 第 7 欄：使用廁所的時間
-            comment,           # 第 8 欄：使用者留言
-            "",                # 第 9 欄：電子郵件地址（留空）
-            cleanliness_score, # ✅ 第 10 欄：清潔度預測
-            ""                 # 第 11 欄：使用者 ID（可日後補上）
+            datetime.utcnow().strftime("%Y/%m/%d %p %I:%M:%S"),  # 時間戳記
+            toilet_name,       # 廁所名稱
+            toilet["address"], # 廁所地址（可以是經緯度）
+            rating,            # 清潔度評分
+            toilet_paper,      # 衛生紙
+            accessibility,     # 無障礙設施
+            time_of_use,       # 使用時間
+            comment,           # 使用者留言
+            "",                # 電子郵件地址
+            cleanliness_score, # 清潔度預測
+            ""                 # 使用者 ID
         ]
-
         feedback_worksheet.append_row(row_data)
-        logging.info("✅ 清潔度預測結果已正確寫入第 10 欄")
+        logging.info("✅ 回饋結果已成功寫入第 10 欄")
         return True
-
     except Exception as e:
         logging.error(f"❌ 寫入 Google Sheets 失敗: {e}")
         return False
