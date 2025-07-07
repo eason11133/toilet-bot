@@ -42,15 +42,14 @@ FEEDBACK_SPREADSHEET_ID = "1vEdk4IV1aaLUjvYSdQsM5SVl0eqn5WosY5ZB3y7GTbg"  # 回�
 gc = sh = worksheet = None
 
 # 假設模型保存在 'cleanliness_model.pkl'
-def load_cleanliness_model():
+def load_label_encoder():
     try:
-        BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-        model_path = os.path.join(BASE_DIR, 'models', 'cleanliness_model.pkl')
-        model = joblib.load(model_path)
-        logging.info("✅ 清潔度預測模型已載入")
-        return model
+        encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
+        encoder = joblib.load(encoder_path)
+        logging.info("✅ LabelEncoder 已載入")
+        return encoder
     except Exception as e:
-        logging.error(f"❌ 模型載入失敗: {e}")
+        logging.error(f"❌ LabelEncoder 載入失敗: {e}")
         return None
 
 # 載入模型
@@ -555,11 +554,12 @@ def home():
 @app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
 def toilet_feedback(toilet_name):
     feedbacks = get_feedback_for_toilet(toilet_name)
-    address = "某個地址"  # 預設地址，如果無法找到會覆蓋
-    
+    address = "某個地址"
+
     if feedback_worksheet is None:
         logging.error("🛑 回饋 worksheet 尚未初始化")
-        return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[])
+        return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[],
+                               cleanliness_score="未預測", toilet_paper_summary="無", accessibility_summary="無", comment_count=0)
 
     try:
         records = feedback_worksheet.get_all_records()
@@ -570,14 +570,37 @@ def toilet_feedback(toilet_name):
             if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
                 continue
 
-            # 嘗試從回饋資料中獲取地址
             if address == "某個地址" and address_field:
                 address = row.get(address_field, "無地址")
     except Exception as e:
         logging.error(f"❌ 讀取回饋資料時抓取地址失敗: {e}")
 
-    # 返回渲染頁面並傳遞回饋資料
-    return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=feedbacks)
+    # === 新增：布林欄位統計
+    def summarize_boolean_field(feedbacks, key):
+        """'有' 視為 1，其餘為 0，回傳 '有' 或 '無'"""
+        has_count = sum(1 for fb in feedbacks if fb.get(key, '').strip() == "有")
+        return "有" if has_count >= len(feedbacks) / 2 else "無"
+
+    toilet_paper_summary = summarize_boolean_field(feedbacks, "toilet_paper")
+    accessibility_summary = summarize_boolean_field(feedbacks, "accessibility")
+
+    # === 新增：清潔度預測摘要（取第一筆）
+    first_cleanliness_score = None
+    if feedbacks and "cleanliness_score" in feedbacks[0]:
+        first_cleanliness_score = feedbacks[0]["cleanliness_score"]
+
+    comment_count = len(feedbacks)
+
+    return render_template(
+        "toilet_feedback.html",
+        name=toilet_name,
+        address=address,
+        comments=feedbacks,
+        cleanliness_score=first_cleanliness_score,
+        toilet_paper_summary=toilet_paper_summary,
+        accessibility_summary=accessibility_summary,
+        comment_count=comment_count
+    )
 
 @app.route("/submit_feedback/<toilet_name>", methods=["POST"])
 def submit_feedback(toilet_name):
