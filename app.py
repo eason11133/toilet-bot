@@ -452,7 +452,7 @@ def predict_cleanliness(features):
         logging.error(f"預測清潔度失敗: {e}")
         return None
 
-def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score):
+def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score, email, user_id):
     try:
         if feedback_worksheet is None:
             logging.error("🛑 回饋 worksheet 尚未初始化")
@@ -475,9 +475,9 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
             accessibility,     # 無障礙設施
             time_of_use,       # 使用時間
             comment,           # 使用者留言
-            "",                # 電子郵件地址
+            email,             # 電子郵件地址
             cleanliness_score, # 清潔度預測
-            ""                 # 使用者 ID
+            user_id            # 使用者 ID
         ]
         feedback_worksheet.append_row(row_data)
         logging.info("✅ 回饋結果已成功寫入第 10 欄")
@@ -655,6 +655,8 @@ def submit_feedback(toilet_name):
         accessibility = request.form.get("accessibility")
         time_of_use = request.form.get("time_of_use")  # 使用廁所時間
         comment = request.form.get("comment")  # 使用者留言
+        email = request.form.get("email", "")  # 電子郵件地址（非必填，預設為空字串）
+        user_id = event.source.user_id  # 使用者ID（Line ID）
 
         # 必填欄位檢查
         if not all([rating, toilet_paper, accessibility]):
@@ -686,7 +688,7 @@ def submit_feedback(toilet_name):
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
         # 儲存至 Google Sheets
-        success = save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
+        success = save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score, email, user_id)
         if not success:
             flash("回饋資料未能儲存，請稍後再試", "danger")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
