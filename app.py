@@ -589,23 +589,38 @@ def submit_feedback(toilet_name):
         time_of_use = request.form.get("time_of_use")  # 使用廁所時間
         comment = request.form.get("comment")  # 使用者留言
 
-        # 假設我們將 "rating", "toilet_paper", 和 "accessibility" 當作預測特徵
+        # 必填欄位檢查
         if not all([rating, toilet_paper, accessibility]):
             flash("請填寫所有必填欄位！", "warning")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # 轉換為數值型特徵，這裡假設 rating, toilet_paper, accessibility 是數值
-        features = [float(rating), float(toilet_paper), float(accessibility)]
+        # ✅ 中文選項轉換成數值
+        mapping = {
+            "有": 1,
+            "沒有": 0,
+            "不確定/沒注意": 0.5,
+            "": 0
+        }
 
-        # 利用模型進行預測
+        try:
+            rating_val = float(rating)
+            tp = mapping.get(toilet_paper.strip(), 0)
+            acc = mapping.get(accessibility.strip(), 0)
+            features = [rating_val, tp, acc]
+        except Exception as e:
+            logging.error(f"特徵轉換失敗: {e}")
+            flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
+            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
+
+        # ✅ 模型預測
         cleanliness_score = predict_cleanliness(features)
 
-        # 儲存回饋資料和清潔度預測結果到 Google Sheets 或資料庫
+        # ✅ 儲存至 Google Sheets
         save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
 
         flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
-    
+
     except Exception as e:
         logging.error(f"回饋提交錯誤: {e}")
         flash("提交失敗，請稍後再試！", "danger")
