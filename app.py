@@ -674,6 +674,7 @@ def submit_feedback(toilet_name):
             tp = mapping.get(toilet_paper.strip(), 0)
             acc = mapping.get(accessibility.strip(), 0)
             features = [rating_val, tp, acc]
+            logging.info(f"進行預測的特徵：{features}")
         except Exception as e:
             logging.error(f"特徵轉換失敗: {e}")
             flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
@@ -686,7 +687,10 @@ def submit_feedback(toilet_name):
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
         # 儲存至 Google Sheets
-        save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
+        success = save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score)
+        if not success:
+            flash("回饋資料未能儲存，請稍後再試", "danger")
+            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
         flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
