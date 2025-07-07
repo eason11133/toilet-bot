@@ -112,7 +112,7 @@ def restore_csv_from_gsheet():
                 address = row.get('address', '').strip()
                 lat = str(row.get('lat', '')).strip()
                 lon = str(row.get('lon', '')).strip()
-                
+
                 # 如果沒有地址，則填入經緯度
                 if not address:
                     address = f"{lat},{lon}"
