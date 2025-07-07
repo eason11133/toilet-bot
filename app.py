@@ -377,13 +377,13 @@ def get_feedback_for_toilet(toilet_name):
     try:
         records = feedback_worksheet.get_all_records()
         for row in records:
-            # 模糊找欄位名稱
             name_field = next((k for k in row if "廁所名稱" in k), None)
             rating_field = next((k for k in row if "清潔度" in k), None)
             paper_field = next((k for k in row if "衛生紙" in k), None)
             access_field = next((k for k in row if "無障礙" in k), None)
             time_field = next((k for k in row if "使用廁所的時間" in k), None)
             comment_field = next((k for k in row if "使用者留言" in k), None)
+            score_field = next((k for k in row if "清潔度預測" in k or "cleanliness_score" in k), None)  # ✅ 新增這行
 
             if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
                 continue
@@ -393,7 +393,8 @@ def get_feedback_for_toilet(toilet_name):
                 "toilet_paper": row.get(paper_field, "無資料"),
                 "accessibility": row.get(access_field, "無資料"),
                 "time_of_use": row.get(time_field, "未填寫"),
-                "comment": row.get(comment_field, "無留言")
+                "comment": row.get(comment_field, "無留言"),
+                "cleanliness_score": row.get(score_field, "未預測")  # ✅ 新增這行
             }
             feedbacks.append(feedback)
         logging.info(f"🔍 共取得 {len(feedbacks)} 筆回饋 for {toilet_name}")

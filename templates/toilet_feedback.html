@@ -2,8 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ name }} 回饋</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -14,13 +14,12 @@
         h2 {
             color: #2C3E50;
         }
-        p {
-            font-size: 1.1em;
-            color: #555;
-        }
-        hr {
-            margin: 20px 0;
-            border: 1px solid #ddd;
+        .cleanliness-score {
+            background-color: #e0f7fa;
+            padding: 10px;
+            border-left: 5px solid #00acc1;
+            margin-bottom: 15px;
+            font-weight: bold;
         }
         ul {
             list-style-type: none;
@@ -33,27 +32,52 @@
             border-radius: 5px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
-        li p {
-            margin: 5px 0;
-            color: #555;
+        .toggle-button {
+            background: none;
+            border: none;
+            color: #007BFF;
+            cursor: pointer;
+            font-size: 1em;
+            margin-bottom: 10px;
         }
         .comment {
             font-style: italic;
             color: #888;
         }
-        .no-feedback {
-            color: #999;
+        .collapsed {
+            display: none;
         }
     </style>
 </head>
 <body>
     <h2>{{ name }}</h2>
     <p>{{ address }}</p>
-    <hr>
+
+    {% if comments and comments[0].cleanliness_score %}
+        <div class="cleanliness-score">預測清潔分數：{{ comments[0].cleanliness_score }}</div>
+    {% endif %}
+
+    {% if comments|length > 1 %}
+        <button class="toggle-button" onclick="toggleComments()">▶️ 展開其他使用者回饋</button>
+    {% endif %}
+
     <ul>
         {% if comments %}
-            {% for c in comments %}
-                <li>
+            <li>
+                <p><strong>🌟 評分:</strong> {{ comments[0].rating }} ｜ 
+                   <strong>🧻 衛生紙:</strong> {{ comments[0].toilet_paper }} ｜ 
+                   <strong>♿ 無障礙設施:</strong> {{ comments[0].accessibility }} ｜ 
+                   <strong>🕒 使用時間:</strong> {{ comments[0].time_of_use or '未填寫' }}</p>
+                <p class="comment">
+                    {% if comments[0].comment.strip() %}
+                        <strong>💬 留言:</strong> {{ comments[0].comment }}
+                    {% else %}
+                        <strong>💬 留言:</strong> （無留言）
+                    {% endif %}
+                </p>
+            </li>
+            {% for c in comments[1:] %}
+                <li class="collapsed">
                     <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
                        <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
                        <strong>♿ 無障礙設施:</strong> {{ c.accessibility }} ｜ 
@@ -71,5 +95,13 @@
             <li class="no-feedback">（目前尚無任何回饋）</li>
         {% endif %}
     </ul>
+
+    <script>
+        function toggleComments() {
+            const hiddenItems = document.querySelectorAll('.collapsed');
+            hiddenItems.forEach(item => item.classList.remove('collapsed'));
+            document.querySelector('.toggle-button').style.display = 'none';
+        }
+    </script>
 </body>
 </html>
