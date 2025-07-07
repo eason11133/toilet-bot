@@ -50,6 +50,11 @@
         .no-feedback {
             color: #999;
         }
+        #cleanlinessChart {
+            width: 100%;
+            height: 300px;
+            margin-top: 30px;
+        }
     </style>
 </head>
 <body>
@@ -64,6 +69,11 @@
         {% else %}
             未預測
         {% endif %}
+    </div>
+
+    <!-- 顯示清潔度趨勢圖 -->
+    <div>
+        <canvas id="cleanlinessChart"></canvas>
     </div>
 
     <!-- 顯示留言展開按鈕 -->
@@ -116,6 +126,48 @@
             hiddenItems.forEach(item => item.classList.remove('collapsed'));
             document.querySelector('.toggle-button').style.display = 'none';
         }
+
+        // 使用 Fetch API 載入清潔度趨勢資料並繪製圖表
+        fetch('/get_clean_trend/{{ name }}')
+            .then(response => response.json())
+            .then(data => {
+                if (data.data && data.data.length > 0) {
+                    const ctx = document.getElementById('cleanlinessChart').getContext('2d');
+                    const chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: data.data.map(entry => new Date(entry.time).toLocaleString()),
+                            datasets: [{
+                                label: '清潔度預測',
+                                data: data.data.map(entry => entry.score),
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                fill: false
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: '時間'
+                                    }
+                                },
+                                y: {
+                                    title: {
+                                        display: true,
+                                        text: '清潔度'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    alert("沒有足夠的清潔度資料來繪製圖表");
+                }
+            })
+            .catch(error => console.error('Error fetching trend data:', error));
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </body>
 </html>

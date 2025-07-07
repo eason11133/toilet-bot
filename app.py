@@ -707,6 +707,37 @@ def submit_toilet():
     except Exception as e:
         logging.error(f"❌ 表單提交錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
+    
+@app.route("/get_clean_trend/<toilet_name>")
+def get_clean_trend(toilet_name):
+    if feedback_worksheet is None:
+        return {"error": "feedback_worksheet 未初始化"}, 500
+
+    try:
+        records = feedback_worksheet.get_all_records()
+        result = []
+        for row in records:
+            name_field = next((k for k in row if "廁所名稱" in k), None)
+            score_field = next((k for k in row if "清潔度預測" in k), None)
+            time_field = next((k for k in row if "時間戳記" in k or "timestamp" in k), None)
+
+            if not name_field or not score_field:
+                continue
+
+            if row.get(name_field, "").strip() != toilet_name.strip():
+                continue
+
+            try:
+                score = float(row.get(score_field))
+                time_str = row.get(time_field) or datetime.utcnow().isoformat()
+                result.append({"time": time_str, "score": score})
+            except:
+                continue
+
+        return {"name": toilet_name, "data": result}
+    except Exception as e:
+        logging.error(f"❌ 清潔度趨勢資料讀取錯誤: {e}")
+        return {"error": "資料讀取失敗"}, 500
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
