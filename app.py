@@ -674,7 +674,6 @@ def submit_feedback(toilet_name):
             tp = mapping.get(toilet_paper.strip(), 0)
             acc = mapping.get(accessibility.strip(), 0)
             features = [rating_val, tp, acc]
-            logging.info(f"進行預測的特徵：{features}")
         except Exception as e:
             logging.error(f"特徵轉換失敗: {e}")
             flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
