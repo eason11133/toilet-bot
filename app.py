@@ -44,7 +44,8 @@ gc = sh = worksheet = None
 # 假設模型保存在 'cleanliness_model.pkl'
 def load_cleanliness_model():
     try:
-        model_path = os.path.join(os.path.dirname(__file__), 'models', 'cleanliness_model.pkl')
+        BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+        model_path = os.path.join(BASE_DIR, 'models', 'cleanliness_model.pkl')
         model = joblib.load(model_path)
         logging.info("✅ 清潔度預測模型已載入")
         return model
@@ -402,14 +403,15 @@ def get_feedback_for_toilet(toilet_name):
 
 def predict_cleanliness(features):
     try:
-        # 假設 features 是一個列表，包含需要預測的特徵
+        if cleanliness_model is None:
+            logging.error("❌ 無法預測，模型尚未載入")
+            return None
         prediction = cleanliness_model.predict([features])
         logging.info(f"預測的清潔度: {prediction[0]}")
         return prediction[0]
     except Exception as e:
         logging.error(f"預測清潔度失敗: {e}")
         return None
-
 
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score):
     try:
@@ -599,25 +601,6 @@ def submit_feedback(toilet_name):
         logging.error(f"回饋提交錯誤: {e}")
         flash("提交失敗，請稍後再試！", "danger")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-
-def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment):
-    try:
-        if feedback_worksheet is None:
-            logging.error("🛑 回饋 worksheet 尚未初始化")
-            return False
-        feedback_worksheet.append_row([
-            toilet_name,
-            rating,
-            toilet_paper,
-            accessibility,
-            time_of_use,
-            comment,
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        ])
-        return True
-    except Exception as e:
-        logging.error(f"寫入 Google Sheets 失敗: {e}")
-        return False
 
 @app.route("/add")
 def render_add_page():
