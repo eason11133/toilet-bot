@@ -612,7 +612,7 @@ def batch_predict_missing_scores():
 
         name_field = next((k for k in headers if "廁所名稱" in k), None)
         address_field = next((k for k in headers if "廁所地址" in k), None)
-        rating_field = next((k for k in headers if "清潔度" in k and "預測" not in k), None)
+        rating_field = next((k for k in headers if "清潔度" in k), None)
         paper_field = next((k for k in headers if "衛生紙" in k), None)
         access_field = next((k for k in headers if "無障礙" in k), None)
         score_col = next((i for i, val in enumerate(headers) if "清潔度預測" in val or "cleanliness_score" in val), None)
@@ -625,47 +625,46 @@ def batch_predict_missing_scores():
 
         # 步驟1：依地址群組所有回饋
         for i, row in enumerate(records):
-            address = str(row.get(address_field, "")).strip()
+            address = row.get(address_field, "").strip()
             if not address:
                 continue
 
             if address not in address_to_rows:
                 address_to_rows[address] = []
-            address_to_rows[address].append((i + 2, row))  # Sheet 列數從2開始
+            address_to_rows[address].append((i + 2, row))  # Google Sheets 從第2列開始
 
-        # 步驟2：針對每個地址計算平均特徵
+        # 步驟2：逐地址預測
         for address, row_list in address_to_rows.items():
             ratings, papers, accesses = [], [], []
             rows_to_predict = []
 
             for row_index, row in row_list:
-                score = str(row.get(headers[score_col], "")).strip()
-                rating = str(row.get(rating_field, "")).strip()
-                paper = str(row.get(paper_field, "")).strip()
-                access = str(row.get(access_field, "")).strip()
+                score_val = row.get(headers[score_col], "").strip()
+                rating = row.get(rating_field, "").strip()
+                paper = row.get(paper_field, "").strip()
+                access = row.get(access_field, "").strip()
 
                 rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
-                paper_map = {"有": 1, "無": 0}
-                access_map = {"有": 1, "無": 0}
+                paper_map = {"有": 1, "沒有": 0, "無": 0}
+                access_map = {"有": 1, "沒有": 0, "無": 0}
 
-                # 收集資料進行平均
                 r = rating_map.get(rating)
                 p = paper_map.get(paper)
                 a = access_map.get(access)
 
+                # 累計平均用
                 if None not in (r, p, a):
                     ratings.append(r)
                     papers.append(p)
                     accesses.append(a)
 
-                # 若尚未預測，準備預測
-                if score in [None, "", "未預測"]:
+                if score_val in [None, "", "未預測"]:
                     rows_to_predict.append(row_index)
 
             if not rows_to_predict or not ratings:
-                continue  # 無需預測或無足夠資料
+                continue
 
-            # 平均化後預測
+            # ✨ 無論幾筆資料都預測（即便只有 1 筆）
             avg_rating = sum(ratings) / len(ratings)
             avg_paper = sum(papers) / len(papers)
             avg_access = sum(accesses) / len(accesses)
@@ -681,7 +680,7 @@ def batch_predict_missing_scores():
     except Exception as e:
         logging.error(f"❌ /batch_predict_missing_scores 發生錯誤: {e}")
         return {"success": False, "message": "伺服器錯誤"}, 500
-    
+
 @app.route("/get_clean_trend/<toilet_name>")
 def get_clean_trend(toilet_name):
     if feedback_worksheet is None:
