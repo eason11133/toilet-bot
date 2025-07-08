@@ -607,48 +607,75 @@ def batch_predict_missing_scores():
         if feedback_worksheet is None:
             return {"success": False, "message": "Google Sheets 未初始化"}, 500
 
-        # 取得欄位名稱
         headers = feedback_worksheet.row_values(1)
         records = feedback_worksheet.get_all_records()
 
-        # 找到欄位位置
         name_field = next((k for k in headers if "廁所名稱" in k), None)
+        address_field = next((k for k in headers if "廁所地址" in k), None)
         rating_field = next((k for k in headers if "清潔度" in k), None)
         paper_field = next((k for k in headers if "衛生紙" in k), None)
         access_field = next((k for k in headers if "無障礙" in k), None)
         score_col = next((i for i, val in enumerate(headers) if "清潔度預測" in val or "cleanliness_score" in val), None)
 
-        if not all([name_field, rating_field, paper_field, access_field, score_col is not None]):
+        if not all([name_field, address_field, rating_field, paper_field, access_field, score_col is not None]):
             return {"success": False, "message": "❌ 找不到必要欄位"}, 400
 
         updated_count = 0
-        for i, row in enumerate(records):
-            row_index = i + 2  # 因為 get_all_records 少了標題列，且 Sheets 從第 1 列開始
+        address_to_rows = {}
 
-            # 若已有預測則跳過
-            existing_score = row.get(headers[score_col], "")
-            if existing_score not in [None, "", "未預測"]:
+        # 步驟1：依地址群組所有回饋
+        for i, row in enumerate(records):
+            address = row.get(address_field, "").strip()
+            if not address:
                 continue
 
-            rating = row.get(rating_field, "").strip()
-            paper = row.get(paper_field, "").strip()
-            access = row.get(access_field, "").strip()
+            if address not in address_to_rows:
+                address_to_rows[address] = []
+            address_to_rows[address].append((i + 2, row))  # Sheet 列數從2開始
 
-            # 映射轉數字
-            rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
-            paper_map = {"有": 1, "無": 0}
-            access_map = {"有": 1, "無": 0}
+        # 步驟2：針對每個地址計算平均特徵
+        for address, row_list in address_to_rows.items():
+            ratings, papers, accesses = [], [], []
+            rows_to_predict = []
 
-            features = [
-                rating_map.get(rating, 3),
-                paper_map.get(paper, 0),
-                access_map.get(access, 0)
-            ]
+            for row_index, row in row_list:
+                score = row.get(headers[score_col], "")
+                rating = row.get(rating_field, "").strip()
+                paper = row.get(paper_field, "").strip()
+                access = row.get(access_field, "").strip()
+
+                rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
+                paper_map = {"有": 1, "無": 0}
+                access_map = {"有": 1, "無": 0}
+
+                # 收集資料進行平均
+                r = rating_map.get(rating)
+                p = paper_map.get(paper)
+                a = access_map.get(access)
+
+                if None not in (r, p, a):
+                    ratings.append(r)
+                    papers.append(p)
+                    accesses.append(a)
+
+                # 若尚未預測，準備預測
+                if score in [None, "", "未預測"]:
+                    rows_to_predict.append(row_index)
+
+            if not rows_to_predict or not ratings:
+                continue  # 無需預測或無足夠資料
+
+            # 平均化後預測
+            avg_rating = sum(ratings) / len(ratings)
+            avg_paper = sum(papers) / len(papers)
+            avg_access = sum(accesses) / len(accesses)
+            features = [avg_rating, avg_paper, avg_access]
 
             score = predict_cleanliness(features)
             if score is not None:
-                feedback_worksheet.update_cell(row_index, score_col + 1, score)
-                updated_count += 1
+                for row_index in rows_to_predict:
+                    feedback_worksheet.update_cell(row_index, score_col + 1, score)
+                    updated_count += 1
 
         return {"success": True, "updated": updated_count}
     except Exception as e:
@@ -685,6 +712,12 @@ def get_clean_trend(toilet_name):
     except Exception as e:
         logging.error(f"❌ 清潔度趨勢資料讀取錯誤: {e}")
         return {"error": "資料讀取失敗"}, 500
+    
+@app.route("/toilet_feedback/<toilet_name>")
+def toilet_feedback(toilet_name):
+    feedbacks = get_feedback_for_toilet(toilet_name)
+    address = feedbacks[0]["address"] if feedbacks and "address" in feedbacks[0] else "（無地址資料）"
+    return render_template("toilet_feedback.html", toilet_name=toilet_name, feedbacks=feedbacks, address=address)
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):

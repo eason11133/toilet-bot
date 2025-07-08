@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>{{ name }} 回饋</title>
+    <title>{{ toilet_name }} 回饋</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -58,49 +58,45 @@
     </style>
 </head>
 <body>
-    <h2>{{ name }}</h2>
+    <h2>{{ toilet_name }}</h2>
     <p>{{ address }}</p>
 
-    <!-- 顯示預測分數 -->
     <div class="cleanliness-score">
         預測清潔分數(最高5分)：
-        {% if comments and comments[0].cleanliness_score %}
-            {{ comments[0].cleanliness_score }}
+        {% if feedbacks and feedbacks[0].cleanliness_score %}
+            {{ feedbacks[0].cleanliness_score }}
         {% else %}
             未預測
         {% endif %}
     </div>
 
-    <!-- 顯示清潔度趨勢圖 -->
+    <!-- 清潔度趨勢圖表 -->
     <div>
         <canvas id="cleanlinessChart"></canvas>
     </div>
 
-    <!-- 顯示留言展開按鈕 -->
-    {% if comments|length > 1 %}
+    {% if feedbacks|length > 1 %}
         <button class="toggle-button" onclick="toggleComments()">
-            ▶️ 展開其他 {{ comments|length - 1 }} 筆使用者回饋
+            ▶️ 展開其他 {{ feedbacks|length - 1 }} 筆使用者回饋
         </button>
     {% endif %}
 
     <ul>
-        {% if comments %}
-            <!-- 第一筆留言預設顯示 -->
+        {% if feedbacks %}
             <li>
-                <p><strong>🌟 評分:</strong> {{ comments[0].rating }} ｜ 
-                   <strong>🧻 衛生紙:</strong> {{ comments[0].toilet_paper }} ｜ 
-                   <strong>♿ 無障礙設施:</strong> {{ comments[0].accessibility }} ｜ 
-                   <strong>🕒 使用時間:</strong> {{ comments[0].time_of_use or '未填寫' }}</p>
+                <p><strong>🌟 評分:</strong> {{ feedbacks[0].rating }} ｜ 
+                   <strong>🧻 衛生紙:</strong> {{ feedbacks[0].toilet_paper }} ｜ 
+                   <strong>♿ 無障礙設施:</strong> {{ feedbacks[0].accessibility }} ｜ 
+                   <strong>🕒 使用時間:</strong> {{ feedbacks[0].time_of_use or '未填寫' }}</p>
                 <p class="comment">
-                    {% if comments[0].comment.strip() %}
-                        <strong>💬 留言:</strong> {{ comments[0].comment }}
+                    {% if feedbacks[0].comment.strip() %}
+                        <strong>💬 留言:</strong> {{ feedbacks[0].comment }}
                     {% else %}
                         <strong>💬 留言:</strong> （無留言）
                     {% endif %}
                 </p>
             </li>
-            <!-- 其他留言預設收起 -->
-            {% for c in comments[1:] %}
+            {% for c in feedbacks[1:] %}
                 <li class="collapsed">
                     <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
                        <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
@@ -127,21 +123,21 @@
             document.querySelector('.toggle-button').style.display = 'none';
         }
 
-        // 使用 Fetch API 載入清潔度趨勢資料並繪製圖表
-        fetch('/get_clean_trend/{{ name }}')
+        fetch('/get_clean_trend/{{ toilet_name }}')
             .then(response => response.json())
             .then(data => {
                 if (data.data && data.data.length > 0) {
                     const ctx = document.getElementById('cleanlinessChart').getContext('2d');
-                    const chart = new Chart(ctx, {
+                    new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: data.data.map((entry, index) => `回饋 #${index + 1}`),  // 用回饋的索引作為橫軸標籤
+                            labels: data.data.map((entry, i) => `#${i + 1}`),
                             datasets: [{
                                 label: '清潔度預測',
                                 data: data.data.map(entry => entry.score),
                                 borderColor: 'rgba(75, 192, 192, 1)',
-                                fill: false
+                                fill: false,
+                                tension: 0.3
                             }]
                         },
                         options: {
@@ -150,10 +146,12 @@
                                 x: {
                                     title: {
                                         display: true,
-                                        text: '回饋索引'  // 改成 "回饋索引"
+                                        text: '回饋次數'
                                     }
                                 },
                                 y: {
+                                    min: 1,
+                                    max: 5,
                                     title: {
                                         display: true,
                                         text: '清潔度'
@@ -163,10 +161,11 @@
                         }
                     });
                 } else {
-                    alert("沒有足夠的清潔度資料來繪製圖表");
+                    const chartContainer = document.getElementById('cleanlinessChart').parentElement;
+                    chartContainer.innerHTML += '<p style="color:#999;">（目前無法提供清潔度趨勢圖）</p>';
                 }
             })
-            .catch(error => console.error('Error fetching trend data:', error));
+            .catch(err => console.error('取得趨勢資料失敗:', err));
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </body>
