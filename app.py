@@ -722,10 +722,19 @@ def toilet_feedback(toilet_name):
 def predict_and_update():
     try:
         logging.info("📡 收到 /predict_and_update 呼叫")
+
+        # 呼叫預測函式
         result = batch_predict_missing_scores()
-        if isinstance(result, dict):
-            return result
-        return {"success": True, "message": "✅ 已呼叫批次預測"}
+
+        # 如果是 tuple（包含 status code）
+        if isinstance(result, tuple):
+            result_dict, status_code = result
+        else:
+            result_dict, status_code = result, 200
+
+        logging.info(f"✅ 預測完成，共更新 {result_dict.get('updated', 0)} 筆")
+        return result_dict, status_code
+
     except Exception as e:
         logging.error(f"❌ /predict_and_update 發生錯誤: {e}")
         return {"success": False, "message": "伺服器錯誤"}, 500
