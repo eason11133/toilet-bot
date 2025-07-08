@@ -455,47 +455,6 @@ def predict_cleanliness(features):
         logging.error(f"❌ 預測清潔度失敗: {e}")
         return None
 
-def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score, email, user_id):
-    try:
-        if feedback_worksheet is None:
-            logging.error("🛑 回饋 worksheet 尚未初始化")
-            return False
-
-        # 取得該廁所資料
-        toilet = get_toilet_data_by_name(toilet_name)
-
-        # 如果是無地址，將經緯度填入
-        if toilet.get("address_status") == "經緯度作為地址":
-            toilet["address"] = f"{toilet['lat']},{toilet['lon']}"
-
-        # 使用 timezone-aware 的 UTC 時間戳記
-        timestamp = datetime.now(timezone.utc).strftime("%Y/%m/%d %p %I:%M:%S")
-
-        # 準備寫入資料
-        row_data = [
-            timestamp,          # 時間戳記
-            toilet_name,        # 廁所名稱
-            toilet["address"],  # 廁所地址
-            rating,             # 清潔度評分
-            toilet_paper,       # 衛生紙
-            accessibility,      # 無障礙設施
-            time_of_use,        # 使用時間
-            comment,            # 使用者留言
-            email,              # 電子郵件地址
-            cleanliness_score,  # 清潔度預測
-            user_id             # 使用者 ID
-        ]
-
-        logging.info(f"📤 正在寫入 Google Sheets，row_data: {row_data}")
-
-        feedback_worksheet.append_row(row_data)
-        logging.info("✅ 回饋結果已成功寫入第 10 欄")
-        return True
-
-    except Exception as e:
-        logging.error(f"❌ 寫入 Google Sheets 失敗: {e}")
-        return False
-
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
@@ -605,118 +564,6 @@ def callback():
 def home():
     return "Toilet bot is running!", 200
 
-@app.route("/toilet_feedback/<toilet_name>", methods=["GET"])
-def toilet_feedback(toilet_name):
-    feedbacks = get_feedback_for_toilet(toilet_name)
-    address = "某個地址"
-
-    if feedback_worksheet is None:
-        logging.error("🛑 回饋 worksheet 尚未初始化")
-        return render_template("toilet_feedback.html", name=toilet_name, address=address, comments=[],
-                               cleanliness_score="未預測", toilet_paper_summary="無", accessibility_summary="無", comment_count=0)
-
-    try:
-        records = feedback_worksheet.get_all_records()
-        for row in records:
-            name_field = next((k for k in row if "廁所名稱" in k), None)
-            address_field = next((k for k in row if "廁所地址" in k), None)
-
-            if not name_field or row.get(name_field, "").strip() != toilet_name.strip():
-                continue
-
-            if address == "某個地址" and address_field:
-                address = row.get(address_field, "無地址")
-    except Exception as e:
-        logging.error(f"❌ 讀取回饋資料時抓取地址失敗: {e}")
-
-    # === 新增：布林欄位統計
-    def summarize_boolean_field(feedbacks, key):
-        """'有' 視為 1，其餘為 0，回傳 '有' 或 '無'"""
-        has_count = sum(1 for fb in feedbacks if fb.get(key, '').strip() == "有")
-        return "有" if has_count >= len(feedbacks) / 2 else "無"
-
-    toilet_paper_summary = summarize_boolean_field(feedbacks, "toilet_paper")
-    accessibility_summary = summarize_boolean_field(feedbacks, "accessibility")
-
-    # === 新增：清潔度預測摘要（取第一筆）
-    first_cleanliness_score = None
-    if feedbacks and "cleanliness_score" in feedbacks[0]:
-        first_cleanliness_score = feedbacks[0]["cleanliness_score"]
-
-    comment_count = len(feedbacks)
-
-    return render_template(
-        "toilet_feedback.html",
-        name=toilet_name,
-        address=address,
-        comments=feedbacks,
-        cleanliness_score=first_cleanliness_score,
-        toilet_paper_summary=toilet_paper_summary,
-        accessibility_summary=accessibility_summary,
-        comment_count=comment_count
-    )
-
-@app.route("/submit_feedback/<toilet_name>", methods=["POST"])
-def submit_feedback(toilet_name):
-    try:
-        # ✅ 取得表單資料
-        rating = request.form.get("rating")
-        toilet_paper = request.form.get("toilet_paper")
-        accessibility = request.form.get("accessibility")
-        time_of_use = request.form.get("time_of_use")  # 使用廁所時間
-        comment = request.form.get("comment")  # 使用者留言
-        email = request.form.get("email", "")  # 電子郵件地址（非必填）
-        user_id = request.form.get("user_id", "anonymous")  # ✅ 從表單取得 user_id
-
-        # ✅ log 表單內容
-        logging.info(f"📥 使用者填寫表單資料：評分={rating}, 衛生紙={toilet_paper}, 無障礙={accessibility}, 時段={time_of_use}, 留言={comment}, email={email}, user_id={user_id}")
-
-        # ✅ 檢查必填欄位
-        if not all([rating, toilet_paper, accessibility]):
-            flash("請填寫所有必填欄位！", "warning")
-            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-
-        # ✅ 清潔度特徵轉換
-        mapping = {
-            "有": 1,
-            "沒有": 0,
-            "不確定/沒注意": 0.5,
-            "": 0
-        }
-
-        try:
-            rating_val = float(rating)
-            tp = mapping.get(toilet_paper.strip(), 0)
-            acc = mapping.get(accessibility.strip(), 0)
-            features = [rating_val, tp, acc]
-            logging.info(f"🔢 特徵轉換結果：{features}")
-        except Exception as e:
-            logging.error(f"❌ 特徵轉換失敗: {e}")
-            flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
-            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-
-        # ✅ 清潔度預測
-        cleanliness_score = predict_cleanliness(features)
-        if cleanliness_score is None:
-            flash("預測清潔度時發生錯誤，模型未正確加載或預測失敗", "danger")
-            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-
-        # ✅ 儲存至 Google Sheets
-        success = save_feedback_to_gsheet(
-            toilet_name, rating, toilet_paper, accessibility,
-            time_of_use, comment, cleanliness_score, email, user_id
-        )
-        if not success:
-            flash("回饋資料未能儲存，請稍後再試", "danger")
-            return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
-
-        flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
-        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回回饋頁面
-
-    except Exception as e:
-        logging.error(f"❌ 回饋提交錯誤: {e}")
-        flash("提交失敗，請稍後再試！", "danger")
-        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
 @app.route("/add")
 def render_add_page():
@@ -753,6 +600,66 @@ def submit_toilet():
     except Exception as e:
         logging.error(f"❌ 表單提交錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
+    
+@app.route("/predict_and_update", methods=["POST"])
+def predict_and_update():
+    try:
+        data = request.get_json()
+        toilet_name = data.get("name", "").strip()
+        address = data.get("address", "").strip()
+        rating = data.get("rating", "").strip()
+        paper = data.get("toilet_paper", "").strip()
+        access = data.get("accessibility", "").strip()
+
+        if not toilet_name and not address:
+            return {"success": False, "message": "缺少名稱或地址"}, 400
+
+        if feedback_worksheet is None:
+            return {"success": False, "message": "Google Sheets 未初始化"}, 500
+
+        # 找出對應欄位名稱
+        records = feedback_worksheet.get_all_records()
+        target_idx = None
+        for i in range(len(records) - 1, -1, -1):
+            row = records[i]
+            name_field = next((k for k in row if "廁所名稱" in k), None)
+            addr_field = next((k for k in row if "地址" in k or "地點" in k), None)
+            if name_field and row.get(name_field, "").strip() == toilet_name:
+                target_idx = i + 2  # 加 2 因為 get_all_records 少了 header 且 index 從 1 開始
+                break
+            if addr_field and row.get(addr_field, "").strip() == address:
+                target_idx = i + 2
+                break
+
+        if target_idx is None:
+            return {"success": False, "message": "找不到對應資料"}, 404
+
+        # 轉成數字
+        rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
+        paper_map = {"有": 1, "無": 0}
+        access_map = {"有": 1, "無": 0}
+
+        features = [
+            rating_map.get(rating, 3),
+            paper_map.get(paper, 0),
+            access_map.get(access, 0)
+        ]
+
+        score = predict_cleanliness(features)
+
+        if score is None:
+            return {"success": False, "message": "預測失敗"}, 500
+
+        score_col = next((i for i, val in enumerate(feedback_worksheet.row_values(1)) if "清潔度預測" in val or "cleanliness_score" in val), None)
+
+        if score_col is not None:
+            feedback_worksheet.update_cell(target_idx, score_col + 1, score)
+            return {"success": True, "score": score}
+        else:
+            return {"success": False, "message": "找不到清潔度預測欄位"}, 500
+    except Exception as e:
+        logging.error(f"❌ /predict_and_update 錯誤: {e}")
+        return {"success": False, "message": "伺服器錯誤"}, 500
     
 @app.route("/get_clean_trend/<toilet_name>")
 def get_clean_trend(toilet_name):
