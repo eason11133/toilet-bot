@@ -601,64 +601,58 @@ def submit_toilet():
         logging.error(f"❌ 表單提交錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "❌ 伺服器錯誤"}, 500
     
-@app.route("/predict_and_update", methods=["POST"])
-def predict_and_update():
+@app.route("/batch_predict_missing_scores", methods=["POST"])
+def batch_predict_missing_scores():
     try:
-        data = request.get_json()
-        toilet_name = data.get("name", "").strip()
-        address = data.get("address", "").strip()
-        rating = data.get("rating", "").strip()
-        paper = data.get("toilet_paper", "").strip()
-        access = data.get("accessibility", "").strip()
-
-        if not toilet_name and not address:
-            return {"success": False, "message": "缺少名稱或地址"}, 400
-
         if feedback_worksheet is None:
             return {"success": False, "message": "Google Sheets 未初始化"}, 500
 
-        # 找出對應欄位名稱
+        # 取得欄位名稱
+        headers = feedback_worksheet.row_values(1)
         records = feedback_worksheet.get_all_records()
-        target_idx = None
-        for i in range(len(records) - 1, -1, -1):
-            row = records[i]
-            name_field = next((k for k in row if "廁所名稱" in k), None)
-            addr_field = next((k for k in row if "地址" in k or "地點" in k), None)
-            if name_field and row.get(name_field, "").strip() == toilet_name:
-                target_idx = i + 2  # 加 2 因為 get_all_records 少了 header 且 index 從 1 開始
-                break
-            if addr_field and row.get(addr_field, "").strip() == address:
-                target_idx = i + 2
-                break
 
-        if target_idx is None:
-            return {"success": False, "message": "找不到對應資料"}, 404
+        # 找到欄位位置
+        name_field = next((k for k in headers if "廁所名稱" in k), None)
+        rating_field = next((k for k in headers if "清潔度" in k), None)
+        paper_field = next((k for k in headers if "衛生紙" in k), None)
+        access_field = next((k for k in headers if "無障礙" in k), None)
+        score_col = next((i for i, val in enumerate(headers) if "清潔度預測" in val or "cleanliness_score" in val), None)
 
-        # 轉成數字
-        rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
-        paper_map = {"有": 1, "無": 0}
-        access_map = {"有": 1, "無": 0}
+        if not all([name_field, rating_field, paper_field, access_field, score_col is not None]):
+            return {"success": False, "message": "❌ 找不到必要欄位"}, 400
 
-        features = [
-            rating_map.get(rating, 3),
-            paper_map.get(paper, 0),
-            access_map.get(access, 0)
-        ]
+        updated_count = 0
+        for i, row in enumerate(records):
+            row_index = i + 2  # 因為 get_all_records 少了標題列，且 Sheets 從第 1 列開始
 
-        score = predict_cleanliness(features)
+            # 若已有預測則跳過
+            existing_score = row.get(headers[score_col], "")
+            if existing_score not in [None, "", "未預測"]:
+                continue
 
-        if score is None:
-            return {"success": False, "message": "預測失敗"}, 500
+            rating = row.get(rating_field, "").strip()
+            paper = row.get(paper_field, "").strip()
+            access = row.get(access_field, "").strip()
 
-        score_col = next((i for i, val in enumerate(feedback_worksheet.row_values(1)) if "清潔度預測" in val or "cleanliness_score" in val), None)
+            # 映射轉數字
+            rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
+            paper_map = {"有": 1, "無": 0}
+            access_map = {"有": 1, "無": 0}
 
-        if score_col is not None:
-            feedback_worksheet.update_cell(target_idx, score_col + 1, score)
-            return {"success": True, "score": score}
-        else:
-            return {"success": False, "message": "找不到清潔度預測欄位"}, 500
+            features = [
+                rating_map.get(rating, 3),
+                paper_map.get(paper, 0),
+                access_map.get(access, 0)
+            ]
+
+            score = predict_cleanliness(features)
+            if score is not None:
+                feedback_worksheet.update_cell(row_index, score_col + 1, score)
+                updated_count += 1
+
+        return {"success": True, "updated": updated_count}
     except Exception as e:
-        logging.error(f"❌ /predict_and_update 錯誤: {e}")
+        logging.error(f"❌ /batch_predict_missing_scores 發生錯誤: {e}")
         return {"success": False, "message": "伺服器錯誤"}, 500
     
 @app.route("/get_clean_trend/<toilet_name>")
