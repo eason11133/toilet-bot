@@ -826,6 +826,27 @@ def handle_location(event):
     lat, lon = event.message.latitude, event.message.longitude
     user_locations[uid] = (lat, lon)
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ 位置已更新，請點選『附近廁所』查詢"))
+    
+# === 背景排程：每分鐘自動預測清潔度 ===
+import threading
+import time
+
+def auto_predict_cleanliness_background():
+    while True:
+        try:
+            logging.info("🌀 背景排程啟動中：檢查未預測回饋...")
+            with app.app_context():
+                resp = batch_predict_missing_scores()
+                if isinstance(resp, dict) and resp.get("success"):
+                    logging.info(f"📝 預測完成，共更新 {resp['updated']} 筆")
+                else:
+                    logging.warning(f"⚠️ 預測失敗或無需更新: {resp}")
+        except Exception as e:
+            logging.error(f"❌ 背景預測任務出錯：{e}")
+        time.sleep(60)  # 每分鐘執行一次
+
+# 啟動背景預測執行緒
+threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
