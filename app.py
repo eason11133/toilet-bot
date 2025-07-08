@@ -612,7 +612,7 @@ def batch_predict_missing_scores():
 
         name_field = next((k for k in headers if "廁所名稱" in k), None)
         address_field = next((k for k in headers if "廁所地址" in k), None)
-        rating_field = next((k for k in headers if "清潔度評分" in k), None)
+        rating_field = next((k for k in headers if "清潔度評分" in k or "清潔度" in k), None)
         paper_field = next((k for k in headers if "衛生紙" in k), None)
         access_field = next((k for k in headers if "無障礙" in k), None)
         score_field = next((k for k in headers if "清潔度預測" in k or "cleanliness_score" in k), None)
@@ -627,7 +627,6 @@ def batch_predict_missing_scores():
             address = str(row.get(address_field, "")).strip()
             if not address:
                 continue
-
             if address not in address_to_rows:
                 address_to_rows[address] = []
             address_to_rows[address].append((i + 2, row))  # 第 i+2 列（含表頭）
@@ -655,6 +654,7 @@ def batch_predict_missing_scores():
                     papers.append(p)
                     accesses.append(a)
 
+                # ✅ 僅加入還沒預測的行
                 if score_val in [None, "", "未預測"]:
                     rows_to_predict.append(row_index)
 
@@ -666,7 +666,9 @@ def batch_predict_missing_scores():
             avg_access = sum(accesses) / len(accesses)
             features = [avg_rating, avg_paper, avg_access]
 
+            logging.info(f"📍 地址 {address} 預測 {len(rows_to_predict)} 筆，特徵: {features}")
             score = predict_cleanliness(features)
+
             if score is not None:
                 score_col_index = headers.index(score_field) + 1
                 for row_index in rows_to_predict:
