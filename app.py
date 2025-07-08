@@ -114,7 +114,7 @@ def restore_csv_from_gsheet():
                 lon = str(row.get('lon', '')).strip()
 
                 # 如果地址為"無地址"、空白，或與名稱相同（如都是"無障礙廁所"），則填入經緯度
-                if not address or address == "無地址" or address == "無障礙廁所":
+                if not address or address == "無地址":
                     address = f"{lat},{lon}"
 
                 if not name or not lat or not lon:
@@ -625,7 +625,7 @@ def batch_predict_missing_scores():
 
         # 步驟1：依地址群組所有回饋
         for i, row in enumerate(records):
-            address = row.get(address_field, "").strip()
+            address = str(row.get(address_field, "")).strip()
             if not address:
                 continue
 
@@ -639,10 +639,10 @@ def batch_predict_missing_scores():
             rows_to_predict = []
 
             for row_index, row in row_list:
-                score_val = row.get(headers[score_col], "").strip()
-                rating = row.get(rating_field, "").strip()
-                paper = row.get(paper_field, "").strip()
-                access = row.get(access_field, "").strip()
+                score_val = str(row.get(headers[score_col], "")).strip()
+                rating = str(row.get(rating_field, "")).strip()
+                paper = str(row.get(paper_field, "")).strip()
+                access = str(row.get(access_field, "")).strip()
 
                 rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
                 paper_map = {"有": 1, "沒有": 0, "無": 0}
