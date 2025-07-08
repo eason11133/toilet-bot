@@ -887,7 +887,7 @@ def auto_predict_cleanliness_background():
                     logging.warning(f"⚠️ 預測失敗或無需更新: {resp}")
         except Exception as e:
             logging.error(f"❌ 背景預測任務出錯：{e}")
-        time.sleep(60)  # 每分鐘執行一次
+        time.sleep(3600)  # 每1小時執行一次
 
 # 啟動背景預測執行緒
 threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
