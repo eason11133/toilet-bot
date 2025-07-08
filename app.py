@@ -718,6 +718,18 @@ def toilet_feedback(toilet_name):
     address = feedbacks[0]["address"] if feedbacks and "address" in feedbacks[0] else "（無地址資料）"
     return render_template("toilet_feedback.html", toilet_name=toilet_name, feedbacks=feedbacks, address=address)
 
+@app.route("/predict_and_update", methods=["POST"])
+def predict_and_update():
+    try:
+        logging.info("📡 收到 /predict_and_update 呼叫")
+        result = batch_predict_missing_scores()
+        if isinstance(result, dict):
+            return result
+        return {"success": True, "message": "✅ 已呼叫批次預測"}
+    except Exception as e:
+        logging.error(f"❌ /predict_and_update 發生錯誤: {e}")
+        return {"success": False, "message": "伺服器錯誤"}, 500
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     text = event.message.text.strip().lower()
