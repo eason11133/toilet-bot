@@ -17,7 +17,7 @@ from linebot.models import (
 )
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timezone
 import joblib  # 用於載入與保存模型
 from sklearn.linear_model import LinearRegression  # 若需要使用回歸模型進行預測
 
@@ -432,6 +432,8 @@ def get_feedback_for_toilet(toilet_name):
 
 def predict_cleanliness(features):
     try:
+        logging.info(f"🚀 開始進行清潔度預測，輸入特徵為: {features}")
+
         if cleanliness_model is None:
             logging.error("❌ 無法預測，模型尚未載入")
             return None
@@ -439,17 +441,18 @@ def predict_cleanliness(features):
         # 載入 label encoder（用來還原數值）
         encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
         label_encoder = joblib.load(encoder_path)
+        logging.info("✅ LabelEncoder 已載入")
 
-        # 取得分類的機率分布
+        # 預測機率分布並計算期望值
         probs = cleanliness_model.predict_proba([features])[0]
         labels = label_encoder.inverse_transform(range(len(probs)))
         expected_score = round(sum(p * l for p, l in zip(probs, labels)), 2)
 
-        logging.info(f"預測期望清潔度: {expected_score}")
+        logging.info(f"✅ 預測完成，清潔度分數為: {expected_score}")
         return expected_score
 
     except Exception as e:
-        logging.error(f"預測清潔度失敗: {e}")
+        logging.error(f"❌ 預測清潔度失敗: {e}")
         return None
 
 def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score, email, user_id):
@@ -465,23 +468,30 @@ def save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, ti
         if toilet.get("address_status") == "經緯度作為地址":
             toilet["address"] = f"{toilet['lat']},{toilet['lon']}"
 
-        # 寫入 Google Sheets 的資料
+        # 使用 timezone-aware 的 UTC 時間戳記
+        timestamp = datetime.now(timezone.utc).strftime("%Y/%m/%d %p %I:%M:%S")
+
+        # 準備寫入資料
         row_data = [
-            datetime.utcnow().strftime("%Y/%m/%d %p %I:%M:%S"),  # 時間戳記
-            toilet_name,       # 廁所名稱
-            toilet["address"], # 廁所地址（可以是經緯度）
-            rating,            # 清潔度評分
-            toilet_paper,      # 衛生紙
-            accessibility,     # 無障礙設施
-            time_of_use,       # 使用時間
-            comment,           # 使用者留言
-            email,             # 電子郵件地址
-            cleanliness_score, # 清潔度預測
-            user_id            # 使用者 ID
+            timestamp,          # 時間戳記
+            toilet_name,        # 廁所名稱
+            toilet["address"],  # 廁所地址
+            rating,             # 清潔度評分
+            toilet_paper,       # 衛生紙
+            accessibility,      # 無障礙設施
+            time_of_use,        # 使用時間
+            comment,            # 使用者留言
+            email,              # 電子郵件地址
+            cleanliness_score,  # 清潔度預測
+            user_id             # 使用者 ID
         ]
+
+        logging.info(f"📤 正在寫入 Google Sheets，row_data: {row_data}")
+
         feedback_worksheet.append_row(row_data)
         logging.info("✅ 回饋結果已成功寫入第 10 欄")
         return True
+
     except Exception as e:
         logging.error(f"❌ 寫入 Google Sheets 失敗: {e}")
         return False
@@ -649,21 +659,24 @@ def toilet_feedback(toilet_name):
 @app.route("/submit_feedback/<toilet_name>", methods=["POST"])
 def submit_feedback(toilet_name):
     try:
-        # 獲取表單資料
+        # ✅ 取得表單資料
         rating = request.form.get("rating")
         toilet_paper = request.form.get("toilet_paper")
         accessibility = request.form.get("accessibility")
         time_of_use = request.form.get("time_of_use")  # 使用廁所時間
         comment = request.form.get("comment")  # 使用者留言
-        email = request.form.get("email", "")  # 電子郵件地址（非必填，預設為空字串）
-        user_id = event.source.user_id  # 使用者ID（Line ID）
+        email = request.form.get("email", "")  # 電子郵件地址（非必填）
+        user_id = request.form.get("user_id", "anonymous")  # ✅ 從表單取得 user_id
 
-        # 必填欄位檢查
+        # ✅ log 表單內容
+        logging.info(f"📥 使用者填寫表單資料：評分={rating}, 衛生紙={toilet_paper}, 無障礙={accessibility}, 時段={time_of_use}, 留言={comment}, email={email}, user_id={user_id}")
+
+        # ✅ 檢查必填欄位
         if not all([rating, toilet_paper, accessibility]):
             flash("請填寫所有必填欄位！", "warning")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # ✅ 中文選項轉換成數值
+        # ✅ 清潔度特徵轉換
         mapping = {
             "有": 1,
             "沒有": 0,
@@ -676,28 +689,32 @@ def submit_feedback(toilet_name):
             tp = mapping.get(toilet_paper.strip(), 0)
             acc = mapping.get(accessibility.strip(), 0)
             features = [rating_val, tp, acc]
+            logging.info(f"🔢 特徵轉換結果：{features}")
         except Exception as e:
-            logging.error(f"特徵轉換失敗: {e}")
+            logging.error(f"❌ 特徵轉換失敗: {e}")
             flash("預測清潔度時發生錯誤，請確認欄位填寫是否正確", "danger")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # 模型預測清潔度
+        # ✅ 清潔度預測
         cleanliness_score = predict_cleanliness(features)
         if cleanliness_score is None:
             flash("預測清潔度時發生錯誤，模型未正確加載或預測失敗", "danger")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
-        # 儲存至 Google Sheets
-        success = save_feedback_to_gsheet(toilet_name, rating, toilet_paper, accessibility, time_of_use, comment, cleanliness_score, email, user_id)
+        # ✅ 儲存至 Google Sheets
+        success = save_feedback_to_gsheet(
+            toilet_name, rating, toilet_paper, accessibility,
+            time_of_use, comment, cleanliness_score, email, user_id
+        )
         if not success:
             flash("回饋資料未能儲存，請稍後再試", "danger")
             return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
         flash(f"感謝您的回饋！預測的清潔度分數為：{cleanliness_score}", "success")
-        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回廁所回饋頁面
+        return redirect(url_for("toilet_feedback", toilet_name=toilet_name))  # 返回回饋頁面
 
     except Exception as e:
-        logging.error(f"回饋提交錯誤: {e}")
+        logging.error(f"❌ 回饋提交錯誤: {e}")
         flash("提交失敗，請稍後再試！", "danger")
         return redirect(url_for("toilet_feedback", toilet_name=toilet_name))
 
