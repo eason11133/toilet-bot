@@ -114,8 +114,9 @@ def restore_csv_from_gsheet():
                 lon = str(row.get('lon', '')).strip()
 
                 # 如果地址為"無地址"、空白，或與名稱相同（如都是"無障礙廁所"），則填入經緯度
-                if not address or address == "無地址" or address.isspace() or address == name:
+                if not address or address == "無地址" or address == "無障礙廁所":
                     address = f"{lat},{lon}"
+
                 if not name or not lat or not lon:
                     logging.warning(f"⚠️ 跳過缺欄位資料：{row}")
                     continue  # 若有缺欄位則跳過
