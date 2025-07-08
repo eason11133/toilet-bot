@@ -612,18 +612,17 @@ def batch_predict_missing_scores():
 
         name_field = next((k for k in headers if "廁所名稱" in k), None)
         address_field = next((k for k in headers if "廁所地址" in k), None)
-        rating_field = next((k for k in headers if "清潔度" in k), None)
+        rating_field = next((k for k in headers if "清潔度評分" in k), None)
         paper_field = next((k for k in headers if "衛生紙" in k), None)
         access_field = next((k for k in headers if "無障礙" in k), None)
-        score_col = next((i for i, val in enumerate(headers) if "清潔度預測" in val or "cleanliness_score" in val), None)
+        score_field = next((k for k in headers if "清潔度預測" in k or "cleanliness_score" in k), None)
 
-        if not all([name_field, address_field, rating_field, paper_field, access_field, score_col is not None]):
+        if not all([name_field, address_field, rating_field, paper_field, access_field, score_field]):
             return {"success": False, "message": "❌ 找不到必要欄位"}, 400
 
         updated_count = 0
         address_to_rows = {}
 
-        # 步驟1：依地址群組所有回饋
         for i, row in enumerate(records):
             address = str(row.get(address_field, "")).strip()
             if not address:
@@ -631,15 +630,14 @@ def batch_predict_missing_scores():
 
             if address not in address_to_rows:
                 address_to_rows[address] = []
-            address_to_rows[address].append((i + 2, row))  # Google Sheets 從第2列開始
+            address_to_rows[address].append((i + 2, row))  # 第 i+2 列（含表頭）
 
-        # 步驟2：逐地址預測
         for address, row_list in address_to_rows.items():
             ratings, papers, accesses = [], [], []
             rows_to_predict = []
 
             for row_index, row in row_list:
-                score_val = str(row.get(headers[score_col], "")).strip()
+                score_val = str(row.get(score_field, "")).strip()
                 rating = str(row.get(rating_field, "")).strip()
                 paper = str(row.get(paper_field, "")).strip()
                 access = str(row.get(access_field, "")).strip()
@@ -652,7 +650,6 @@ def batch_predict_missing_scores():
                 p = paper_map.get(paper)
                 a = access_map.get(access)
 
-                # 累計平均用
                 if None not in (r, p, a):
                     ratings.append(r)
                     papers.append(p)
@@ -664,7 +661,6 @@ def batch_predict_missing_scores():
             if not rows_to_predict or not ratings:
                 continue
 
-            # ✨ 無論幾筆資料都預測（即便只有 1 筆）
             avg_rating = sum(ratings) / len(ratings)
             avg_paper = sum(papers) / len(papers)
             avg_access = sum(accesses) / len(accesses)
@@ -672,8 +668,9 @@ def batch_predict_missing_scores():
 
             score = predict_cleanliness(features)
             if score is not None:
+                score_col_index = headers.index(score_field) + 1
                 for row_index in rows_to_predict:
-                    feedback_worksheet.update_cell(row_index, score_col + 1, score)
+                    feedback_worksheet.update_cell(row_index, score_col_index, score)
                     updated_count += 1
 
         return {"success": True, "updated": updated_count}
