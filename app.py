@@ -35,8 +35,8 @@ FAVORITES_FILE_PATH = os.path.join(os.getcwd(), "data", "favorites.txt")
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = os.getenv("TOILET_SPREADSHEET_ID")  # 廁所主資料
-FEEDBACK_SPREADSHEET_ID = os.getenv("TOILET_FEEDBACK_SHEET_ID")  # 新回饋表單 Sheet
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys" # 廁所主資料
+FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk" # 新回饋表單 Sheet
 
 gc = worksheet = feedback_sheet = None
 
