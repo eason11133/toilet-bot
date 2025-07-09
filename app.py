@@ -73,22 +73,37 @@ def init_gsheet():
         if not GSHEET_CREDENTIALS_JSON:
             logging.error("❌ 缺少憑證設定")
             return
+        
+        logging.info("🛠️ 解析憑證...")
         creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
+        
+        logging.info("🛠️ 嘗試授權 Google Sheets API...")
         gc = gspread.authorize(creds)
+        logging.info("✅ Google Sheets 授權成功")
+        
+        # 嘗試打開工作表
+        logging.info(f"🛠️ 嘗試打開工作表 ID: {TOILET_SPREADSHEET_ID}")
         worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
+        logging.info(f"✅ 成功打開工作表：{TOILET_SPREADSHEET_ID}")
+        
+        logging.info(f"🛠️ 嘗試打開回饋工作表 ID: {FEEDBACK_SPREADSHEET_ID}")
         feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1
+        logging.info(f"✅ 成功打開回饋工作表：{FEEDBACK_SPREADSHEET_ID}")
+        
         logging.info("✅ Sheets 初始化完成")
         
         # 測試是否可以成功讀取資料
+        logging.info("🛠️ 嘗試讀取工作表資料...")
         worksheet_data = worksheet.get_all_records()
         feedback_data = feedback_sheet.get_all_records()
-        logging.info(f"工作表數據：{worksheet_data}")
-        logging.info(f"回饋表數據：{feedback_data}")
+        
+        # 輸出讀取到的資料（限制數量以防太多資料）
+        logging.info(f"工作表數據（前 5 筆）: {worksheet_data[:5]}")
+        logging.info(f"回饋表數據（前 5 筆）: {feedback_data[:5]}")
         
     except Exception as e:
         logging.error(f"❌ Sheets 初始化失敗: {e}")
-
 
 init_gsheet()
 # === 計算距離 ===
