@@ -685,44 +685,6 @@ def handle_postback(event):
 def render_add_page():
     return render_template("submit_toilet.html")
 
-# === 接收新增廁所表單 POST ===
-@app.route("/submit_toilet", methods=["POST"])
-def submit_toilet():
-    try:
-        data = request.form
-        uid = data.get("user_id")
-        name = data.get("name")
-        address = data.get("address")
-
-        if not all([uid, name, address]):
-            return {"success": False, "message": "缺少參數"}, 400
-
-        # 地址轉經緯度
-        lat, lon = geocode_address(address)
-        if lat is None or lon is None:
-            return {"success": False, "message": "地址轉換失敗"}, 400
-
-        # 寫入本地 CSV
-        add_to_toilets_file(name, address, lat, lon)
-
-        # 寫入 Google Sheets
-        if worksheet:
-            try:
-                worksheet.append_row([
-                    uid, name, address, lat, lon,
-                    datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                ])
-                logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
-            except Exception as e:
-                logging.error(f"⚠️ 寫入 Google Sheets 失敗: {e}")
-                return {"success": False, "message": "寫入 Google Sheets 失敗"}, 500
-
-        return {"success": True, "message": f"✅ 已新增廁所 {name}"}
-
-    except Exception as e:
-        logging.error(f"❌ 新增廁所錯誤: {e}")
-        return {"success": False, "message": "伺服器錯誤"}, 500
-
 # === 背景排程：每小時自動預測未來清潔度（可擴充）===
 import threading
 import time
