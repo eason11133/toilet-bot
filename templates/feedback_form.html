@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ toilet_name }} 廁所回饋表單</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+        h2 {
+            color: #2C3E50;
+        }
+        form {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin-top: 20px;
+        }
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        input[type="text"], select, textarea {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        textarea {
+            resize: vertical;
+        }
+        button {
+            margin-top: 20px;
+            background-color: #3498db;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h2>{{ toilet_name }}</h2>
+    <p>{{ address }}</p>
+
+    <form action="{{ url_for('submit_feedback') }}" method="POST">
+        <input type="hidden" name="name" value="{{ toilet_name }}">
+        <input type="hidden" name="address" value="{{ address }}">
+
+        <label for="rating">清潔度評分</label>
+        <select name="rating" required>
+            <option value="">請選擇</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+        </select>
+
+        <label for="toilet_paper">是否有衛生紙</label>
+        <select name="toilet_paper" required>
+            <option value="">請選擇</option>
+            <option value="有">有</option>
+            <option value="沒有">沒有</option>
+            <option value="沒注意">沒注意</option>
+        </select>
+
+        <label for="accessibility">是否有無障礙設施</label>
+        <select name="accessibility" required>
+            <option value="">請選擇</option>
+            <option value="有">有</option>
+            <option value="沒有">沒有</option>
+            <option value="沒注意">沒注意</option>
+        </select>
+
+        <label for="time_of_use">使用時間</label>
+        <select name="time_of_use">
+            <option value="">請選擇</option>
+            <option value="上午">上午</option>
+            <option value="下午">下午</option>
+            <option value="傍晚">傍晚</option>
+            <option value="晚間">晚間</option>
+        </select>
+
+        <label for="comment">留言（選填）</label>
+        <textarea name="comment" rows="4" placeholder="可以分享你的感想或建議..."></textarea>
+
+        <button type="submit">送出回饋</button>
+    </form>
+</body>
+</html>
