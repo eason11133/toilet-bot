@@ -216,6 +216,34 @@ def geocode_address(address):
     except Exception as e:
         logging.error(f"地址轉經緯度失敗: {e}")
     return None, None
+@app.route("/nearby_toilets", methods=["GET"])
+def nearby_toilets():
+    # 從 URL 獲取使用者的位置（緯度、經度）
+    user_lat = request.args.get('lat')
+    user_lon = request.args.get('lon')
+    
+    if not user_lat or not user_lon:
+        return {"error": "缺少位置參數"}, 400
+
+    # 轉換為浮點數
+    user_lat = float(user_lat)
+    user_lon = float(user_lon)
+
+    # 查詢來自 OpenStreetMap 的廁所
+    osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500)
+    
+    # 查詢本地新增的廁所資料
+    local_toilets = query_local_toilets(user_lat, user_lon, radius=500)
+    
+    # 結合 OpenStreetMap 和 本地新增的廁所資料
+    all_toilets = osm_toilets + local_toilets
+    
+    # 如果沒有找到廁所，回傳相應的訊息
+    if not all_toilets:
+        return {"message": "附近找不到廁所"}, 404
+    
+    # 回傳查詢到的廁所
+    return {"toilets": all_toilets}, 200
 
 # === 寫入本地 CSV 廁所資料 ===
 def add_to_toilets_file(name, address, lat, lon):
@@ -226,6 +254,47 @@ def add_to_toilets_file(name, address, lat, lon):
         logging.info(f"✅ 新增至本地 CSV：{name} @ {address}")
     except Exception as e:
         logging.error(f"寫入本地 CSV 失敗: {e}")
+# 查詢本地新增的廁所資料（這會被合併到OpenStreetMap的資料中）
+def query_local_toilets(lat, lon, radius=500):
+    toilets = []
+    try:
+        with open(TOILETS_FILE_PATH, 'r', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            next(reader, None)  # 跳過標題
+            for row in reader:
+                if len(row) != 15:
+                    continue
+                _, _, _, _, name, address, _, t_lat, t_lon, *_ = row
+                try:
+                    t_lat, t_lon = float(t_lat), float(t_lon)
+                    dist = haversine(lat, lon, t_lat, t_lon)
+                    if dist <= radius:
+                        toilets.append({
+                            "name": name or "無名稱",
+                            "lat": t_lat,
+                            "lon": t_lon,
+                            "address": address or "無地址",
+                            "distance": dist,
+                            "type": "local"
+                        })
+                except Exception as e:
+                    logging.warning(f"無法處理資料列: {e}")
+    except Exception as e:
+        logging.error(f"讀取本地 CSV 錯誤: {e}")
+    return sorted(toilets, key=lambda x: x["distance"])
+
+# 查詢附近廁所並合併 OpenStreetMap 與本地廁所資料
+def query_nearby_toilets(user_lat, user_lon):
+    # 查詢來自 OpenStreetMap 的廁所
+    osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500)
+    
+    # 查詢來自本地 CSV 的廁所
+    local_toilets = query_local_toilets(user_lat, user_lon, radius=500)
+    
+    # 合併並排序結果
+    all_toilets = osm_toilets + local_toilets
+    return sorted(all_toilets, key=lambda x: x['distance'])
+
 # === 顯示自建回饋表單 HTML ===
 @app.route("/feedback_form/<toilet_name>/<address>")
 def feedback_form(toilet_name, address):
@@ -235,31 +304,45 @@ def feedback_form(toilet_name, address):
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
     try:
+        # 獲取回饋表單資料
         data = request.form
-        name = data.get("name", "").strip()
-        address = data.get("address", "").strip()
-        rating = data.get("rating", "").strip()
-        toilet_paper = data.get("toilet_paper", "").strip()
-        accessibility = data.get("accessibility", "").strip()
-        time_of_use = data.get("time_of_use", "").strip()
-        comment = data.get("comment", "").strip()
+        name = data.get("name", "").strip()  # 廁所名稱
+        address = data.get("address", "").strip()  # 廁所地址
+        rating = data.get("rating", "").strip()  # 清潔度評分
+        toilet_paper = data.get("toilet_paper", "").strip()  # 衛生紙
+        accessibility = data.get("accessibility", "").strip()  # 無障礙設施
+        time_of_use = data.get("time_of_use", "").strip()  # 使用時間
+        comment = data.get("comment", "").strip()  # 使用者留言
 
+        # 確保必要欄位都有填寫
         if not all([name, address, rating]):
             return "缺少必要欄位", 400
 
-        # 清潔度轉數值
-        rating_map = {"乾淨": 5, "普通": 3, "髒亂": 1}
-        paper_map = {"有": 1, "沒有": 0}
-        access_map = {"有": 1, "沒有": 0}
-        r = rating_map.get(rating)
+        # 確保評分是 1 到 10 的數字
+        try:
+            r = int(rating)
+            if r < 1 or r > 10:
+                return "清潔度評分必須在 1 到 10 之間", 400
+        except ValueError:
+            return "清潔度評分必須是數字", 400
+
+        # 衛生紙與無障礙設施的處理，將「有」轉為 1，「沒有」轉為 0，「沒注意」保持為 0（或其它）
+        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+
         p = paper_map.get(toilet_paper, 0)
         a = access_map.get(accessibility, 0)
+
+        # 特徵向量
         features = [r, p, a]
 
+        # 預測清潔度
         predicted_score = predict_cleanliness(features)
 
-        row = [name, address, rating, toilet_paper, accessibility, time_of_use, comment, predicted_score]
-        feedback_sheet.append_row(row)
+        # 寫入Google Sheets
+        feedback_sheet.append_row([name, address, rating, toilet_paper, accessibility, time_of_use, comment, predicted_score])
+
+        # 返回回饋表單頁面
         return redirect(url_for("feedback_form", toilet_name=name, address=address))
     except Exception as e:
         logging.error(f"❌ 提交回饋表單錯誤: {e}")
