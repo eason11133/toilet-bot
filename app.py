@@ -73,35 +73,12 @@ def init_gsheet():
         if not GSHEET_CREDENTIALS_JSON:
             logging.error("❌ 缺少憑證設定")
             return
-        
-        logging.info("🛠️ 解析憑證...")
-        creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)  # 從環境變數加載憑證內容
+        creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
-        
-        logging.info("🛠️ 嘗試授權 Google Sheets API...")
         gc = gspread.authorize(creds)
-        logging.info("✅ Google Sheets 授權成功")
-        
-        # 嘗試打開工作表
-        logging.info(f"🛠️ 嘗試打開工作表 ID: {TOILET_SPREADSHEET_ID}")
         worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
-        logging.info(f"✅ 成功打開工作表：{TOILET_SPREADSHEET_ID}")
-        
-        logging.info(f"🛠️ 嘗試打開回饋工作表 ID: {FEEDBACK_SPREADSHEET_ID}")
         feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1
-        logging.info(f"✅ 成功打開回饋工作表：{FEEDBACK_SPREADSHEET_ID}")
-        
         logging.info("✅ Sheets 初始化完成")
-        
-        # 測試是否可以成功讀取資料
-        logging.info("🛠️ 嘗試讀取工作表資料...")
-        worksheet_data = worksheet.get_all_records()
-        feedback_data = feedback_sheet.get_all_records()
-        
-        # 輸出讀取到的資料（限制數量以防太多資料）
-        logging.info(f"工作表數據（前 5 筆）: {worksheet_data[:5]}")
-        logging.info(f"回饋表數據（前 5 筆）: {feedback_data[:5]}")
-        
     except Exception as e:
         logging.error(f"❌ Sheets 初始化失敗: {e}")
 
@@ -358,33 +335,21 @@ def get_feedback_summary_by_address(address):
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
     try:
-        # 從本地 CSV 找到該廁所對應的地址
-        address = "未知地址"
+        # 嘗試從本地 CSV 找到地址
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
             for line in f.readlines()[1:]:
                 parts = line.strip().split(",")
                 if len(parts) >= 6 and parts[4] == toilet_name:
                     address = parts[5]
                     break
+            else:
+                address = "未知地址"
 
-        records = feedback_sheet.get_all_records()
-        feedbacks = []
-        for r in records:
-            if str(r.get("地址", "")).strip() == address.strip():
-                feedbacks.append({
-                    "rating": r.get("評分", r.get("rating", "")),
-                    "toilet_paper": r.get("是否有衛生紙", r.get("toilet_paper", "")),
-                    "accessibility": r.get("是否有無障礙設施", r.get("accessibility", "")),
-                    "time_of_use": r.get("使用時間", r.get("time_of_use", "")),
-                    "comment": r.get("留言", r.get("comment", "")),
-                    "cleanliness_score": r.get("預測分數", r.get("cleanliness_score", ""))
-                })
-
-        return render_template("feedback_page.html", toilet_name=toilet_name, address=address, feedbacks=feedbacks)
+        summary = get_feedback_summary_by_address(address)
+        return render_template("toilet_feedback.html", toilet_name=toilet_name, summary=summary)
     except Exception as e:
-        logging.error(f"❌ 渲染 feedback_page.html 錯誤: {e}")
+        logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
-
 # === 建立 Flex Message ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
@@ -402,7 +367,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         actions.append({
             "type": "uri",
             "label": "查詢回饋",
-            "uri": f"https://school-i9co.onrender.com/toilet_feedback/{quote(toilet['name'])}"
+            "uri": f"https://your-domain.com/toilet_feedback/{quote(toilet['name'])}"
         })
 
         # ✅ 廁所回饋按鈕（跳轉至自建表單）
@@ -410,7 +375,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         actions.append({
             "type": "uri",
             "label": "廁所回饋",
-            "uri": f"https://school-i9co.onrender.com/feedback_form/{quote(toilet['name'])}/{addr_param}"
+            "uri": f"https://your-domain.com/feedback_form/{quote(toilet['name'])}/{addr_param}"
         })
 
         # 加入最愛 / 移除最愛
@@ -471,7 +436,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         bubbles.append(bubble)
 
     return {"type": "carousel", "contents": bubbles}
-
 # === Webhook 設定 ===
 @app.route("/callback", methods=["POST"])
 def callback():
