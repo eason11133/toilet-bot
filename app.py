@@ -702,6 +702,11 @@ def auto_predict_cleanliness_background():
 @app.route("/get_clean_trend/<toilet_name>")
 def get_clean_trend(toilet_name):
     try:
+        # 檢查名稱是否為無效名稱
+        if toilet_name == "無名稱":
+            return {"success": False, "data": []}, 404
+
+        # 嘗試從本地 CSV 找到地址
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8") as f:
             for line in f.readlines()[1:]:
                 parts = line.strip().split(",")
@@ -709,7 +714,7 @@ def get_clean_trend(toilet_name):
                     address = parts[5]
                     break
             else:
-                return {"success": False, "data": []}, 404
+                return {"success": False, "data": []}, 404  # 如果沒有找到對應的廁所資料
 
         records = feedback_sheet.get_all_records()
         matched = [r for r in records if str(r.get("地址", "")).strip() == address.strip()]
@@ -727,7 +732,6 @@ def get_clean_trend(toilet_name):
     except Exception as e:
         logging.error(f"❌ 清潔度趨勢 API 錯誤: {e}")
         return {"success": False, "data": []}, 500
-
 
 # 啟動背景執行緒
 threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
