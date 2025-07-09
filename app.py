@@ -367,7 +367,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         actions.append({
             "type": "uri",
             "label": "查詢回饋",
-            "uri": f"https://your-domain.com/toilet_feedback/{quote(toilet['name'])}"
+            "uri": f"https://school-i9co.onrender.com/toilet_feedback/{quote(toilet['name'])}"
         })
 
         # ✅ 廁所回饋按鈕（跳轉至自建表單）
@@ -375,7 +375,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         actions.append({
             "type": "uri",
             "label": "廁所回饋",
-            "uri": f"https://your-domain.com/feedback_form/{quote(toilet['name'])}/{addr_param}"
+            "uri": f"https://school-i9co.onrender.com/feedback_form/{quote(toilet['name'])}/{addr_param}"
         })
 
         # 加入最愛 / 移除最愛
@@ -501,7 +501,7 @@ def handle_text(event):
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     elif text == "新增廁所":
-        reply_messages.append(TextSendMessage(text="請前往此頁新增廁所：\nhttps://your-domain.com/add"))
+        reply_messages.append(TextSendMessage(text="請前往此頁新增廁所：\nhttps://school-i9co.onrender.com/add"))
 
     if reply_messages:
         try:
@@ -568,7 +568,7 @@ def render_add_page():
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     try:
-        data = request.get_json()
+        data = request.form
         uid = data.get("user_id")
         name = data.get("name")
         address = data.get("address")
@@ -576,26 +576,32 @@ def submit_toilet():
         if not all([uid, name, address]):
             return {"success": False, "message": "缺少參數"}, 400
 
+        # 地址轉經緯度
         lat, lon = geocode_address(address)
         if lat is None or lon is None:
             return {"success": False, "message": "地址轉換失敗"}, 400
 
+        # 寫入本地 CSV
         add_to_toilets_file(name, address, lat, lon)
 
-        # 寫入主資料表
+        # 寫入 Google Sheets
         if worksheet:
             try:
                 worksheet.append_row([
                     uid, name, address, lat, lon,
                     datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 ])
+                logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
             except Exception as e:
                 logging.error(f"⚠️ 寫入 Google Sheets 失敗: {e}")
+                return {"success": False, "message": "寫入 Google Sheets 失敗"}, 500
+
         return {"success": True, "message": f"✅ 已新增廁所 {name}"}
 
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤: {e}")
         return {"success": False, "message": "伺服器錯誤"}, 500
+
 # === 背景排程：每小時自動預測未來清潔度（可擴充）===
 import threading
 import time
