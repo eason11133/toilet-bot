@@ -81,6 +81,7 @@ def init_gsheet():
         logging.info("✅ Sheets 初始化完成")
     except Exception as e:
         logging.error(f"❌ Sheets 初始化失敗: {e}")
+        worksheet = feedback_sheet = None  # 確保這裡為 None，便於後續檢查
 
 init_gsheet()
 # === 計算距離 ===
@@ -295,6 +296,46 @@ def query_nearby_toilets(user_lat, user_lon):
     all_toilets = osm_toilets + local_toilets
     return sorted(all_toilets, key=lambda x: x['distance'])
 
+@app.route("/add", methods=["GET"])
+def render_add_page():
+    return render_template("submit_toilet.html")
+
+@app.route("/submit_toilet", methods=["POST"])
+def submit_toilet():
+    try:
+        # 確保使用 request.get_json() 來接收來自 LIFF 的 JSON 資料
+        data = request.get_json()  # 使用 JSON 格式的資料
+        logging.info(f"📥 收到表單資料: {data}")
+
+        uid = data.get("user_id")
+        name = data.get("name")
+        address = data.get("address")
+
+        if not all([uid, name, address]):
+            return {"success": False, "message": "缺少參數"}, 400
+
+        lat, lon = geocode_address(address)  # 使用地址解析經緯度
+        if lat is None or lon is None:
+            return {"success": False, "message": "地址轉換失敗"}, 400
+
+        # 寫入本地 CSV
+        add_to_toilets_file(name, address, lat, lon)
+
+        # 寫入 Google Sheets
+        if worksheet:
+            try:
+                worksheet.append_row([uid, name, address, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+                logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
+            except Exception as e:
+                logging.error(f"⚠️ 寫入 Google Sheets 失敗: {e}")
+                return {"success": False, "message": "寫入 Google Sheets 失敗"}, 500
+
+        return {"success": True, "message": f"✅ 已新增廁所 {name}"}
+
+    except Exception as e:
+        logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
+        return {"success": False, "message": "伺服器錯誤"}, 500
+
 # === 顯示自建回饋表單 HTML ===
 @app.route("/feedback_form/<toilet_name>/<address>")
 def feedback_form(toilet_name, address):
@@ -360,6 +401,7 @@ def predict_cleanliness(features):
     except Exception as e:
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return "未預測"
+    
 # === 查詢某地址的所有回饋統計（從 Google Sheet） ===
 def get_feedback_summary_by_address(address):
     try:
