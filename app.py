@@ -75,7 +75,7 @@ def init_gsheet():
             return
         
         logging.info("🛠️ 解析憑證...")
-        creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
+        creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)  # 從環境變數加載憑證內容
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
         
         logging.info("🛠️ 嘗試授權 Google Sheets API...")
