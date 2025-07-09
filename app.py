@@ -79,8 +79,16 @@ def init_gsheet():
         worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
         feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1
         logging.info("✅ Sheets 初始化完成")
+        
+        # 測試是否可以成功讀取資料
+        worksheet_data = worksheet.get_all_records()
+        feedback_data = feedback_sheet.get_all_records()
+        logging.info(f"工作表數據：{worksheet_data}")
+        logging.info(f"回饋表數據：{feedback_data}")
+        
     except Exception as e:
         logging.error(f"❌ Sheets 初始化失敗: {e}")
+
 
 init_gsheet()
 # === 計算距離 ===
