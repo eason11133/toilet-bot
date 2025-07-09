@@ -296,10 +296,6 @@ def query_nearby_toilets(user_lat, user_lon):
     all_toilets = osm_toilets + local_toilets
     return sorted(all_toilets, key=lambda x: x['distance'])
 
-@app.route("/add", methods=["GET"])
-def render_add_page():
-    return render_template("submit_toilet.html")
-
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     try:
