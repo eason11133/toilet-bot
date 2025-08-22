@@ -21,7 +21,6 @@ from datetime import datetime
 import joblib
 import threading
 import time
-import pandas as pd  # 用於包裝 features，避免 sklearn feature name 警告
 
 # === 初始化 ===
 load_dotenv()
@@ -32,11 +31,10 @@ CORS(app)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# 檔案路徑（僅保留 favorites.txt；CSV 只做備份，不作查詢來源）
+# 檔案路徑（僅保留 favorites.txt；CSV 只是備份，不作查詢來源）
 DATA_DIR = os.path.join(os.getcwd(), "data")
-TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 備份用
+TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 備份用途
 FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")
-
 os.makedirs(DATA_DIR, exist_ok=True)
 if not os.path.exists(FAVORITES_FILE_PATH):
     open(FAVORITES_FILE_PATH, "a", encoding="utf-8").close()
@@ -44,7 +42,7 @@ if not os.path.exists(FAVORITES_FILE_PATH):
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 使用者新增廁所（主資料）
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 主資料
 FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  # 回饋/預測
 
 gc = worksheet = feedback_sheet = None
@@ -75,14 +73,14 @@ def load_label_encoder():
 cleanliness_model = load_cleanliness_model()
 label_encoder = load_label_encoder()
 
-# === 公用：座標標準化，避免浮點誤差 ===
+# === 工具：座標標準化，避免浮點誤差 ===
 def norm_coord(x, ndigits=6):
     try:
         return f"{round(float(x), ndigits):.{ndigits}f}"
     except:
         return str(x)
 
-# === 初始化 Google Sheets（缺憑證直接中止） ===
+# === 初始化 Google Sheets（本專案以 Sheets 為唯一來源；缺憑證直接中止） ===
 def init_gsheet():
     global gc, worksheet, feedback_sheet
     try:
@@ -91,8 +89,8 @@ def init_gsheet():
         creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
-        worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1        # 主資料
-        feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1  # 回饋/預測
+        worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
+        feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1
         logging.info("✅ Sheets 初始化完成")
     except Exception as e:
         logging.critical(f"❌ Sheets 初始化失敗: {e}")
@@ -100,73 +98,24 @@ def init_gsheet():
 
 init_gsheet()
 
-# === 距離 ===
+# === 計算距離 ===
 def haversine(lat1, lon1, lat2, lon2):
     try:
         lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
         dlat = lat2 - lat1
         dlon = lon2 - lon1
         a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-        return 2 * asin(sqrt(a)) * 6371000
+        return 2 * asin(sqrt(a)) * 6371000  # 地球半徑 6371000 公尺
     except Exception as e:
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === Feedback Sheet 欄位解析工具（避免 header 不一致） ===
-def _header_idx(header, candidates):
-    """大小寫不敏感比對，命中回傳 index，否則 None"""
-    hl = [h.strip().lower() for h in header]
-    for i, h in enumerate(hl):
-        if h in [c.strip().lower() for c in candidates]:
-            return i
-    return None
-
-def load_feedback_rows():
-    """
-    回傳 (rows, idx)
-      rows: get_all_values() 完整資料（含表頭）
-      idx: 需要的欄位索引 dict（可能為 None，呼叫端需判斷）
-    支援的欄位別名：
-      name: ["name","名稱","廁所名稱"]
-      address: ["address","地址"]
-      rating: ["rating","評分","清潔度評分"]
-      toilet_paper: ["toilet_paper","是否有衛生紙","衛生紙"]
-      accessibility: ["accessibility","是否有無障礙設施","無障礙"]
-      time_of_use: ["time_of_use","使用時間"]
-      comment: ["comment","留言"]
-      predicted: ["預測分數","cleanliness_score","predicted","predicted_score"]
-      lat: ["lat","緯度"]
-      lon: ["lon","經度"]
-      created_at: ["created_at","時間","timestamp","created time","created"]
-    """
-    rows = feedback_sheet.get_all_values()
-    if not rows:
-        return [], {}
-    header = rows[0]
-    idx = {
-        "name":         _header_idx(header, ["name","名稱","廁所名稱"]),
-        "address":      _header_idx(header, ["address","地址"]),
-        "rating":       _header_idx(header, ["rating","評分","清潔度評分"]),
-        "toilet_paper": _header_idx(header, ["toilet_paper","是否有衛生紙","衛生紙"]),
-        "accessibility":_header_idx(header, ["accessibility","是否有無障礙設施","無障礙"]),
-        "time_of_use":  _header_idx(header, ["time_of_use","使用時間"]),
-        "comment":      _header_idx(header, ["comment","留言"]),
-        "predicted":    _header_idx(header, ["預測分數","cleanliness_score","predicted","predicted_score"]),
-        "lat":          _header_idx(header, ["lat","緯度"]),
-        "lon":          _header_idx(header, ["lon","經度"]),
-        "created_at":   _header_idx(header, ["created_at","時間","timestamp","created time","created"]),
-    }
-    return rows, idx
-
-# === 查使用者新增廁所（唯一來源：主資料表） ===
+# === 從 Google Sheets 查使用者新增廁所（唯一來源，取代本地 CSV） ===
 def query_sheet_toilets(user_lat, user_lon, radius=500):
     toilets = []
     try:
-        rows = worksheet.get_all_values()
-        if not rows or len(rows) < 2:
-            return []
-        header, data = rows[0], rows[1:]
-        # 假設主資料欄序：[uid, name, address, lat, lon, created_at]
+        rows = worksheet.get_all_values()  # [uid, name, address, lat, lon, created_at]
+        data = rows[1:]
         for row in data:
             if len(row) < 5:
                 continue
@@ -190,10 +139,10 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
     return sorted(toilets, key=lambda x: x["distance"])
 
-# === OSM ===
+# === OSM Overpass（多鏡像＋狀態檢查） ===
 def query_overpass_toilets(lat, lon, radius=500):
     query = f"""
-    [out:json];
+    [out:json][timeout:25];
     (
       node["amenity"="toilets"](around:{radius},{lat},{lon});
       way["amenity"="toilets"](around:{radius},{lat},{lon});
@@ -201,40 +150,56 @@ def query_overpass_toilets(lat, lon, radius=500):
     );
     out center;
     """
-    try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data=query,
-            headers={"User-Agent": "ToiletBot/1.0"},
-            timeout=10
-        )
-        data = resp.json()
-    except Exception as e:
-        logging.error(f"Overpass API 查詢失敗: {e}")
-        return []
+    endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter",
+    ]
+    headers = {"User-Agent": "ToiletBot/1.0 (contact: you@example.com)"}
 
-    toilets = []
-    for elem in data.get("elements", []):
-        if elem["type"] == "node":
-            t_lat, t_lon = elem["lat"], elem["lon"]
-        elif "center" in elem:
-            t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
-        else:
-            continue
+    last_err = None
+    for idx, url in enumerate(endpoints):
+        try:
+            resp = requests.post(url, data=query, headers=headers, timeout=30)
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if resp.status_code != 200 or "json" not in ctype:
+                snippet = (resp.text or "")[:200].replace("\n", " ")
+                logging.warning(f"Overpass 非 200 或非 JSON (endpoint {idx}): "
+                                f"status={resp.status_code}, ctype={ctype}, body~={snippet}")
+                last_err = RuntimeError("overpass non-json")
+                continue
 
-        name = elem.get("tags", {}).get("name", "無名稱")
-        address = elem.get("tags", {}).get("addr:full", "") or elem.get("tags", {}).get("name", "")
-        toilets.append({
-            "name": name,
-            "lat": float(norm_coord(t_lat)),
-            "lon": float(norm_coord(t_lon)),
-            "address": address,
-            "distance": haversine(lat, lon, t_lat, t_lon),
-            "type": "osm"
-        })
-    return sorted(toilets, key=lambda x: x["distance"])
+            data = resp.json()
+            elements = data.get("elements", [])
+            toilets = []
+            for elem in elements:
+                if elem["type"] == "node":
+                    t_lat, t_lon = elem["lat"], elem["lon"]
+                elif "center" in elem:
+                    t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
+                else:
+                    continue
 
-# === 最愛（以標準化座標字串做鍵） ===
+                tags = elem.get("tags", {})
+                name = tags.get("name", "無名稱")
+                address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
+                toilets.append({
+                    "name": name,
+                    "lat": float(norm_coord(t_lat)),
+                    "lon": float(norm_coord(t_lon)),
+                    "address": address,
+                    "distance": haversine(lat, lon, t_lat, t_lon),
+                    "type": "osm"
+                })
+            return sorted(toilets, key=lambda x: x["distance"])
+        except Exception as e:
+            last_err = e
+            logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
+
+    logging.error(f"Overpass 全部端點失敗：{last_err}")
+    return []
+
+# === 最愛管理（lat/lon 一律用標準化字串，避免精度誤差） ===
 def add_to_favorites(uid, toilet):
     try:
         lat_s = norm_coord(toilet['lat'])
@@ -253,7 +218,7 @@ def remove_from_favorites(uid, name, lat, lon):
         with open(FAVORITES_FILE_PATH, "w", encoding="utf-8") as f:
             for line in lines:
                 data = line.strip().split(',')
-                if not (len(data) >= 4 and data[0] == uid and data[1] == name and data[2] == lat_s and data[3] == lon_s):
+                if not (data[0] == uid and data[1] == name and data[2] == lat_s and data[3] == lon_s):
                     f.write(line)
         return True
     except Exception as e:
@@ -281,7 +246,7 @@ def get_user_favorites(uid):
         logging.error(f"讀取最愛失敗: {e}")
     return favs
 
-# === 地理編碼（新增廁所用） ===
+# === 地址轉經緯度（新增廁所時用；回饋不強制地址） ===
 def geocode_address(address):
     try:
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={quote(address)}"
@@ -294,7 +259,7 @@ def geocode_address(address):
         logging.error(f"地址轉經緯度失敗: {e}")
     return None, None
 
-# === API：附近廁所（OSM + 主資料表） ===
+# === 附近廁所 API（來源：OSM + Google Sheets） ===
 @app.route("/nearby_toilets", methods=["GET"])
 def nearby_toilets():
     user_lat = request.args.get('lat')
@@ -305,7 +270,7 @@ def nearby_toilets():
     user_lat = float(user_lat)
     user_lon = float(user_lon)
 
-    osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500)
+    osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500) or []
     sheet_toilets = query_sheet_toilets(user_lat, user_lon, radius=500)
     all_toilets = osm_toilets + sheet_toilets
 
@@ -313,7 +278,7 @@ def nearby_toilets():
         return {"message": "附近找不到廁所"}, 404
     return {"toilets": all_toilets}, 200
 
-# === 新增廁所（寫 Google Sheets；CSV 只備份） ===
+# === 使用者新增廁所（寫 Google Sheets；CSV 僅備份可選） ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     try:
@@ -331,15 +296,11 @@ def submit_toilet():
         if lat is None or lon is None:
             return {"success": False, "message": "地址轉換失敗"}, 400
 
-        # 寫入主資料表
-        worksheet.append_row([
-            uid, name, address,
-            float(norm_coord(lat)), float(norm_coord(lon)),
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        ])
+        # 寫入 Google Sheets（唯一來源）
+        worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
-        # 備份 CSV（非查詢來源）
+        # （可選）備份到本地 CSV
         try:
             if not os.path.exists(TOILETS_FILE_PATH):
                 open(TOILETS_FILE_PATH, "a", encoding="utf-8").close()
@@ -357,12 +318,18 @@ def submit_toilet():
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
 
-# === HTML：回饋表單（請確保模板帶 lat/lon hidden，或由 querystring 注入） ===
+# === 顯示自建回饋表單 HTML（地址可空，座標用 querystring 帶） ===
 @app.route("/feedback_form/<toilet_name>/<address>")
 def feedback_form(toilet_name, address):
-    return render_template("feedback_form.html", toilet_name=toilet_name, address=address)
+    return render_template(
+        "feedback_form.html",
+        toilet_name=toilet_name,
+        address=address,
+        lat=request.args.get("lat", ""),
+        lon=request.args.get("lon", "")
+    )
 
-# === 提交回饋（lat/lon 必帶；地址可空；寫 Google Sheets） ===
+# === 提交回饋表單（必須帶 lat/lon；地址可空；寫 Google Sheets） ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
     try:
@@ -389,40 +356,30 @@ def submit_feedback():
 
         paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
         access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        features = [r, paper_map.get(toilet_paper, 0), access_map.get(accessibility, 0)]
+        predicted_score = predict_cleanliness(features)
 
-        # 用 pandas 包裝 features，避免 sklearn 的 feature name 警告
-        X = pd.DataFrame([{
-            "rating": r,
-            "paper": paper_map.get(toilet_paper, 0),
-            "access": access_map.get(accessibility, 0)
-        }])
-
-        predicted_score = predict_cleanliness_df(X)
-
+        # 寫入「回饋/預測」表：固定 11 欄位（表頭已對齊）
         feedback_sheet.append_row([
             name, address, rating, toilet_paper, accessibility, time_of_use,
             comment, predicted_score, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ])
 
-        return redirect(url_for("feedback_form", toilet_name=name, address=address or ""))
+        return redirect(url_for("feedback_form", toilet_name=name, address=address or "") + f"?lat={lat}&lon={lon}")
 
     except Exception as e:
         logging.error(f"❌ 提交回饋表單錯誤: {e}")
         return "提交失敗", 500
 
-# === 清潔度預測（以 DataFrame 輸入） ===
-def predict_cleanliness_df(X_df: pd.DataFrame):
+# === 清潔度預測函式 ===
+def predict_cleanliness(features):
     try:
-        if cleanliness_model is None:
+        if cleanliness_model is None or label_encoder is None:
             return "未預測"
-        probs = cleanliness_model.predict_proba(X_df)[0]
-        # 嘗試還原原始標籤
+        probs = cleanliness_model.predict_proba([features])[0]
         try:
             classes_enc = cleanliness_model.classes_
-            if label_encoder is not None:
-                labels = label_encoder.inverse_transform(classes_enc.astype(int))
-            else:
-                labels = classes_enc
+            labels = label_encoder.inverse_transform(classes_enc.astype(int))
         except Exception:
             labels = cleanliness_model.classes_
         expected = round(sum(float(p) * float(l) for p, l in zip(probs, labels)), 2)
@@ -431,12 +388,18 @@ def predict_cleanliness_df(X_df: pd.DataFrame):
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return "未預測"
 
-# === 以座標聚合的回饋摘要（不依賴固定表頭） ===
+# === 以座標聚合的統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     try:
-        rows, idx = load_feedback_rows()
-        if not rows or not idx or idx.get("lat") is None or idx.get("lon") is None:
-            return "讀取錯誤（找不到 lat/lon 欄位）"
+        rows = feedback_sheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return "尚無回饋資料"
+
+        header = rows[0]
+        data = rows[1:]
+
+        # 期待的表頭（請依說明設定）：名稱 | 地址 | 清潔度評分 | 是否有衛生紙 | 是否有無障礙設施 | 使用時間 | 留言 | 預測分數 | lat | lon | created_at
+        idx = {h: i for i, h in enumerate(header)}
 
         def close(a, b):
             try:
@@ -444,10 +407,9 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
             except:
                 return False
 
-        data = rows[1:]
         matched = []
         for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
+            if len(r) < len(header):
                 continue
             if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
                 matched.append(r)
@@ -463,28 +425,24 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
         for r in matched:
             # 預測分數
-            if idx.get("predicted") is not None and len(r) > idx["predicted"]:
-                s = r[idx["predicted"]]
-                try:
-                    score_sum += float(s)
-                    valid_score_count += 1
-                except:
-                    pass
+            try:
+                s = float(r[idx["預測分數"]])
+                score_sum += s
+                valid_score_count += 1
+            except:
+                pass
             # 衛生紙
-            if idx.get("toilet_paper") is not None and len(r) > idx["toilet_paper"]:
-                p = (r[idx["toilet_paper"]] or "").strip()
-                if p in paper_counts:
-                    paper_counts[p] += 1
+            p = (r[idx["是否有衛生紙"]] or "").strip()
+            if p in paper_counts:
+                paper_counts[p] += 1
             # 無障礙
-            if idx.get("accessibility") is not None and len(r) > idx["accessibility"]:
-                a = (r[idx["accessibility"]] or "").strip()
-                if a in access_counts:
-                    access_counts[a] += 1
+            a = (r[idx["是否有無障礙設施"]] or "").strip()
+            if a in access_counts:
+                access_counts[a] += 1
             # 留言
-            if idx.get("comment") is not None and len(r) > idx["comment"]:
-                c = (r[idx["comment"]] or "").strip()
-                if c:
-                    comments.append(c)
+            c = (r[idx["留言"]] or "").strip()
+            if c:
+                comments.append(c)
 
         avg_score = round(score_sum / valid_score_count, 2) if valid_score_count else "未預測"
 
@@ -499,137 +457,102 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
-# === 舊路由（名稱→地址），相容保留 ===
+# === 舊路由（名稱→地址）保留相容，仍建議用座標版 ===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
     try:
         address = "未知地址"
         rows = worksheet.get_all_values()
-        if rows and len(rows) >= 2:
-            for row in rows[1:]:
-                if len(row) > 1 and row[1] == toilet_name:
-                    address = (row[2] if len(row) > 2 else "") or "未知地址"
-                    break
+        data = rows[1:]
+        for row in data:
+            if len(row) > 1 and row[1] == toilet_name:
+                address = (row[2] if len(row) > 2 else "") or "未知地址"
+                break
 
         if address == "未知地址":
-            return render_template("toilet_feedback.html", toilet_name=toilet_name,
-                                   summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。")
+            return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。")
 
-        # 舊邏輯：以地址聚合
-        try:
-            rows_f, idx = load_feedback_rows()
-            if not rows_f or not idx or idx.get("address") is None:
-                return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="讀取錯誤")
-            data = rows_f[1:]
-            matched = [r for r in data if len(r) > idx["address"] and str(r[idx["address"]]).strip() == address.strip()]
-            if not matched:
-                return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="尚無回饋資料")
+        # 舊相容：以地址聚合
+        rows_fb = feedback_sheet.get_all_values()
+        header = rows_fb[0]; data_fb = rows_fb[1:]
+        idx = {h: i for i, h in enumerate(header)}
+        matched = [r for r in data_fb if len(r) > idx["地址"] and (r[idx["地址"]] or "").strip() == address.strip()]
+        if not matched:
+            return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="尚無回饋資料")
 
-            paper_counts = {"有": 0, "沒有": 0}
-            access_counts = {"有": 0, "沒有": 0}
-            score_sum = 0.0
-            valid = 0
-            comments = []
+        paper_counts = {"有": 0, "沒有": 0}
+        access_counts = {"有": 0, "沒有": 0}
+        score_sum = 0.0; valid = 0; comments = []
+        for r in matched:
+            try:
+                score_sum += float(r[idx["預測分數"]]); valid += 1
+            except:
+                pass
+            p = (r[idx["是否有衛生紙"]] or "").strip()
+            if p in paper_counts: paper_counts[p] += 1
+            a = (r[idx["是否有無障礙設施"]] or "").strip()
+            if a in access_counts: access_counts[a] += 1
+            c = (r[idx["留言"]] or "").strip()
+            if c: comments.append(c)
 
-            for r in matched:
-                if idx.get("predicted") is not None and len(r) > idx["predicted"]:
-                    try:
-                        score_sum += float(r[idx["predicted"]]); valid += 1
-                    except:
-                        pass
-                if idx.get("toilet_paper") is not None and len(r) > idx["toilet_paper"]:
-                    p = (r[idx["toilet_paper"]] or "").strip()
-                    if p in paper_counts: paper_counts[p] += 1
-                if idx.get("accessibility") is not None and len(r) > idx["accessibility"]:
-                    a = (r[idx["accessibility"]] or "").strip()
-                    if a in access_counts: access_counts[a] += 1
-                if idx.get("comment") is not None and len(r) > idx["comment"]:
-                    c = (r[idx["comment"]] or "").strip()
-                    if c: comments.append(c)
-
-            avg = round(score_sum/valid, 2) if valid else "未預測"
-            summary = f"🔍 筆數：{len(matched)}\n🧼 平均清潔分數：{avg}\n🧻 衛生紙：{'有' if paper_counts['有']>=paper_counts['沒有'] else '沒有'}\n♿ 無障礙：{'有' if access_counts['有']>=access_counts['沒有'] else '沒有'}\n"
-            if comments: summary += f"💬 最新留言：{comments[-1]}"
-            return render_template("toilet_feedback.html", toilet_name=toilet_name, summary=summary)
-        except Exception:
-            return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="讀取錯誤")
+        avg = round(score_sum/valid, 2) if valid else "未預測"
+        summary = f"🔍 筆數：{len(matched)}\n🧼 平均清潔分數：{avg}\n🧻 衛生紙：{'有' if paper_counts['有']>=paper_counts['沒有'] else '沒有'}\n♿ 無障礙：{'有' if access_counts['有']>=access_counts['沒有'] else '沒有'}\n"
+        if comments: summary += f"💬 最新留言：{comments[-1]}"
+        return render_template("toilet_feedback.html", toilet_name=toilet_name, summary=summary)
     except Exception as e:
         logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
 
-# === 新路由：以座標顯示（推薦） ===
+# === 新路由：以座標顯示回饋摘要（推薦使用） ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
     try:
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
-        return render_template("toilet_feedback.html", toilet_name=name, summary=summary)
+        return render_template("toilet_feedback.html", toilet_name=name, summary=summary, address=f"{lat},{lon}")
     except Exception as e:
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
-# === 趨勢 API（名稱版保留） ===
-@app.route("/get_clean_trend/<toilet_name>")
-def get_clean_trend(toilet_name):
-    try:
-        if toilet_name == "無名稱":
-            return {"success": False, "data": []}, 404
-
-        rows = worksheet.get_all_values()
-        address = None
-        if rows and len(rows) >= 2:
-            for row in rows[1:]:
-                if len(row) > 1 and row[1] == toilet_name:
-                    address = (row[2] if len(row) > 2 else "") or None
-                    break
-        if not address:
-            return {"success": False, "data": []}, 404
-
-        rows_f, idx = load_feedback_rows()
-        if not rows_f or not idx or idx.get("address") is None or idx.get("predicted") is None:
-            return {"success": False, "data": []}, 503
-
-        data = []
-        for r in rows_f[1:]:
-            if len(r) > max(idx["address"], idx["predicted"]) and str(r[idx["address"]]).strip() == address.strip():
-                try:
-                    data.append({"score": float(r[idx["predicted"]])})
-                except:
-                    pass
-
-        return {"success": True, "data": data}
-    except Exception as e:
-        logging.error(f"❌ 清潔度趨勢 API 錯誤: {e}")
-        return {"success": False, "data": []}, 500
-
-# === 趨勢 API（座標版，推薦） ===
+# === 清潔度趨勢 API（座標版） ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
     try:
-        rows, idx = load_feedback_rows()
-        if not rows or not idx or idx.get("lat") is None or idx.get("lon") is None or idx.get("predicted") is None:
+        if not feedback_sheet:
             return {"success": False, "data": []}, 503
+
+        rows = feedback_sheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return {"success": True, "data": []}, 200
+
+        header = rows[0]
+        data = rows[1:]
+        idx = {h: i for i, h in enumerate(header)}
 
         def close(a, b, tol=1e-6):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
-        out = []
-        for r in rows[1:]:
-            if len(r) <= max(idx["lat"], idx["lon"], idx["predicted"]):
+        matched = []
+        for r in data:
+            if len(r) < len(header):
                 continue
             if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                try:
-                    out.append({"score": float(r[idx["predicted"]])})
-                except:
-                    pass
+                matched.append(r)
+
+        out = []
+        for r in matched:
+            try:
+                out.append({"score": float(r[idx["預測分數"]])})
+            except:
+                continue
 
         return {"success": True, "data": out}
     except Exception as e:
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
 
-# === Flex Message（全面帶座標；地址可空） ===
+# === 建立 Flex Message（全面帶座標；地址可空；postback 安全編碼） ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     bubbles = []
     for toilet in toilets[:5]:
@@ -639,21 +562,21 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         lon_s = norm_coord(toilet['lon'])
         addr_text = toilet.get('address') or "（無地址，使用座標）"
 
-        # 導航
+        # ✅ 導航
         actions.append({
             "type": "uri",
             "label": "導航",
             "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
         })
 
-        # 查詢回饋（座標）
+        # ✅ 查詢回饋（座標版）
         actions.append({
             "type": "uri",
             "label": "查詢回饋（座標）",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
 
-        # 回饋表單（座標帶在 querystring）
+        # ✅ 廁所回饋（帶座標；地址可空）
         addr_param = quote(toilet.get('address') or "")
         actions.append({
             "type": "uri",
@@ -665,7 +588,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             )
         })
 
-        # 最愛
+        # 加入最愛 / 移除最愛
         if toilet.get("type") == "favorite" and uid:
             actions.append({
                 "type": "postback",
@@ -679,7 +602,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"add:{quote(toilet['name'])}:{lat_s}:{lon_s}"
             })
 
-        # 刪除（目前僅移除最愛）
+        # 刪除（若未實作真的刪主資料，建議更名為移除最愛）
         if show_delete and toilet.get("type") == "user" and uid:
             actions.append({
                 "type": "postback",
@@ -703,10 +626,19 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "layout": "vertical",
                 "spacing": "sm",
                 "contents": [
-                    {"type": "button", "style": "primary", "height": "sm", "action": actions[0]}
+                    {
+                        "type": "button",
+                        "style": "primary",
+                        "height": "sm",
+                        "action": actions[0]
+                    }
                 ] + [
-                    {"type": "button", "style": "secondary", "height": "sm", "action": a}
-                    for a in actions[1:]
+                    {
+                        "type": "button",
+                        "style": "secondary",
+                        "height": "sm",
+                        "action": a
+                    } for a in actions[1:]
                 ]
             }
         }
@@ -714,7 +646,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
 
     return {"type": "carousel", "contents": bubbles}
 
-# === Webhook ===
+# === Webhook 設定 ===
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -729,11 +661,11 @@ def callback():
 def home():
     return "Toilet bot is running!", 200
 
-# === 使用者位置 ===
+# === 使用者位置資料 ===
 user_locations = {}
 pending_delete_confirm = {}
 
-# === TextMessage ===
+# === 處理 TextMessage（只回覆一次，避免 Invalid reply token） ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     text = event.message.text.strip().lower()
@@ -758,7 +690,7 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
             lat, lon = user_locations[uid]
-            toilets = query_sheet_toilets(lat, lon) + query_overpass_toilets(lat, lon)
+            toilets = (query_sheet_toilets(lat, lon) or []) + (query_overpass_toilets(lat, lon) or [])
             if not toilets:
                 reply_messages.append(TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
             else:
@@ -784,13 +716,14 @@ def handle_text(event):
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
+    # ✅ 只在有訊息時回覆一次；失敗只記錄，不再次嘗試
     if reply_messages:
         try:
             line_bot_api.reply_message(event.reply_token, reply_messages)
         except Exception as e:
             logging.error(f"❌ 回覆訊息失敗（TextMessage）: {e}")
 
-# === LocationMessage ===
+# === 處理 LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     uid = event.source.user_id
@@ -802,7 +735,7 @@ def handle_location(event):
     except Exception as e:
         logging.error(f"❌ 回覆位置訊息失敗: {e}")
 
-# === Postback ===
+# === 處理 Postback（名稱 quote/解析；座標字串標準化） ===
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
@@ -852,16 +785,16 @@ def handle_postback(event):
 def render_add_page():
     return render_template("submit_toilet.html")
 
-# === 背景排程（預留） ===
+# === 背景排程：預留（僅示意） ===
 def auto_predict_cleanliness_background():
     while True:
         try:
             logging.info("🌀 背景排程啟動中（未來可加入自動統計）")
         except Exception as e:
             logging.error(f"❌ 背景任務出錯：{e}")
-        time.sleep(1800)
+        time.sleep(1800)  # 每半時
 
-# === 啟動 ===
+# === 啟動應用程式 ===
 if __name__ == "__main__":
     threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
