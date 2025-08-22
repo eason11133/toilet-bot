@@ -21,6 +21,7 @@ from datetime import datetime
 import joblib
 import threading
 import time
+import pandas as pd  # 用於消除 sklearn feature name 警告
 
 # === 初始化 ===
 load_dotenv()
@@ -44,7 +45,7 @@ if not os.path.exists(FAVORITES_FILE_PATH):
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 廁所主資料
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 廁所主資料（唯一來源）
 FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  # 回饋/預測
 
 gc = worksheet = feedback_sheet = None
@@ -75,7 +76,7 @@ def load_label_encoder():
 cleanliness_model = load_cleanliness_model()
 label_encoder = load_label_encoder()
 
-# === 公用：座標標準化，避免浮點誤差 ===
+# === 公用：座標標準化，避免浮點誤差（作為字串鍵）===
 def norm_coord(x, ndigits=6):
     try:
         return f"{round(float(x), ndigits):.{ndigits}f}"
@@ -96,9 +97,15 @@ def init_gsheet():
         logging.info("✅ Sheets 初始化完成")
     except Exception as e:
         logging.critical(f"❌ Sheets 初始化失敗: {e}")
-        raise  # 直接中止，因為你指定以 Sheets 為唯一資料來源
+        raise  # 直接中止，因為我們以 Sheets 為唯一資料來源
 
 init_gsheet()
+
+# === 回饋表固定欄位表頭（避免 get_all_records() 因空白/重複欄名報錯） ===
+FEEDBACK_HEADERS = [
+    "name", "地址", "rating", "是否有衛生紙", "是否有無障礙設施",
+    "使用時間", "留言", "預測分數", "lat", "lon", "created_at"
+]
 
 # === 計算距離 ===
 def haversine(lat1, lon1, lat2, lon2):
@@ -285,7 +292,11 @@ def submit_toilet():
             return {"success": False, "message": "地址轉換失敗"}, 400
 
         # 寫入 Google Sheets（唯一來源）
-        worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        worksheet.append_row([
+            uid, name, address,
+            float(norm_coord(lat)), float(norm_coord(lon)),
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
         # （可選）備份到本地 CSV（不做查詢來源）
@@ -294,9 +305,11 @@ def submit_toilet():
                 open(TOILETS_FILE_PATH, "a", encoding="utf-8").close()
             with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["00000","0000000","未知里","USERADD", name, address, "使用者補充",
-                                norm_coord(lat), norm_coord(lon),
-                                "普通級","公共場所","未知","使用者","0",""])
+                writer.writerow([
+                    "00000","0000000","未知里","USERADD", name, address, "使用者補充",
+                    norm_coord(lat), norm_coord(lon),
+                    "普通級","公共場所","未知","使用者","0",""
+                ])
         except Exception as e:
             logging.warning(f"備份至本地 CSV 失敗：{e}")
 
@@ -353,15 +366,15 @@ def submit_feedback():
         logging.error(f"❌ 提交回饋表單錯誤: {e}")
         return "提交失敗", 500
 
-# === 清潔度預測函式（classes_ 與 LabelEncoder 對齊） ===
+# === 清潔度預測函式（用 DataFrame 包裝以消警告） ===
 def predict_cleanliness(features):
     try:
         if cleanliness_model is None or label_encoder is None:
             return "未預測"
-        probs = cleanliness_model.predict_proba([features])[0]
+        X = pd.DataFrame([features], columns=["rating", "paper", "access"])
+        probs = cleanliness_model.predict_proba(X)[0]
         try:
             classes_enc = cleanliness_model.classes_
-            # 若模型以 LabelEncoder.transform 後的 y 訓練，這裡還原原始標籤
             labels = label_encoder.inverse_transform(classes_enc.astype(int))
         except Exception:
             labels = cleanliness_model.classes_
@@ -374,7 +387,7 @@ def predict_cleanliness(features):
 # === 以座標聚合的統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     try:
-        records = feedback_sheet.get_all_records()
+        records = feedback_sheet.get_all_records(expected_headers=FEEDBACK_HEADERS)
         def close(a, b):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
@@ -430,16 +443,17 @@ def toilet_feedback(toilet_name):
             if len(row) > 1 and row[1] == toilet_name:
                 address = (row[2] if len(row) > 2 else "") or "未知地址"
                 break
-        # 仍用舊的地址聚合（若地址為未知，提示改用座標版）
+        # 若地址為未知，提示改用座標版
         if address == "未知地址":
             return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。")
-        # 舊邏輯（地址聚合）—為相容保留
+
+        # 名稱版相容：以地址聚合
         try:
-            records = feedback_sheet.get_all_records()
+            records = feedback_sheet.get_all_records(expected_headers=FEEDBACK_HEADERS)
             matched = [r for r in records if str(r.get("地址", "")).strip() == address.strip()]
             if not matched:
                 return render_template("toilet_feedback.html", toilet_name=toilet_name, summary="尚無回饋資料")
-            # 簡要統計（沿用 get_feedback_summary_by_address 的邏輯）
+
             paper_counts = {"有": 0, "沒有": 0}
             access_counts = {"有": 0, "沒有": 0}
             score_sum = 0; valid = 0; comments = []
@@ -474,7 +488,7 @@ def toilet_feedback_by_coord(lat, lon):
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
-# === 清潔度趨勢 API（名稱版保留相容，但新增座標版） ===
+# === 清潔度趨勢 API（名稱版相容 + 座標版） ===
 @app.route("/get_clean_trend/<toilet_name>")
 def get_clean_trend(toilet_name):
     try:
@@ -495,7 +509,7 @@ def get_clean_trend(toilet_name):
         if not feedback_sheet:
             return {"success": False, "data": []}, 503
 
-        records = feedback_sheet.get_all_records()
+        records = feedback_sheet.get_all_records(expected_headers=FEEDBACK_HEADERS)
         matched = [r for r in records if str(r.get("地址", "")).strip() == address.strip()]
 
         data_out = []
@@ -516,7 +530,7 @@ def get_clean_trend_by_coord(lat, lon):
     try:
         if not feedback_sheet:
             return {"success": False, "data": []}, 503
-        records = feedback_sheet.get_all_records()
+        records = feedback_sheet.get_all_records(expected_headers=FEEDBACK_HEADERS)
         def close(a, b, tol=1e-6):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
