@@ -629,7 +629,10 @@ def handle_text(event):
             line_bot_api.reply_message(event.reply_token, reply_messages)
         except Exception as e:
             logging.error(f"❌ 回覆訊息失敗（TextMessage）: {e}")
-
+    elif text == "回饋":
+        form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
+        reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
+        
 # === 處理 LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
