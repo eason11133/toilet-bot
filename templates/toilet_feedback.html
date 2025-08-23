@@ -25,12 +25,7 @@
     {% if address %}<p class="addr">{{ address }}</p>{% endif %}
 
     <div class="cleanliness-score">
-        平均預測清潔分數(最高5分)：
-        {% if avg_pred_score and avg_pred_score != '未預測' %}
-            {{ avg_pred_score }}
-        {% else %}
-            未預測
-        {% endif %}
+        平均預測清潔分數(最高5分)：<span id="avgPredScore">未預測</span>
     </div>
 
     {% if summary %}
@@ -84,7 +79,7 @@
         <ul><li class="no-feedback">（目前尚無任何回饋）</li></ul>
     {% endif %}
 
-    <!-- 先載入 Chart.js 再執行圖表程式 -->
+    <!-- 先載入 Chart.js 再畫圖 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         // 展開更多
@@ -96,10 +91,27 @@
             });
         }
 
-        // 走「座標趨勢 API」
-        (function drawTrend() {
-            const lat = "{{ lat|default('', true) }}";
-            const lon = "{{ lon|default('', true) }}";
+        // 取得座標：先試模板變數，失敗則從網址 /toilet_feedback_by_coord/<lat>/<lon> 解析
+        function getLatLon() {
+            let lat = "{{ lat|default('', true) }}";
+            let lon = "{{ lon|default('', true) }}";
+            if (lat && lon) return {lat, lon};
+
+            // 從 URL path 抓
+            const m = decodeURIComponent(location.pathname).match(/\/toilet_feedback_by_coord\/([^/]+)\/([^/]+)/);
+            if (m && m[1] && m[2]) return { lat: m[1], lon: m[2] };
+
+            // 從 address 嘗試 "lat,lon"
+            const addrNode = document.querySelector('.addr');
+            if (addrNode) {
+                const m2 = (addrNode.textContent || '').match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
+                if (m2) return { lat: m2[1], lon: m2[2] };
+            }
+            return {lat:'', lon:''};
+        }
+
+        (function drawTrendAndAvg() {
+            const { lat, lon } = getLatLon();
             if (!lat || !lon) return;
 
             fetch(`/get_clean_trend_by_coord/${lat}/${lon}`)
@@ -108,22 +120,23 @@
                   const arr = (data && data.data) ? data.data : [];
                   const ctx = document.getElementById('cleanlinessChart').getContext('2d');
 
-                  if (arr.length === 0) {
-                      new Chart(ctx, {
-                          type: 'line',
-                          data: { labels: [], datasets: [{ label: '清潔度預測', data: [], fill: false, tension: 0.3 }] },
-                          options: { responsive: true }
-                      });
-                      return;
+                  // 計算平均並顯示在藍色盒
+                  const avgNode = document.getElementById('avgPredScore');
+                  if (arr.length > 0) {
+                      const avg = (arr.reduce((s,x)=>s + (Number(x.score)||0), 0) / arr.length).toFixed(2);
+                      if (avgNode) avgNode.textContent = avg;
+                  } else {
+                      if (avgNode) avgNode.textContent = '未預測';
                   }
 
+                  // 畫圖
                   new Chart(ctx, {
                       type: 'line',
                       data: {
                           labels: arr.map((_, i) => `#${i + 1}`),
                           datasets: [{
                               label: '清潔度預測',
-                              data: arr.map(x => x.score),
+                              data: arr.map(x => Number(x.score)||null),
                               borderColor: 'rgba(75, 192, 192, 1)',
                               fill: false,
                               tension: 0.3

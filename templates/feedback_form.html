@@ -20,7 +20,7 @@
     <h2>{{ toilet_name }}</h2>
     <p>{{ address or "（無地址，使用座標）" }}</p>
 
-    <!-- 帶座標（由 app.py 的 Flex 連結 querystring 注入） -->
+    <!-- 帶座標（由 Flex 連結的 querystring 注入） -->
     <form action="{{ url_for('submit_feedback') }}" method="POST">
         <input type="hidden" name="name" value="{{ toilet_name }}">
         <input type="hidden" name="address" value="{{ address or '' }}">
