@@ -28,6 +28,9 @@ try:
 except Exception:
     pd = None
 
+# 參考最近 N 筆歷史回饋做預測
+LAST_N_HISTORY = 5
+
 # === 初始化 ===
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -284,46 +287,6 @@ def nearby_toilets():
         return {"message": "附近找不到廁所"}, 404
     return {"toilets": all_toilets}, 200
 
-# === 使用者新增廁所（寫 Google Sheets；CSV 僅備份可選） ===
-@app.route("/submit_toilet", methods=["POST"])
-def submit_toilet():
-    try:
-        data = request.get_json()
-        logging.info(f"📥 收到表單資料: {data}")
-
-        uid = data.get("user_id")
-        name = data.get("name")
-        address = data.get("address")
-
-        if not all([uid, name, address]):
-            return {"success": False, "message": "缺少參數"}, 400
-
-        lat, lon = geocode_address(address)
-        if lat is None or lon is None:
-            return {"success": False, "message": "地址轉換失敗"}, 400
-
-        # 寫入 Google Sheets（唯一來源）
-        worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
-        logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
-
-        # （可選）備份到本地 CSV
-        try:
-            if not os.path.exists(TOILETS_FILE_PATH):
-                open(TOILETS_FILE_PATH, "a", encoding="utf-8").close()
-            with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["00000","0000000","未知里","USERADD", name, address, "使用者補充",
-                                norm_coord(lat), norm_coord(lon),
-                                "普通級","公共場所","未知","使用者","0",""])
-        except Exception as e:
-            logging.warning(f"備份至本地 CSV 失敗：{e}")
-
-        return {"success": True, "message": f"✅ 已新增廁所 {name}"}
-
-    except Exception as e:
-        logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
-        return {"success": False, "message": "伺服器錯誤"}, 500
-
 # === 顯示回饋表單（地址可空，座標用 querystring 帶） ===
 @app.route("/feedback_form/<toilet_name>/<address>")
 def feedback_form(toilet_name, address):
@@ -335,7 +298,7 @@ def feedback_form(toilet_name, address):
         lon=request.args.get("lon", "")
     )
 
-# === 清潔度預測 ===
+# === 清潔度預測（單筆特徵） ===
 def predict_cleanliness(features):
     try:
         if cleanliness_model is None or label_encoder is None:
@@ -355,48 +318,6 @@ def predict_cleanliness(features):
     except Exception as e:
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return "未預測"
-
-# === 送出回饋（必須帶 lat/lon） ===
-@app.route("/submit_feedback", methods=["POST"])
-def submit_feedback():
-    try:
-        data = request.form
-        name = (data.get("name","") or "").strip()
-        address = (data.get("address","") or "").strip()
-        lat = norm_coord((data.get("lat","") or "").strip())
-        lon = norm_coord((data.get("lon","") or "").strip())
-        rating = (data.get("rating","") or "").strip()
-        toilet_paper = (data.get("toilet_paper","") or "").strip()
-        accessibility = (data.get("accessibility","") or "").strip()
-        time_of_use = (data.get("time_of_use","") or "").strip()
-        comment = (data.get("comment","") or "").strip()
-
-        if not all([name, rating, lat, lon]):
-            return "缺少必要欄位（需要：name、rating、lat、lon）", 400
-
-        try:
-            r = int(rating)
-            if r < 1 or r > 10:
-                return "清潔度評分必須在 1 到 10 之間", 400
-        except ValueError:
-            return "清潔度評分必須是數字", 400
-
-        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
-        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
-        features = [r, paper_map.get(toilet_paper, 0), access_map.get(accessibility, 0)]
-        predicted_score = predict_cleanliness(features)
-
-        # 寫入「回饋/預測」表：固定欄位順序
-        feedback_sheet.append_row([
-            name, address, rating, toilet_paper, accessibility, time_of_use,
-            comment, predicted_score, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        ])
-
-        return redirect(url_for("feedback_form", toilet_name=name, address=address or "") + f"?lat={lat}&lon={lon}")
-
-    except Exception as e:
-        logging.error(f"❌ 提交回饋表單錯誤: {e}")
-        return "提交失敗", 500
 
 # === Header 對齊工具（彈性支援不同表頭命名） ===
 def _norm_h(s):
@@ -535,6 +456,135 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
+# === 蒐集歷史特徵（同座標最近 N 筆） ===
+def _collect_history_feature_rows_by_coord(lat, lon, last_n=LAST_N_HISTORY):
+    """
+    從 Google Sheet 抓同一座標 (lat,lon) 的歷史回饋，轉成模型需要的特徵列。
+    回傳 list[[rating, paper_num, access_num]]，只取最後 last_n 筆。
+    """
+    try:
+        rows = feedback_sheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return []
+
+        header = rows[0]
+        idx = _feedback_indices(header)
+        data = rows[1:]
+
+        if idx["lat"] is None or idx["lon"] is None:
+            return []
+
+        def close(a, b, tol=1e-6):
+            try:
+                return abs(float(a) - float(b)) <= tol
+            except:
+                return False
+
+        feats = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if not (close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)):
+                continue
+
+            # 讀 rating / 衛生紙 / 無障礙
+            try:
+                rating_str = (r[idx["rating"]] if idx["rating"] is not None and len(r) > idx["rating"] else "").strip()
+                rating_val = int(rating_str)
+            except:
+                continue
+
+            paper_str = (r[idx["paper"]] if idx["paper"] is not None and len(r) > idx["paper"] else "").strip()
+            access_str = (r[idx["access"]] if idx["access"] is not None and len(r) > idx["access"] else "").strip()
+            paper_num = 1 if paper_str == "有" else 0
+            access_num = 1 if access_str == "有" else 0
+
+            feats.append([rating_val, paper_num, access_num])
+
+        return feats[-last_n:]
+    except Exception as e:
+        logging.error(f"❌ 蒐集歷史特徵失敗: {e}")
+        return []
+
+# === 帶歷史的預測 ===
+def predict_cleanliness_with_history(lat, lon, current_features, last_n=LAST_N_HISTORY):
+    """
+    以『同座標的最近 N 筆回饋 + 這次提交』一起做預測：
+    - 先對每筆特徵算 predict_proba
+    - 將機率向量平均
+    - 再換算成期望分數
+    """
+    try:
+        if cleanliness_model is None or label_encoder is None:
+            return "未預測"
+
+        hist = _collect_history_feature_rows_by_coord(lat, lon, last_n=last_n)
+        batch = hist + [current_features]
+
+        if pd is not None:
+            df = pd.DataFrame(batch, columns=["rating", "toilet_paper", "accessibility"])
+            probs = cleanliness_model.predict_proba(df)
+        else:
+            probs = cleanliness_model.predict_proba(batch)
+
+        avg_probs = probs.mean(axis=0)
+
+        try:
+            classes_enc = cleanliness_model.classes_
+            labels = label_encoder.inverse_transform(classes_enc.astype(int))
+        except Exception:
+            labels = cleanliness_model.classes_
+
+        expected = sum(float(p) * float(l) for p, l in zip(avg_probs, labels))
+        return round(expected, 2)
+    except Exception as e:
+        logging.error(f"❌ 帶歷史清潔度預測錯誤: {e}")
+        return "未預測"
+
+# === 送出回饋（必須帶 lat/lon） ===
+@app.route("/submit_feedback", methods=["POST"])
+def submit_feedback():
+    try:
+        data = request.form
+        name = (data.get("name","") or "").strip()
+        address = (data.get("address","") or "").strip()
+        lat = norm_coord((data.get("lat","") or "").strip())
+        lon = norm_coord((data.get("lon","") or "").strip())
+        rating = (data.get("rating","") or "").strip()
+        toilet_paper = (data.get("toilet_paper","") or "").strip()
+        accessibility = (data.get("accessibility","") or "").strip()
+        time_of_use = (data.get("time_of_use","") or "").strip()
+        comment = (data.get("comment","") or "").strip()
+
+        if not all([name, rating, lat, lon]):
+            return "缺少必要欄位（需要：name、rating、lat、lon）", 400
+
+        try:
+            r = int(rating)
+            if r < 1 or r > 10:
+                return "清潔度評分必須在 1 到 10 之間", 400
+        except ValueError:
+            return "清潔度評分必須是數字", 400
+
+        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        features = [r, paper_map.get(toilet_paper, 0), access_map.get(accessibility, 0)]
+
+        # ⭐ 改成「帶歷史」的預測
+        predicted_score = predict_cleanliness_with_history(lat, lon, features, last_n=LAST_N_HISTORY)
+
+        # 寫入「回饋/預測」表：固定欄位順序
+        feedback_sheet.append_row([
+            name, address, rating, toilet_paper, accessibility, time_of_use,
+            comment, predicted_score, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+
+        return redirect(url_for("feedback_form", toilet_name=name, address=address or "") + f"?lat={lat}&lon={lon}")
+
+    except Exception as e:
+        logging.error(f"❌ 提交回饋表單錯誤: {e}")
+        return "提交失敗", 500
+
 # === 舊路由（名稱→地址）保留相容，仍建議用座標版 ===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
@@ -579,13 +629,10 @@ def toilet_feedback(toilet_name):
             })
         fbs.sort(key=lambda d: d.get("created_at",""), reverse=True)
 
-        # 產摘要
-        summary = "尚無回饋資料" if not matched else get_feedback_summary_by_coord(
-            # 用名稱版時沒座標，只做簡易統計：這裡沿用地址聚合的結果做文字摘要
-            lat="", lon="", tol=1e-6  # 不用
-        )
-        # 上面 summary 為了簡化，直接覆寫：用手動計算，避免依賴 lat/lon
-        if matched:
+        # 簡易摘要（地址版）
+        if not matched:
+            summary = "尚無回饋資料"
+        else:
             paper_counts = {"有": 0, "沒有": 0}
             access_counts = {"有": 0, "沒有": 0}
             score_sum = 0.0; valid = 0
@@ -616,9 +663,21 @@ def toilet_feedback_by_coord(lat, lon):
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)  # 顯示大家的回饋
+
+        # 平均預測分數（供頁面頂端顯示）
+        scores = []
+        for f in feedbacks:
+            try:
+                s = float((f.get("cleanliness_score") or "").strip())
+                scores.append(s)
+            except:
+                pass
+        avg_pred_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
+
         return render_template("toilet_feedback.html",
                                toilet_name=name, summary=summary,
-                               feedbacks=feedbacks, address=f"{lat},{lon}")
+                               feedbacks=feedbacks, address=f"{lat},{lon}",
+                               lat=lat, lon=lon, avg_pred_score=avg_pred_score)
     except Exception as e:
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
