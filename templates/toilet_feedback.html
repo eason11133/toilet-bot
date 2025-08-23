@@ -1,97 +1,147 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8" />
-  <title>{{ toilet_name }} 回饋概覽</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background:#f4f4f9; color:#333; }
-    h2 { color:#2C3E50; margin-bottom:8px; }
-    .card { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); padding:16px; max-width:720px; }
-    .summary { white-space:pre-line; line-height:1.7; margin-bottom: 16px; }
-    #chartWrap { margin-top:12px; }
-    #cleanlinessChart { width:100%; height:320px; }
-    .muted { color:#999; }
-  </style>
+    <meta charset="UTF-8" />
+    <title>{{ toilet_name }} 回饋</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }
+        h2 { color: #2C3E50; margin-bottom: 6px; }
+        .addr { color: #666; margin-top: 0; }
+        .cleanliness-score { background-color: #e0f7fa; padding: 10px; border-left: 5px solid #00acc1; margin: 15px 0; font-weight: bold; }
+        .summary-box { background: #fff; border-radius: 8px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); white-space: pre-line; }
+        .section-title { margin-top: 24px; font-weight: bold; color: #2C3E50; }
+        ul { list-style-type: none; padding: 0; }
+        li { background-color: #fff; margin: 10px 0; padding: 10px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+        .toggle-button { background: none; border: none; color: #007BFF; cursor: pointer; font-size: 1em; margin-bottom: 10px; }
+        .comment { font-style: italic; color: #888; }
+        .collapsed { display: none; }
+        .no-feedback { color: #999; }
+        #cleanlinessChart { width: 100%; height: 300px; margin-top: 14px; }
+    </style>
 </head>
 <body>
-  <h2>{{ toilet_name }}</h2>
-  <p>{{ address or "（無地址，使用座標）" }}</p>
+    <h2>{{ toilet_name }}</h2>
+    {% if address %}<p class="addr">{{ address }}</p>{% endif %}
 
-  <div class="card">
-    <!-- 後端已組好的摘要 -->
-    <div class="summary">{{ summary }}</div>
-
-    <!-- 清潔度趨勢圖表 -->
-    <div id="chartWrap">
-      <canvas id="cleanlinessChart"></canvas>
+    <div class="cleanliness-score">
+        平均預測清潔分數(最高5分)：
+        {% if avg_pred_score and avg_pred_score != '未預測' %}
+            {{ avg_pred_score }}
+        {% else %}
+            未預測
+        {% endif %}
     </div>
-    <div id="chartNote" class="muted"></div>
-  </div>
 
-  <!-- 先載 Chart.js，再跑我們的程式碼，避免 Chart 尚未載入 -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script>
-    (function () {
-      const chartEl = document.getElementById('cleanlinessChart');
-      const noteEl = document.getElementById('chartNote');
+    {% if summary %}
+      <div class="summary-box">{{ summary }}</div>
+    {% endif %}
 
-      // 根據目前路由決定名稱版或座標版 API
-      const path = window.location.pathname;
-      let api = null;
+    <div class="section-title">清潔度趨勢</div>
+    <canvas id="cleanlinessChart"></canvas>
 
-      if (path.startsWith('/toilet_feedback_by_coord/')) {
-        // /toilet_feedback_by_coord/<lat>/<lon>
-        const parts = path.split('/');
-        const lat = parts[2];
-        const lon = parts[3];
-        api = `/get_clean_trend_by_coord/${lat}/${lon}`;
-      } else if (path.startsWith('/toilet_feedback/')) {
-        // /toilet_feedback/<toilet_name>
-        const name = encodeURIComponent(`{{ toilet_name }}`);
-        api = `/get_clean_trend/${name}`;
-      }
+    <div class="section-title">使用者回饋</div>
+    {% if feedbacks and feedbacks|length > 0 %}
+        {% if feedbacks|length > 1 %}
+            <button class="toggle-button" id="toggleBtn">▶️ 展開其他 {{ feedbacks|length - 1 }} 筆使用者回饋</button>
+        {% endif %}
+        <ul id="feedbackList">
+            <li>
+                <p><strong>🌟 評分:</strong> {{ feedbacks[0].rating }} ｜ 
+                   <strong>🧻 衛生紙:</strong> {{ feedbacks[0].toilet_paper }} ｜ 
+                   <strong>♿ 無障礙設施:</strong> {{ feedbacks[0].accessibility }} ｜ 
+                   <strong>🕒 使用時間:</strong> {{ feedbacks[0].time_of_use or '未填寫' }}</p>
+                <p class="comment">
+                    <strong>💬 留言:</strong>
+                    {% if feedbacks[0].comment and feedbacks[0].comment.strip() %}
+                        {{ feedbacks[0].comment }}
+                    {% else %}
+                        （無留言）
+                    {% endif %}
+                </p>
+                <p style="color:#999;">📅 {{ feedbacks[0].created_at }}</p>
+            </li>
 
-      if (!api) {
-        noteEl.textContent = '（無法判定路由類型，未載入趨勢圖）';
-        return;
-      }
+            {% for c in feedbacks[1:] %}
+                <li class="collapsed">
+                    <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
+                       <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
+                       <strong>♿ 無障礙設施:</strong> {{ c.accessibility }} ｜ 
+                       <strong>🕒 使用時間:</strong> {{ c.time_of_use or '未填寫' }}</p>
+                    <p class="comment">
+                        <strong>💬 留言:</strong>
+                        {% if c.comment and c.comment.strip() %}
+                            {{ c.comment }}
+                        {% else %}
+                            （無留言）
+                        {% endif %}
+                    </p>
+                    <p style="color:#999;">📅 {{ c.created_at }}</p>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <ul><li class="no-feedback">（目前尚無任何回饋）</li></ul>
+    {% endif %}
 
-      fetch(api)
-        .then(r => r.json())
-        .then(json => {
-          if (!json || !json.data || json.data.length === 0) {
-            noteEl.textContent = '（目前無法提供清潔度趨勢圖）';
-            return;
-          }
-          const labels = json.data.map((_, i) => `#${i + 1}`);
-          const scores = json.data.map(d => d.score);
+    <!-- 先載入 Chart.js 再執行圖表程式 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // 展開更多
+        const btn = document.getElementById('toggleBtn');
+        if (btn) {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.collapsed').forEach(li => li.classList.remove('collapsed'));
+                btn.style.display = 'none';
+            });
+        }
 
-          new Chart(chartEl.getContext('2d'), {
-            type: 'line',
-            data: {
-              labels,
-              datasets: [{
-                label: '清潔度預測',
-                data: scores,
-                borderColor: 'rgba(75, 192, 192, 1)',
-                fill: false,
-                tension: 0.25
-              }]
-            },
-            options: {
-              responsive: true,
-              scales: {
-                x: { title: { display: true, text: '回饋次數' } },
-                y: { min: 1, max: 5, title: { display: true, text: '清潔度（1~5）' } }
-              }
-            }
-          });
-        })
-        .catch(() => {
-          noteEl.textContent = '（趨勢資料載入失敗）';
-        });
-    })();
-  </script>
+        // 走「座標趨勢 API」
+        (function drawTrend() {
+            const lat = "{{ lat|default('', true) }}";
+            const lon = "{{ lon|default('', true) }}";
+            if (!lat || !lon) return;
+
+            fetch(`/get_clean_trend_by_coord/${lat}/${lon}`)
+              .then(r => r.json())
+              .then(data => {
+                  const arr = (data && data.data) ? data.data : [];
+                  const ctx = document.getElementById('cleanlinessChart').getContext('2d');
+
+                  if (arr.length === 0) {
+                      new Chart(ctx, {
+                          type: 'line',
+                          data: { labels: [], datasets: [{ label: '清潔度預測', data: [], fill: false, tension: 0.3 }] },
+                          options: { responsive: true }
+                      });
+                      return;
+                  }
+
+                  new Chart(ctx, {
+                      type: 'line',
+                      data: {
+                          labels: arr.map((_, i) => `#${i + 1}`),
+                          datasets: [{
+                              label: '清潔度預測',
+                              data: arr.map(x => x.score),
+                              borderColor: 'rgba(75, 192, 192, 1)',
+                              fill: false,
+                              tension: 0.3
+                          }]
+                      },
+                      options: {
+                          responsive: true,
+                          scales: {
+                              x: { title: { display: true, text: '回饋次數' } },
+                              y: { min: 1, max: 5, title: { display: true, text: '清潔度' } }
+                          }
+                      }
+                  });
+              })
+              .catch(err => {
+                  console.error('取得趨勢資料失敗:', err);
+              });
+        })();
+    </script>
 </body>
 </html>
