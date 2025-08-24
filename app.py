@@ -21,9 +21,9 @@ from datetime import datetime
 import joblib
 import threading
 import time
-import statistics  # ✅ 新增：做 95% CI 用
+import statistics  # ✅ 95% CI 用
 
-# 可選：安裝了 pandas 就用它避免 sklearn 特徵名稱警告；沒裝也不影響運作
+# 可選：有 pandas 就用，避免 sklearn 特徵名稱警告；沒裝也不影響運作
 try:
     import pandas as pd
 except Exception:
@@ -156,7 +156,7 @@ def safe_reply(event, messages):
         except Exception:
             msg_txt = str(e)
 
-        # 重送 (redelivery) 或 token 無效，多半代表同一事件被處理過，不再 push 以免重複
+        # 重送或無效 token → 多半同一事件已處理過，不再 push 以免重複
         if is_redelivery(event) or ("Invalid reply token" in msg_txt):
             logging.warning(f"reply_message 失敗但不 push（避免重複）：{msg_txt}")
             return
@@ -410,7 +410,7 @@ def expected_from_feats(feats):
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return None
 
-# === ✅ 新增：以最近 N 筆做「即時預測」與 95% CI ===
+# === ✅ 以最近 N 筆做「即時預測」與 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     """
     以同座標最近 k 筆回饋，計算即時乾淨度(nowcast)與 95% 信心區間。
@@ -500,7 +500,7 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
         logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
         return None
 
-# === ✅ 新增：Nowcast API（前端可呼叫） ===
+# === ✅ Nowcast API（前端呼叫） ===
 @app.route("/get_nowcast_by_coord/<lat>/<lon>")
 def get_nowcast_by_coord(lat, lon):
     try:
@@ -513,7 +513,7 @@ def get_nowcast_by_coord(lat, lon):
         logging.error(f"❌ Nowcast API 錯誤: {e}")
         return {"success": False}, 500
 
-# === 回饋：寫入前先把同座標最近 N 筆也納入預測 ===
+# === 回饋：寫入前把同座標最近 N 筆也納入預測 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
     try:
