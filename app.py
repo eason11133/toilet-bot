@@ -211,9 +211,9 @@ def query_overpass_toilets(lat, lon, radius=500):
     out center;
     """
     endpoints = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://overpass.openstreetmap.ru/api/interpreter",
+        "https://overpass-api.de/api/interpreter"
+        ,"https://overpass.kumi.systems/api/interpreter"
+        ,"https://overpass.openstreetmap.ru/api/interpreter",
     ]
     headers = {"User-Agent": "ToiletBot/1.0 (contact: you@example.com)"}
 
@@ -424,12 +424,48 @@ def _simple_score(rr, paper, acc):
     if score > 5.0: score = 5.0
     return round(score, 2)
 
-# === ✅ 以最近 N 筆做「即時預測」與 95% CI ===
+# === ✅ 共用：從單列資料得到分數（模型 → 舊pred → 簡易推估） ===
+def _pred_from_row(r, idx):
+    """
+    回傳 (score, rating, paper文字, access文字)
+    """
+    paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+    access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+
+    rr = None
+    if idx["rating"] is not None and len(r) > idx["rating"]:
+        try:
+            rr = int((r[idx["rating"]] or "").strip())
+        except:
+            rr = None
+    pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
+    aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
+
+    score = None
+    # 1) 模型重算
+    if rr is not None and cleanliness_model is not None:
+        try:
+            feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
+            score = expected_from_feats([feat])
+        except Exception:
+            score = None
+    # 2) 表內舊 pred
+    if score is None and idx["pred"] is not None and len(r) > idx["pred"]:
+        try:
+            score = float((r[idx["pred"]] or "").strip())
+        except:
+            score = None
+    # 3) 簡易推估
+    if score is None:
+        score = _simple_score(rr, pp, aa)
+
+    return (score, rr, pp, aa)
+
+# === ✅ 以最近 N 筆做「即時預測」與 95% CI（一致化） ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     """
-    以同座標最近 k 筆回饋，計算即時乾淨度(nowcast)與 95% 信心區間。
-    先用表內「預測分數」；若缺值則用模型依 (rating, paper, access) 重算。
-    回傳 dict: {'mean':float,'lower':float,'upper':float,'n':int} 或 None
+    最近 k 筆同座標的即時乾淨度(nowcast)與 95% CI。
+    使用 _pred_from_row 確保邏輯一致；若幾乎常數，退回簡易推估避免直線。
     """
     try:
         rows = feedback_sheet.get_all_values()
@@ -449,67 +485,47 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
             except:
                 return False
 
-        # 篩選同座標
-        same = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                same.append(r)
-
+        same = [r for r in data
+                if len(r) > max(idx["lat"], idx["lon"])
+                and close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)]
         if not same:
             return None
 
-        # 依建立時間倒序取最近 k 筆
         if idx["created"] is not None:
             same.sort(key=lambda x: x[idx["created"]], reverse=True)
         recent = same[:k]
 
-        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
-        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
-
-        mu_vals = []
+        vals = []
         for r in recent:
-            mu = None
-            # 1) 先用表內的「預測分數」
-            if idx["pred"] is not None and len(r) > idx["pred"]:
-                try:
-                    mu = float((r[idx["pred"]] or "").strip())
-                except:
-                    mu = None
-            # 2) 補算
-            if mu is None and cleanliness_model is not None:
-                try:
-                    rr = None
-                    if idx["rating"] is not None and len(r) > idx["rating"]:
-                        rr = int((r[idx["rating"]] or "").strip())
-                    pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
-                    aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
-                    if rr is not None:
-                        feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
-                        mu = expected_from_feats([feat])
-                except:
-                    pass
-
-            if isinstance(mu, (int, float)):
-                mu_vals.append(float(mu))
-
-        n = len(mu_vals)
-        if n == 0:
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+            if isinstance(sc, (int, float)):
+                vals.append(float(sc))
+        if not vals:
             return None
 
-        mean = round(sum(mu_vals) / n, 2)
-        if n == 1:
-            return {"mean": mean, "lower": mean, "upper": mean, "n": n}
+        # 幾乎常數 → 改用簡易推估
+        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
+            vals = []
+            for r in recent:
+                sc, rr, pp, aa = _pred_from_row(r, idx)
+                sc2 = _simple_score(rr, pp, aa)
+                if sc2 is not None:
+                    vals.append(sc2)
+            if not vals:
+                return None
+
+        mean = round(sum(vals) / len(vals), 2)
+        if len(vals) == 1:
+            return {"mean": mean, "lower": mean, "upper": mean, "n": 1}
 
         try:
-            s = statistics.stdev(mu_vals)
+            s = statistics.stdev(vals)
         except statistics.StatisticsError:
             s = 0.0
-        se = s / (n ** 0.5)
+        se = s / (len(vals) ** 0.5)
         lower = max(1.0, round(mean - 1.96 * se, 2))
         upper = min(5.0, round(mean + 1.96 * se, 2))
-        return {"mean": mean, "lower": lower, "upper": upper, "n": n}
+        return {"mean": mean, "lower": lower, "upper": upper, "n": len(vals)}
     except Exception as e:
         logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
         return None
@@ -643,7 +659,7 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 讀取回饋列表（座標）錯誤: {e}")
         return []
 
-# === 以座標聚合的統計（摘要） ===
+# === 以座標聚合的統計（摘要）— 分數一致化 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     try:
         rows = feedback_sheet.get_all_values()
@@ -673,32 +689,21 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
         paper_counts = {"有": 0, "沒有": 0}
         access_counts = {"有": 0, "沒有": 0}
-        score_sum = 0.0
-        valid_score_count = 0
+        scores = []
         comments = []
 
         for r in matched:
-            if idx["pred"] is not None and len(r) > idx["pred"]:
-                try:
-                    s = float((r[idx["pred"]] or "").strip())
-                    score_sum += s
-                    valid_score_count += 1
-                except:
-                    pass
-            if idx["paper"] is not None and len(r) > idx["paper"]:
-                p = (r[idx["paper"]] or "").strip()
-                if p in paper_counts:
-                    paper_counts[p] += 1
-            if idx["access"] is not None and len(r) > idx["access"]:
-                a = (r[idx["access"]] or "").strip()
-                if a in access_counts:
-                    access_counts[a] += 1
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+            if isinstance(sc, (int, float)):
+                scores.append(float(sc))
+            if pp in paper_counts: paper_counts[pp] += 1
+            if aa in access_counts: access_counts[aa] += 1
             if idx["comment"] is not None and len(r) > idx["comment"]:
                 c = (r[idx["comment"]] or "").strip()
                 if c:
                     comments.append(c)
 
-        avg_score = round(score_sum / valid_score_count, 2) if valid_score_count else "未預測"
+        avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
 
         summary = f"🔍 筆數：{len(matched)}\n"
         summary += f"🧼 平均清潔分數：{avg_score}\n"
@@ -711,9 +716,9 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
-# === 建清單：同座標的指示燈（🧻/♿/⭐）索引 ===
+# === 建清單：同座標的指示燈（🧻/♿/⭐）— 分數一致化 ===
 def build_feedback_index():
-    """回傳 {(lat_s,lon_s): {'paper':'有/沒有/?','access':'有/沒有/?','avg':float or None}}"""
+    """回傳 {(lat_s,lon_s): {'paper':'有/沒有/?','access':'有/沒有/?','avg':float or None}}，分數用一致邏輯重算。"""
     result = {}
     try:
         rows = feedback_sheet.get_all_values()
@@ -721,24 +726,22 @@ def build_feedback_index():
             return result
         header = rows[0]; data = rows[1:]
         idx = _feedback_indices(header)
+
+        bucket = {}
         for r in data:
             try:
                 lat_s = norm_coord(r[idx["lat"]])
                 lon_s = norm_coord(r[idx["lon"]])
             except Exception:
                 continue
-            rec = result.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "scores":[]})
-            if idx["paper"] is not None and len(r) > idx["paper"]:
-                p = (r[idx["paper"]] or "").strip()
-                if p in rec["paper"]: rec["paper"][p] += 1
-            if idx["access"] is not None and len(r) > idx["access"]:
-                a = (r[idx["access"]] or "").strip()
-                if a in rec["access"]: rec["access"][a] += 1
-            if idx["pred"] is not None and len(r) > idx["pred"]:
-                try: rec["scores"].append(float((r[idx["pred"]] or "").strip()))
-                except: pass
+            rec = bucket.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "scores":[]})
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+            if pp in rec["paper"]: rec["paper"][pp] += 1
+            if aa in rec["access"]: rec["access"][aa] += 1
+            if isinstance(sc, (int, float)): rec["scores"].append(float(sc))
+
         out = {}
-        for key, v in result.items():
+        for key, v in bucket.items():
             paper = "有" if v["paper"]["有"] >= v["paper"]["沒有"] and sum(v["paper"].values())>0 else ("沒有" if sum(v["paper"].values())>0 else "?")
             access = "有" if v["access"]["有"] >= v["access"]["沒有"] and sum(v["access"].values())>0 else ("沒有" if sum(v["access"].values())>0 else "?")
             avg = round(sum(v["scores"])/len(v["scores"]),2) if v["scores"] else None
@@ -782,8 +785,9 @@ def toilet_feedback(toilet_name):
             def val(k):
                 i = idx[k]
                 return (r[i] if i is not None and len(r) > i else "").strip()
-            cs = val("pred")
-            try: nums.append(float(cs))
+            # 用一致邏輯
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+            try: nums.append(float(sc))
             except: pass
             fbs.append({
                 "rating": val("rating"),
@@ -791,7 +795,7 @@ def toilet_feedback(toilet_name):
                 "accessibility": val("access"),
                 "time_of_use": val("time"),
                 "comment": val("comment"),
-                "cleanliness_score": cs,
+                "cleanliness_score": str(sc) if sc is not None else "",
                 "created_at": val("created"),
             })
         fbs.sort(key=lambda d: d.get("created_at",""), reverse=True)
@@ -800,18 +804,11 @@ def toilet_feedback(toilet_name):
         if matched:
             paper_counts = {"有": 0, "沒有": 0}
             access_counts = {"有": 0, "沒有": 0}
-            score_sum = 0.0; valid = 0
             for r in matched:
-                if idx["pred"] is not None and len(r) > idx["pred"]:
-                    try: score_sum += float((r[idx["pred"]] or "").strip()); valid += 1
-                    except: pass
-                if idx["paper"] is not None and len(r) > idx["paper"]:
-                    p = (r[idx["paper"]] or "").strip()
-                    if p in paper_counts: paper_counts[p] += 1
-                if idx["access"] is not None and len(r) > idx["access"]:
-                    a = (r[idx["access"]] or "").strip()
-                    if a in access_counts: access_counts[a] += 1
-            avg = round(score_sum/valid, 2) if valid else "未預測"
+                _, _, pp, aa = _pred_from_row(r, idx)
+                if pp in paper_counts: paper_counts[pp] += 1
+                if aa in access_counts: access_counts[aa] += 1
+            avg = avg_pred_score
             summary = f"🔍 筆數：{len(matched)}\n🧼 平均清潔分數：{avg}\n🧻 衛生紙：{'有' if paper_counts['有']>=paper_counts['沒有'] else '沒有'}\n♿ 無障礙：{'有' if access_counts['有']>=access_counts['沒有'] else '沒有'}\n"
         else:
             summary = "尚無回饋資料"
@@ -824,18 +821,32 @@ def toilet_feedback(toilet_name):
         logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
 
-# === 新路由：座標版 ===
+# === 新路由：座標版（上方藍色平均也改成一致邏輯） ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
     try:
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)
-        nums = []
-        for f in feedbacks:
-            try: nums.append(float((f.get("cleanliness_score") or "").strip()))
-            except: pass
-        avg_pred_score = round(sum(nums)/len(nums), 2) if nums else "未預測"
+
+        # 重新計算藍色框平均（一致邏輯）
+        rows = feedback_sheet.get_all_values()
+        header = rows[0]; data = rows[1:]
+        idx = _feedback_indices(header)
+
+        def close(a, b, tol=1e-6):
+            try: return abs(float(a) - float(b)) <= tol
+            except: return False
+
+        scores = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
+                sc, _, _, _ = _pred_from_row(r, idx)
+                if isinstance(sc, (int, float)):
+                    scores.append(float(sc))
+        avg_pred_score = round(sum(scores)/len(scores), 2) if scores else "未預測"
 
         return render_template(
             "toilet_feedback.html",
@@ -851,7 +862,7 @@ def toilet_feedback_by_coord(lat, lon):
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
-# === 清潔度趨勢 API（座標） ===
+# === 清潔度趨勢 API（座標）— 分數一致化 ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
     try:
@@ -870,10 +881,6 @@ def get_clean_trend_by_coord(lat, lon):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
-        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
-        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
-
-        # 先收集同座標的原始列，之後可以重算或做備援
         matched_rows = []
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
@@ -884,66 +891,31 @@ def get_clean_trend_by_coord(lat, lon):
         if not matched_rows:
             return {"success": True, "data": []}, 200
 
-        # 1) 優先使用模型即時計算（忽略舊的 pred 欄位）
         recomputed = []
         for r in matched_rows:
             created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-            # features
-            rr = None
-            if idx["rating"] is not None and len(r) > idx["rating"]:
-                try:
-                    rr = int((r[idx["rating"]] or "").strip())
-                except:
-                    rr = None
-            pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
-            aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
-
-            pred_val = None
-            if rr is not None and cleanliness_model is not None:
-                try:
-                    feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
-                    pred_val = expected_from_feats([feat])
-                except Exception:
-                    pred_val = None
-
-            # 2) 模型不可用時，改用舊 pred 欄位
-            if pred_val is None and idx["pred"] is not None and len(r) > idx["pred"]:
-                try:
-                    pred_val = float((r[idx["pred"]] or "").strip())
-                except:
-                    pred_val = None
-
-            # 3) 仍拿不到 → 用簡易推估（一定會跟著評分變）
-            if pred_val is None:
-                pred_val = _simple_score(rr, pp, aa)
-
-            if isinstance(pred_val, (int, float)):
-                recomputed.append((created, float(pred_val)))
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+            if sc is None:
+                sc = _simple_score(rr, pp, aa)
+            if isinstance(sc, (int, float)):
+                recomputed.append((created, float(sc)))
 
         if not recomputed:
             return {"success": True, "data": []}, 200
 
-        # 4) 如果整串分數幾乎一樣（模型給常數），強制用簡易推估重算一次避免「一條直線」
+        # 若幾乎一條直線 → 強制用簡易推估再跑一次
         vals = [p for _, p in recomputed]
         if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
             forced = []
             for r in matched_rows:
                 created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-                rr = None
-                if idx["rating"] is not None and len(r) > idx["rating"]:
-                    try:
-                        rr = int((r[idx["rating"]] or "").strip())
-                    except:
-                        rr = None
-                pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
-                aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
-                sc = _simple_score(rr, pp, aa)
-                if sc is not None:
-                    forced.append((created, sc))
+                _, rr, pp, aa = _pred_from_row(r, idx)
+                sc2 = _simple_score(rr, pp, aa)
+                if sc2 is not None:
+                    forced.append((created, float(sc2)))
             if forced:
                 recomputed = forced
 
-        # 5) 依建立時間排序輸出
         recomputed.sort(key=lambda t: t[0])
         out = [{"score": round(p, 2)} for _, p in recomputed]
         return {"success": True, "data": out}, 200
@@ -955,7 +927,6 @@ def get_clean_trend_by_coord(lat, lon):
 @app.route("/_debug_predict")
 def _debug_predict():
     try:
-        from flask import request  # 若檔案最上面已經有就可略過
         r = int(request.args.get("rating"))
         paper = request.args.get("paper", "沒注意")
         acc = request.args.get("access", "沒注意")
