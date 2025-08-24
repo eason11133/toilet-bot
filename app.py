@@ -841,9 +841,12 @@ def toilet_feedback_by_coord(lat, lon):
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
     try:
+        force_recompute = (request.args.get("recompute", "0") == "1")
+
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
             return {"success": True, "data": []}, 200
+
         header = rows[0]
         idx = _feedback_indices(header)
         data = rows[1:]
@@ -855,24 +858,74 @@ def get_clean_trend_by_coord(lat, lon):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
+        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+
         matched = []
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
                 continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-                pred = r[idx["pred"]] if idx["pred"] is not None and len(r) > idx["pred"] else ""
-                matched.append((created, pred))
+            if not (close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)):
+                continue
+
+            created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
+
+            # 先取現有 pred（若沒要求強制重算）
+            pred_val = None
+            if not force_recompute and idx["pred"] is not None and len(r) > idx["pred"]:
+                try:
+                    pred_val = float((r[idx["pred"]] or "").strip())
+                except:
+                    pred_val = None
+
+            # 需要的話就用 (rating, paper, access) 補算
+            if pred_val is None and cleanliness_model is not None:
+                try:
+                    rr = None
+                    if idx["rating"] is not None and len(r) > idx["rating"]:
+                        rr = int((r[idx["rating"]] or "").strip())
+                    pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
+                    aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
+                    if rr is not None:
+                        feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
+                        pred_val = expected_from_feats([feat])
+                except Exception as _:
+                    pred_val = None
+
+            if pred_val is None:
+                continue
+
+            matched.append((created, float(pred_val)))
+
         matched.sort(key=lambda t: t[0])
 
-        out = []
-        for created, pred in matched:
-            try: out.append({"score": float(str(pred).strip())})
-            except: pass
-        return {"success": True, "data": out}
+        out = [{"score": round(p, 2)} for _, p in matched]
+        return {"success": True, "data": out}, 200
     except Exception as e:
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
+
+@app.route("/_debug_predict")
+def _debug_predict():
+    try:
+        from flask import request  # 若檔案最上面已經有就可略過
+        r = int(request.args.get("rating"))
+        paper = request.args.get("paper", "沒注意")
+        acc = request.args.get("access", "沒注意")
+
+        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        feat = [r, paper_map.get(paper, 0), access_map.get(acc, 0)]
+        exp = expected_from_feats([feat])
+
+        return {
+            "ok": True,
+            "input": {"rating": r, "paper": paper, "access": acc},
+            "expected": exp
+        }, 200
+    except Exception as e:
+        logging.error(e)
+        return {"ok": False}, 500
 
 # === 建立 Flex：附近 / 最愛（含指示燈） ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
