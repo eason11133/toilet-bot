@@ -37,13 +37,34 @@ CORS(app)
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# ---- 安全回覆工具（避免 Invalid reply token）----
+# ---- 安全回覆 + 去重（避免 Invalid reply token / 重複送達）----
 INVALID_REPLY_TOKENS = {
     "00000000000000000000000000000000",
     "ffffffffffffffffffffffffffffffff",
 }
-def safe_reply(event, messages, uid=None):
-    """優先 reply；reply token 無效或驗證事件則 fallback push。"""
+_PROCESSED_TOKENS = {}   # reply_token -> ts
+_TOKEN_TTL = 300         # 秒
+
+def _is_duplicate_event(event):
+    """同一 reply_token 在 TTL 內再次出現就忽略（LINE 重送）"""
+    token = getattr(event, "reply_token", "") or ""
+    if not token:
+        return False
+    now = time.time()
+    # 清掉過期 token
+    for t, ts in list(_PROCESSED_TOKENS.items()):
+        if now - ts > _TOKEN_TTL:
+            del _PROCESSED_TOKENS[t]
+    if token in _PROCESSED_TOKENS:
+        logging.info(f"🔁 重送事件已忽略 token={token}")
+        return True
+    _PROCESSED_TOKENS[token] = now
+    return False
+
+def safe_reply(event, messages):
+    """優先 reply；遇到驗證用假 token 直接忽略。
+    注意：不做 push 補送，避免重複。
+    """
     if not messages:
         return
     if not isinstance(messages, list):
@@ -51,25 +72,14 @@ def safe_reply(event, messages, uid=None):
 
     token = getattr(event, "reply_token", "") or ""
     if token in INVALID_REPLY_TOKENS:
-        # 驗證/健康檢查事件：不回覆，必要時以 push 補送
-        if uid:
-            try:
-                line_bot_api.push_message(uid, messages)
-            except Exception as e:
-                logging.error(f"push_message failed: {e}")
+        logging.info("🛈 收到驗證/健康檢查事件，忽略回覆")
         return
 
     try:
         line_bot_api.reply_message(token, messages)
     except LineBotApiError as e:
-        # reply token 過期 → 改用 push（需有 Push 權限）
-        if "Invalid reply token" in str(e) and uid:
-            try:
-                line_bot_api.push_message(uid, messages)
-            except Exception as e2:
-                logging.error(f"push_message failed: {e2}")
-        else:
-            logging.error(f"reply_message failed: {e}")
+        # 大多數情況代表 LINE 已重送、或 token 過期；這裡不做 push 以免重複
+        logging.warning(f"reply_message 失敗：{e}")
 
 # 檔案（favorites.txt 本地保存最愛；CSV 僅備份，不做查詢來源）
 DATA_DIR = os.path.join(os.getcwd(), "data")
@@ -820,6 +830,8 @@ pending_delete_confirm = {}
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
+    if _is_duplicate_event(event):
+        return
     text = event.message.text.strip().lower()
     uid = event.source.user_id
     reply_messages = []
@@ -869,20 +881,24 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
     if reply_messages:
-        safe_reply(event, reply_messages, uid=uid)
+        safe_reply(event, reply_messages)
 
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    if _is_duplicate_event(event):
+        return
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
     user_locations[uid] = (lat, lon)
-    safe_reply(event, TextSendMessage(text="✅ 位置已更新"), uid=uid)
+    safe_reply(event, TextSendMessage(text="✅ 位置已更新"))
 
 # === Postback ===
 @handler.add(PostbackEvent)
 def handle_postback(event):
+    if _is_duplicate_event(event):
+        return
     uid = event.source.user_id
     data = event.postback.data
 
@@ -899,14 +915,14 @@ def handle_postback(event):
                 "type": "sheet"
             }
             add_to_favorites(uid, toilet)
-            safe_reply(event, TextSendMessage(text=f"✅ 已收藏 {name}"), uid=uid)
+            safe_reply(event, TextSendMessage(text=f"✅ 已收藏 {name}"))
 
         elif data.startswith("remove_fav:"):
             _, qname, lat, lon = data.split(":", 3)
             name = unquote(qname)
             success = remove_from_favorites(uid, name, lat, lon)
             msg = "✅ 已移除最愛" if success else "❌ 移除失敗"
-            safe_reply(event, TextSendMessage(text=msg), uid=uid)
+            safe_reply(event, TextSendMessage(text=msg))
 
         elif data.startswith("confirm_delete:"):
             _, qname, qaddr, lat, lon = data.split(":", 4)
@@ -921,7 +937,7 @@ def handle_postback(event):
             safe_reply(event, [
                 TextSendMessage(text=f"⚠️ 確定要刪除 {name} 嗎？（目前刪除為移除最愛）"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
-            ], uid=uid)
+            ])
     except Exception as e:
         logging.error(f"❌ 處理 postback 失敗: {e}")
 
