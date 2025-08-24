@@ -119,12 +119,49 @@ def haversine(lat1, lon1, lat2, lon2):
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === 可靠回覆：reply 失敗自動 push ===
+# === 防重複（10 秒視為重複） ===
+DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "10"))
+_RECENT_EVENTS = {}
+
+def is_duplicate_and_mark(key: str, window: int = DEDUPE_WINDOW) -> bool:
+    now = time.time()
+    ts = _RECENT_EVENTS.get(key)
+    if ts is not None and (now - ts) < window:
+        logging.info(f"🔁 skip duplicate: {key}")
+        return True
+    _RECENT_EVENTS[key] = now
+    # 偶爾清理
+    if len(_RECENT_EVENTS) > 1000:
+        for k, tstamp in list(_RECENT_EVENTS.items()):
+            if now - tstamp > window:
+                _RECENT_EVENTS.pop(k, None)
+    return False
+
+def is_redelivery(event) -> bool:
+    try:
+        dc = getattr(event, "delivery_context", None)
+        return bool(getattr(dc, "is_redelivery", False))
+    except Exception:
+        return False
+
+# === 可靠回覆：reply 失敗自動 push（但遇到重送/無效 token 就不 push，避免重複） ===
 def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
     except LineBotApiError as e:
-        logging.warning(f"reply_message 失敗，改用 push：{e}")
+        msg_txt = ""
+        try:
+            msg_txt = getattr(getattr(e, "error", None), "message", "") or str(e)
+        except Exception:
+            msg_txt = str(e)
+
+        # 重送 (redelivery) 或 token 無效，多半代表同一事件被處理過，不再 push 以免重複
+        if is_redelivery(event) or ("Invalid reply token" in msg_txt):
+            logging.warning(f"reply_message 失敗但不 push（避免重複）：{msg_txt}")
+            return
+
+        # 其它錯誤才改用 push
+        logging.warning(f"reply_message 失敗，改用 push：{msg_txt}")
         try:
             uid = getattr(event.source, "user_id", None)
             if uid:
@@ -301,8 +338,6 @@ def nearby_toilets():
     return {"toilets": all_toilets}, 200
 
 # === 顯示回饋表單（允許沒有 address） ===
-# 支援：/feedback_form/<toilet_name>/（沒有 address）
-# 也支援：/feedback_form/<toilet_name>/<address>（有 address）
 @app.route("/feedback_form/<toilet_name>/", defaults={'address': ''})
 @app.route("/feedback_form/<toilet_name>/<path:address>")
 def feedback_form(toilet_name, address):
@@ -908,8 +943,14 @@ pending_delete_confirm = {}  # {uid: {..., mode:'favorite'|'sheet_row'}}
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    text = event.message.text.strip().lower()
     uid = event.source.user_id
+    text_raw = event.message.text or ""
+    text = text_raw.strip().lower()
+
+    # 去重：同一用戶同一文字，在視窗內不重覆處理
+    if is_duplicate_and_mark(f"text|{uid}|{text}"):
+        return
+
     reply_messages = []
 
     # 刪除確認流程
@@ -982,6 +1023,12 @@ def handle_location(event):
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
+
+    # 去重：同一用戶同一座標（取 5 位小數）在視窗內不重覆處理
+    key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
+    if is_duplicate_and_mark(key):
+        return
+
     user_locations[uid] = (lat, lon)
     safe_reply(event, TextSendMessage(text="✅ 位置已更新"))
 
@@ -989,7 +1036,11 @@ def handle_location(event):
 @handler.add(PostbackEvent)
 def handle_postback(event):
     uid = event.source.user_id
-    data = event.postback.data
+    data = event.postback.data or ""
+
+    # 去重：同一用戶相同 postback data 在視窗內不重覆處理
+    if is_duplicate_and_mark(f"pb|{uid}|{data}"):
+        return
 
     try:
         if data.startswith("add:"):
@@ -1014,7 +1065,6 @@ def handle_postback(event):
             safe_reply(event, TextSendMessage(text=msg))
 
         elif data.startswith("confirm_delete:"):
-            # 原本移除最愛的流程
             _, qname, qaddr, lat, lon = data.split(":", 4)
             name = unquote(qname)
             pending_delete_confirm[uid] = {
