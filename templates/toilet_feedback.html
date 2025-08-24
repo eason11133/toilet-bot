@@ -9,6 +9,7 @@
         h2 { color: #2C3E50; margin-bottom: 6px; }
         .addr { color: #666; margin-top: 0; }
         .cleanliness-score { background-color: #e0f7fa; padding: 10px; border-left: 5px solid #00acc1; margin: 15px 0; font-weight: bold; }
+        .nowcast-box { background:#fff7e6; padding:10px; border-left:5px solid #ff9800; margin:12px 0; }
         .summary-box { background: #fff; border-radius: 8px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); white-space: pre-line; }
         .section-title { margin-top: 24px; font-weight: bold; color: #2C3E50; }
         ul { list-style-type: none; padding: 0; }
@@ -18,6 +19,7 @@
         .collapsed { display: none; }
         .no-feedback { color: #999; }
         #cleanlinessChart { width: 100%; height: 300px; margin-top: 14px; }
+        .muted { color:#888; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -26,6 +28,12 @@
 
     <div class="cleanliness-score">
         平均預測清潔分數(最高5分)：<span id="avgPredScore">未預測</span>
+    </div>
+
+    <!-- ✅ 新增：即時清潔指數 Nowcast + 95% CI -->
+    <div class="nowcast-box">
+        <div id="nowcastText">即時清潔指數載入中…</div>
+        <div class="muted">* 以上為最近回饋的即時估計，括號為 95% 信賴區間；n 為納入計算的筆數</div>
     </div>
 
     {% if summary %}
@@ -114,6 +122,7 @@
             const { lat, lon } = getLatLon();
             if (!lat || !lon) return;
 
+            // 1) 趨勢＆平均（沿用你原本的做法）
             fetch(`/get_clean_trend_by_coord/${lat}/${lon}`)
               .then(r => r.json())
               .then(data => {
@@ -153,6 +162,28 @@
               })
               .catch(err => {
                   console.error('取得趨勢資料失敗:', err);
+              });
+
+            // 2) ✅ Nowcast 即時清潔指數 + 95% CI
+            fetch(`/get_nowcast_by_coord/${lat}/${lon}`)
+              .then(r => r.json())
+              .then(data => {
+                  const box = document.getElementById('nowcastText');
+                  if (!box) return;
+                  if (!data || data.success === false || (data.n !== undefined && data.n === 0)) {
+                      box.textContent = '即時清潔指數：尚無即時資料';
+                      return;
+                  }
+                  const mean = (data.mean !== undefined) ? Number(data.mean).toFixed(2) : '—';
+                  const lower = (data.lower !== undefined) ? Number(data.lower).toFixed(2) : '—';
+                  const upper = (data.upper !== undefined) ? Number(data.upper).toFixed(2) : '—';
+                  const n = (data.n !== undefined) ? data.n : 0;
+                  box.textContent = `即時清潔指數：${mean} 分（95% CI：${lower}–${upper}，n=${n})`;
+              })
+              .catch(err => {
+                  console.error('取得 Nowcast 失敗:', err);
+                  const box = document.getElementById('nowcastText');
+                  if (box) box.textContent = '即時清潔指數：載入失敗';
               });
         })();
     </script>

@@ -21,6 +21,7 @@ from datetime import datetime
 import joblib
 import threading
 import time
+import statistics  # ✅ 新增：做 95% CI 用
 
 # 可選：安裝了 pandas 就用它避免 sklearn 特徵名稱警告；沒裝也不影響運作
 try:
@@ -408,6 +409,109 @@ def expected_from_feats(feats):
     except Exception as e:
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return None
+
+# === ✅ 新增：以最近 N 筆做「即時預測」與 95% CI ===
+def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
+    """
+    以同座標最近 k 筆回饋，計算即時乾淨度(nowcast)與 95% 信心區間。
+    先用表內「預測分數」；若缺值則用模型依 (rating, paper, access) 重算。
+    回傳 dict: {'mean':float,'lower':float,'upper':float,'n':int} 或 None
+    """
+    try:
+        rows = feedback_sheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return None
+
+        header = rows[0]
+        idx = _feedback_indices(header)
+        data = rows[1:]
+
+        if idx["lat"] is None or idx["lon"] is None:
+            return None
+
+        def close(a, b):
+            try:
+                return abs(float(a) - float(b)) <= tol
+            except:
+                return False
+
+        # 篩選同座標
+        same = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
+                same.append(r)
+
+        if not same:
+            return None
+
+        # 依建立時間倒序取最近 k 筆
+        if idx["created"] is not None:
+            same.sort(key=lambda x: x[idx["created"]], reverse=True)
+        recent = same[:k]
+
+        paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
+        access_map = {"有": 1, "沒有": 0, "沒注意": 0}
+
+        mu_vals = []
+        for r in recent:
+            mu = None
+            # 1) 先用表內的「預測分數」
+            if idx["pred"] is not None and len(r) > idx["pred"]:
+                try:
+                    mu = float((r[idx["pred"]] or "").strip())
+                except:
+                    mu = None
+            # 2) 補算
+            if mu is None and cleanliness_model is not None:
+                try:
+                    rr = None
+                    if idx["rating"] is not None and len(r) > idx["rating"]:
+                        rr = int((r[idx["rating"]] or "").strip())
+                    pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
+                    aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
+                    if rr is not None:
+                        feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
+                        mu = expected_from_feats([feat])
+                except:
+                    pass
+
+            if isinstance(mu, (int, float)):
+                mu_vals.append(float(mu))
+
+        n = len(mu_vals)
+        if n == 0:
+            return None
+
+        mean = round(sum(mu_vals) / n, 2)
+        if n == 1:
+            return {"mean": mean, "lower": mean, "upper": mean, "n": n}
+
+        try:
+            s = statistics.stdev(mu_vals)
+        except statistics.StatisticsError:
+            s = 0.0
+        se = s / (n ** 0.5)
+        lower = max(1.0, round(mean - 1.96 * se, 2))
+        upper = min(5.0, round(mean + 1.96 * se, 2))
+        return {"mean": mean, "lower": lower, "upper": upper, "n": n}
+    except Exception as e:
+        logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
+        return None
+
+# === ✅ 新增：Nowcast API（前端可呼叫） ===
+@app.route("/get_nowcast_by_coord/<lat>/<lon>")
+def get_nowcast_by_coord(lat, lon):
+    try:
+        res = compute_nowcast_ci(lat, lon)
+        if not res:
+            return {"success": True, "n": 0}, 200
+        res["success"] = True
+        return res, 200
+    except Exception as e:
+        logging.error(f"❌ Nowcast API 錯誤: {e}")
+        return {"success": False}, 500
 
 # === 回饋：寫入前先把同座標最近 N 筆也納入預測 ===
 @app.route("/submit_feedback", methods=["POST"])
