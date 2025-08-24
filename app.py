@@ -410,6 +410,20 @@ def expected_from_feats(feats):
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return None
 
+def _simple_score(rr, paper, acc):
+    """
+    評分 1~10 線性映射到 1~5，衛生紙/無障礙各 +0.25 分（上限 5）。
+    """
+    try:
+        base = 1.0 + 4.0 * (int(rr) - 1) / 9.0  # 1..10 -> 1..5
+    except Exception:
+        return None
+    bonus = (0.25 if (paper == "有") else 0.0) + (0.25 if (acc == "有") else 0.0)
+    score = base + bonus
+    if score < 1.0: score = 1.0
+    if score > 5.0: score = 5.0
+    return round(score, 2)
+
 # === ✅ 以最近 N 筆做「即時預測」與 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     """
@@ -841,8 +855,6 @@ def toilet_feedback_by_coord(lat, lon):
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
     try:
-        force_recompute = (request.args.get("recompute", "0") == "1")
-
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
             return {"success": True, "data": []}, 200
@@ -861,46 +873,81 @@ def get_clean_trend_by_coord(lat, lon):
         paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
         access_map = {"有": 1, "沒有": 0, "沒注意": 0}
 
-        matched = []
+        # 先收集同座標的原始列，之後可以重算或做備援
+        matched_rows = []
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
                 continue
-            if not (close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)):
-                continue
+            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
+                matched_rows.append(r)
 
+        if not matched_rows:
+            return {"success": True, "data": []}, 200
+
+        # 1) 優先使用模型即時計算（忽略舊的 pred 欄位）
+        recomputed = []
+        for r in matched_rows:
             created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
+            # features
+            rr = None
+            if idx["rating"] is not None and len(r) > idx["rating"]:
+                try:
+                    rr = int((r[idx["rating"]] or "").strip())
+                except:
+                    rr = None
+            pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
+            aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
 
-            # 先取現有 pred（若沒要求強制重算）
             pred_val = None
-            if not force_recompute and idx["pred"] is not None and len(r) > idx["pred"]:
+            if rr is not None and cleanliness_model is not None:
+                try:
+                    feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
+                    pred_val = expected_from_feats([feat])
+                except Exception:
+                    pred_val = None
+
+            # 2) 模型不可用時，改用舊 pred 欄位
+            if pred_val is None and idx["pred"] is not None and len(r) > idx["pred"]:
                 try:
                     pred_val = float((r[idx["pred"]] or "").strip())
                 except:
                     pred_val = None
 
-            # 需要的話就用 (rating, paper, access) 補算
-            if pred_val is None and cleanliness_model is not None:
-                try:
-                    rr = None
-                    if idx["rating"] is not None and len(r) > idx["rating"]:
-                        rr = int((r[idx["rating"]] or "").strip())
-                    pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
-                    aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
-                    if rr is not None:
-                        feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
-                        pred_val = expected_from_feats([feat])
-                except Exception as _:
-                    pred_val = None
-
+            # 3) 仍拿不到 → 用簡易推估（一定會跟著評分變）
             if pred_val is None:
-                continue
+                pred_val = _simple_score(rr, pp, aa)
 
-            matched.append((created, float(pred_val)))
+            if isinstance(pred_val, (int, float)):
+                recomputed.append((created, float(pred_val)))
 
-        matched.sort(key=lambda t: t[0])
+        if not recomputed:
+            return {"success": True, "data": []}, 200
 
-        out = [{"score": round(p, 2)} for _, p in matched]
+        # 4) 如果整串分數幾乎一樣（模型給常數），強制用簡易推估重算一次避免「一條直線」
+        vals = [p for _, p in recomputed]
+        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
+            forced = []
+            for r in matched_rows:
+                created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
+                rr = None
+                if idx["rating"] is not None and len(r) > idx["rating"]:
+                    try:
+                        rr = int((r[idx["rating"]] or "").strip())
+                    except:
+                        rr = None
+                pp = (r[idx["paper"]] or "").strip() if idx["paper"] is not None and len(r) > idx["paper"] else "沒注意"
+                aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
+                sc = _simple_score(rr, pp, aa)
+                if sc is not None:
+                    forced.append((created, sc))
+            if forced:
+                recomputed = forced
+
+        # 5) 依建立時間排序輸出
+        recomputed.sort(key=lambda t: t[0])
+        out = [{"score": round(p, 2)} for _, p in recomputed]
         return {"success": True, "data": out}, 200
+
     except Exception as e:
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
