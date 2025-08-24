@@ -124,12 +124,10 @@ def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
     except LineBotApiError as e:
-        # 常見：Invalid reply token（重送、過期）
         logging.warning(f"reply_message 失敗，改用 push：{e}")
         try:
             uid = getattr(event.source, "user_id", None)
             if uid:
-                # push 接受單一或 list
                 line_bot_api.push_message(uid, messages)
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
@@ -790,8 +788,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"add:{quote(toilet['name'])}:{lat_s}:{lon_s}"
             })
 
-        # user 自己資料的刪除在「我的貢獻」卡做；這裡不顯示
-
         bubble = {
             "type": "bubble",
             "body": {
@@ -799,7 +795,8 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "layout": "vertical",
                 "contents": [
                     {"type": "text", "text": toilet['name'], "weight": "bold", "size": "lg", "wrap": True},
-                    {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#556", "wrap": True},
+                    # 改為 6 碼色碼
+                    {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
                     {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
                     {"type": "text", "text": f"{int(toilet['distance'])} 公尺", "size": "sm", "color": "#999999"}
                 ]
@@ -867,8 +864,9 @@ def create_my_contrib_flex(uid):
             "body":{
                 "type":"box","layout":"vertical","contents":[
                     {"type":"text","text":it["name"],"size":"lg","weight":"bold","wrap":True},
-                    {"type":"text","text":it.get("address") or "（無地址）","size":"sm","color":"#666","wrap":True},
-                    {"type":"text","text":f"{it['created']}", "size":"xs","color":"#999"}
+                    # 改為 6 碼色碼
+                    {"type":"text","text":it.get("address") or "（無地址）","size":"sm","color":"#666666","wrap":True},
+                    {"type":"text","text":f"{it['created']}", "size":"xs","color":"#999999"}
                 ]
             },
             "footer":{
