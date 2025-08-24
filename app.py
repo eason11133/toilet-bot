@@ -5,7 +5,6 @@ import logging
 import requests
 import traceback
 from math import radians, cos, sin, asin, sqrt
-from collections import OrderedDict
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for
 from dotenv import load_dotenv
@@ -120,7 +119,7 @@ def haversine(lat1, lon1, lat2, lon2):
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === 可靠回覆：reply 失敗自動 push（且配合事件去重避免重覆推送） ===
+# === 可靠回覆：reply 失敗自動 push ===
 def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
@@ -132,37 +131,6 @@ def safe_reply(event, messages):
                 line_bot_api.push_message(uid, messages)
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
-
-# === 事件去重（避免 LINE 重送/重複觸發） ===
-RECENT_EVENT_TTL = int(os.getenv("DEDUP_TTL", "90"))
-_recent_events: "OrderedDict[str, float]" = OrderedDict()
-_recent_commands = {}  # {uid: {"cmd": str, "ts": float}}
-
-def _purge_recent():
-    now = time.time()
-    stale = [k for k, ts in _recent_events.items() if now - ts > RECENT_EVENT_TTL]
-    for k in stale:
-        _recent_events.pop(k, None)
-    # 限制大小
-    while len(_recent_events) > 2000:
-        _recent_events.popitem(last=False)
-
-def mark_or_skip(key: str) -> bool:
-    """回傳 True 代表這是重複事件，應略過。"""
-    _purge_recent()
-    if key in _recent_events:
-        return True
-    _recent_events[key] = time.time()
-    return False
-
-def command_cooldown(uid: str, cmd: str, seconds: int) -> bool:
-    """在 seconds 內同一使用者的同一指令不再回覆；True 表示應該略過。"""
-    now = time.time()
-    rec = _recent_commands.get(uid)
-    if rec and rec.get("cmd") == cmd and now - rec.get("ts", 0) < seconds:
-        return True
-    _recent_commands[uid] = {"cmd": cmd, "ts": now}
-    return False
 
 # === 從 Google Sheets 查使用者新增廁所（唯一來源） ===
 def query_sheet_toilets(user_lat, user_lon, radius=500):
@@ -332,9 +300,13 @@ def nearby_toilets():
         return {"message": "附近找不到廁所"}, 404
     return {"toilets": all_toilets}, 200
 
-# === 顯示回饋表單 ===
-@app.route("/feedback_form/<toilet_name>/<address>")
+# === 顯示回饋表單（允許沒有 address） ===
+# 支援：/feedback_form/<toilet_name>/（沒有 address）
+# 也支援：/feedback_form/<toilet_name>/<address>（有 address）
+@app.route("/feedback_form/<toilet_name>/", defaults={'address': ''})
+@app.route("/feedback_form/<toilet_name>/<path:address>")
 def feedback_form(toilet_name, address):
+    address = address or request.args.get("address", "")
     return render_template(
         "feedback_form.html",
         toilet_name=toilet_name,
@@ -603,7 +575,6 @@ def build_feedback_index():
             except Exception:
                 continue
             rec = result.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "scores":[]})
-            # 累積
             if idx["paper"] is not None and len(r) > idx["paper"]:
                 p = (r[idx["paper"]] or "").strip()
                 if p in rec["paper"]: rec["paper"][p] += 1
@@ -613,7 +584,6 @@ def build_feedback_index():
             if idx["pred"] is not None and len(r) > idx["pred"]:
                 try: rec["scores"].append(float((r[idx["pred"]] or "").strip()))
                 except: pass
-        # 收斂為多數派
         out = {}
         for key, v in result.items():
             paper = "有" if v["paper"]["有"] >= v["paper"]["沒有"] and sum(v["paper"].values())>0 else ("沒有" if sum(v["paper"].values())>0 else "?")
@@ -680,10 +650,8 @@ def toilet_feedback(toilet_name):
             score_sum = 0.0; valid = 0
             for r in matched:
                 if idx["pred"] is not None and len(r) > idx["pred"]:
-                    try:
-                        score_sum += float((r[idx["pred"]] or "").strip()); valid += 1
-                    except:
-                        pass
+                    try: score_sum += float((r[idx["pred"]] or "").strip()); valid += 1
+                    except: pass
                 if idx["paper"] is not None and len(r) > idx["paper"]:
                     p = (r[idx["paper"]] or "").strip()
                     if p in paper_counts: paper_counts[p] += 1
@@ -796,15 +764,16 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             "label": "查詢回饋（座標）",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
-        # ✅ 填回饋（帶座標）
-        addr_param = quote(toilet.get('address') or "")
+        # ✅ 填回饋（帶座標；address 後備）
+        addr_raw = toilet.get('address') or ""
+        addr_param = quote(addr_raw or "-")  # 沒地址用 - 佔位避免 404
         actions.append({
             "type": "uri",
             "label": "廁所回饋",
             "uri": (
                 "https://school-i9co.onrender.com/feedback_form/"
                 f"{quote(toilet['name'])}/{addr_param}"
-                f"?lat={lat_s}&lon={lon_s}"
+                f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
             )
         })
 
@@ -886,10 +855,16 @@ def create_my_contrib_flex(uid):
     bubbles = []
     for it in contribs[:10]:
         lat_s = norm_coord(it["lat"]); lon_s = norm_coord(it["lon"])
+        addr_raw = it.get('address','') or ""
+        addr_param = quote(addr_raw or "-")
         actions = [
             {"type":"uri","label":"導航","uri":f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"},
             {"type":"uri","label":"查詢回饋（座標）","uri":f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"},
-            {"type":"uri","label":"廁所回饋","uri":f"https://school-i9co.onrender.com/feedback_form/{quote(it['name'])}/{quote(it.get('address',''))}?lat={lat_s}&lon={lon_s}"},
+            {"type":"uri","label":"廁所回饋",
+             "uri":(
+                f"https://school-i9co.onrender.com/feedback_form/{quote(it['name'])}/{addr_param}"
+                f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
+             )},
             {"type":"postback","label":"刪除此貢獻","data":f"confirm_delete_my_toilet:{it['row_index']}"}
         ]
         bubble = {
@@ -933,11 +908,6 @@ pending_delete_confirm = {}  # {uid: {..., mode:'favorite'|'sheet_row'}}
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    # 事件去重（用 message.id）
-    mid = getattr(event.message, "id", None)
-    if mid and mark_or_skip(f"M:{mid}"):
-        return
-
     text = event.message.text.strip().lower()
     uid = event.source.user_id
     reply_messages = []
@@ -966,9 +936,6 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
     elif text == "附近廁所":
-        # 指令節流：10 秒內重複同指令就不回
-        if command_cooldown(uid, "nearby", 10):
-            return
         if uid not in user_locations:
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
@@ -981,8 +948,6 @@ def handle_text(event):
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
 
     elif text == "我的最愛":
-        if command_cooldown(uid, "favorites", 5):
-            return
         favs = get_user_favorites(uid)
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
@@ -995,8 +960,6 @@ def handle_text(event):
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     elif text == "我的貢獻":
-        if command_cooldown(uid, "mine", 5):
-            return
         msg = create_my_contrib_flex(uid)
         if msg:
             reply_messages.append(FlexSendMessage("我新增的廁所", msg))
@@ -1016,11 +979,6 @@ def handle_text(event):
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
-    # 事件去重（用 message.id）
-    mid = getattr(event.message, "id", None)
-    if mid and mark_or_skip(f"M:{mid}"):
-        return
-
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
@@ -1032,10 +990,6 @@ def handle_location(event):
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
-
-    # 事件去重（用 user_id + data）
-    if mark_or_skip(f"P:{uid}:{data}"):
-        return
 
     try:
         if data.startswith("add:"):
@@ -1060,6 +1014,7 @@ def handle_postback(event):
             safe_reply(event, TextSendMessage(text=msg))
 
         elif data.startswith("confirm_delete:"):
+            # 原本移除最愛的流程
             _, qname, qaddr, lat, lon = data.split(":", 4)
             name = unquote(qname)
             pending_delete_confirm[uid] = {
