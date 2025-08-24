@@ -5,6 +5,7 @@ import logging
 import requests
 import traceback
 from math import radians, cos, sin, asin, sqrt
+from collections import OrderedDict
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for
 from dotenv import load_dotenv
@@ -119,7 +120,7 @@ def haversine(lat1, lon1, lat2, lon2):
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === 可靠回覆：reply 失敗自動 push ===
+# === 可靠回覆：reply 失敗自動 push（且配合事件去重避免重覆推送） ===
 def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
@@ -131,6 +132,37 @@ def safe_reply(event, messages):
                 line_bot_api.push_message(uid, messages)
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
+
+# === 事件去重（避免 LINE 重送/重複觸發） ===
+RECENT_EVENT_TTL = int(os.getenv("DEDUP_TTL", "90"))
+_recent_events: "OrderedDict[str, float]" = OrderedDict()
+_recent_commands = {}  # {uid: {"cmd": str, "ts": float}}
+
+def _purge_recent():
+    now = time.time()
+    stale = [k for k, ts in _recent_events.items() if now - ts > RECENT_EVENT_TTL]
+    for k in stale:
+        _recent_events.pop(k, None)
+    # 限制大小
+    while len(_recent_events) > 2000:
+        _recent_events.popitem(last=False)
+
+def mark_or_skip(key: str) -> bool:
+    """回傳 True 代表這是重複事件，應略過。"""
+    _purge_recent()
+    if key in _recent_events:
+        return True
+    _recent_events[key] = time.time()
+    return False
+
+def command_cooldown(uid: str, cmd: str, seconds: int) -> bool:
+    """在 seconds 內同一使用者的同一指令不再回覆；True 表示應該略過。"""
+    now = time.time()
+    rec = _recent_commands.get(uid)
+    if rec and rec.get("cmd") == cmd and now - rec.get("ts", 0) < seconds:
+        return True
+    _recent_commands[uid] = {"cmd": cmd, "ts": now}
+    return False
 
 # === 從 Google Sheets 查使用者新增廁所（唯一來源） ===
 def query_sheet_toilets(user_lat, user_lon, radius=500):
@@ -648,8 +680,10 @@ def toilet_feedback(toilet_name):
             score_sum = 0.0; valid = 0
             for r in matched:
                 if idx["pred"] is not None and len(r) > idx["pred"]:
-                    try: score_sum += float((r[idx["pred"]] or "").strip()); valid += 1
-                    except: pass
+                    try:
+                        score_sum += float((r[idx["pred"]] or "").strip()); valid += 1
+                    except:
+                        pass
                 if idx["paper"] is not None and len(r) > idx["paper"]:
                     p = (r[idx["paper"]] or "").strip()
                     if p in paper_counts: paper_counts[p] += 1
@@ -795,7 +829,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "layout": "vertical",
                 "contents": [
                     {"type": "text", "text": toilet['name'], "weight": "bold", "size": "lg", "wrap": True},
-                    # 改為 6 碼色碼
                     {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
                     {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
                     {"type": "text", "text": f"{int(toilet['distance'])} 公尺", "size": "sm", "color": "#999999"}
@@ -864,7 +897,6 @@ def create_my_contrib_flex(uid):
             "body":{
                 "type":"box","layout":"vertical","contents":[
                     {"type":"text","text":it["name"],"size":"lg","weight":"bold","wrap":True},
-                    # 改為 6 碼色碼
                     {"type":"text","text":it.get("address") or "（無地址）","size":"sm","color":"#666666","wrap":True},
                     {"type":"text","text":f"{it['created']}", "size":"xs","color":"#999999"}
                 ]
@@ -901,6 +933,11 @@ pending_delete_confirm = {}  # {uid: {..., mode:'favorite'|'sheet_row'}}
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
+    # 事件去重（用 message.id）
+    mid = getattr(event.message, "id", None)
+    if mid and mark_or_skip(f"M:{mid}"):
+        return
+
     text = event.message.text.strip().lower()
     uid = event.source.user_id
     reply_messages = []
@@ -929,6 +966,9 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
     elif text == "附近廁所":
+        # 指令節流：10 秒內重複同指令就不回
+        if command_cooldown(uid, "nearby", 10):
+            return
         if uid not in user_locations:
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
@@ -941,6 +981,8 @@ def handle_text(event):
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
 
     elif text == "我的最愛":
+        if command_cooldown(uid, "favorites", 5):
+            return
         favs = get_user_favorites(uid)
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
@@ -953,6 +995,8 @@ def handle_text(event):
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     elif text == "我的貢獻":
+        if command_cooldown(uid, "mine", 5):
+            return
         msg = create_my_contrib_flex(uid)
         if msg:
             reply_messages.append(FlexSendMessage("我新增的廁所", msg))
@@ -972,6 +1016,11 @@ def handle_text(event):
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    # 事件去重（用 message.id）
+    mid = getattr(event.message, "id", None)
+    if mid and mark_or_skip(f"M:{mid}"):
+        return
+
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
@@ -983,6 +1032,10 @@ def handle_location(event):
 def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data
+
+    # 事件去重（用 user_id + data）
+    if mark_or_skip(f"P:{uid}:{data}"):
+        return
 
     try:
         if data.startswith("add:"):
@@ -1007,7 +1060,6 @@ def handle_postback(event):
             safe_reply(event, TextSendMessage(text=msg))
 
         elif data.startswith("confirm_delete:"):
-            # 原本移除最愛的流程
             _, qname, qaddr, lat, lon = data.split(":", 4)
             name = unquote(qname)
             pending_delete_confirm[uid] = {
