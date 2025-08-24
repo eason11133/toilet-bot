@@ -2,90 +2,169 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
-  <title>{{ toilet_name }} 回饋概覽</title>
+  <title>新增廁所</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background:#f4f4f9; color:#333; }
-    h2 { color:#2C3E50; margin-bottom:8px; }
-    .card { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); padding:16px; max-width:720px; }
-    .summary { white-space:pre-line; line-height:1.7; }
-    #chartWrap { margin-top:20px; }
-    #cleanlinessChart { width:100%; height:320px; }
-    .muted { color:#999; }
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #2c3e50;
+      --muted: #6b7280;
+      --primary: #3498db;
+      --primary-hover: #2980b9;
+      --ok: #16a34a;
+      --err: #dc2626;
+      --shadow: 0 2px 6px rgba(0,0,0,.08);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    }
+    .wrap {
+      max-width: 720px; margin: 0 auto;
+    }
+    h1 {
+      font-size: 28px; margin: 0 0 10px;
+      letter-spacing: .5px;
+    }
+    p.sub {
+      margin: 0 0 18px; color: var(--muted);
+    }
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    label { display: block; margin: 14px 0 6px; font-weight: 600; }
+    input[type="text"], textarea {
+      width: 100%; padding: 10px 12px;
+      border: 1px solid #d1d5db; border-radius: 10px;
+      font-size: 16px; background: #fff;
+    }
+    .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+    @media (min-width: 640px) { .row.two { grid-template-columns: 1fr 1fr; } }
+
+    button {
+      margin-top: 18px;
+      background: var(--primary); color: #fff;
+      border: none; border-radius: 10px;
+      padding: 12px 18px; font-size: 16px;
+      cursor: pointer;
+    }
+    button:hover { background: var(--primary-hover); }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .msg { margin-top: 14px; padding: 10px 12px; border-radius: 10px; display: none; }
+    .msg.ok { background: #ecfdf5; color: var(--ok); display: block; }
+    .msg.err { background: #fef2f2; color: var(--err); display: block; }
+
+    .footer-note {
+      margin-top: 16px; color: var(--muted); font-size: 13px;
+    }
   </style>
 </head>
 <body>
-  <h2>{{ toilet_name }}</h2>
+  <div class="wrap">
+    <h1>新增廁所</h1>
+    <p class="sub">填寫名稱與地址即可建立，地址會由系統自動轉為座標。</p>
 
-  <div class="card">
-    <div class="summary">{{ summary }}</div>
+    <div class="card">
+      <form id="toiletForm" autocomplete="on">
+        <div class="row two">
+          <div>
+            <label for="name">廁所名稱 <span style="color:#ef4444">*</span></label>
+            <input id="name" name="name" type="text" placeholder="例如：五常公園 公廁" required />
+          </div>
+          <div>
+            <label for="user_id">你的使用者 ID（可留空）</label>
+            <input id="user_id" name="user_id" type="text" placeholder="例如：你的 LINE UID / 暱稱" />
+            <div class="hint">若留空，系統會以 <code>web</code> 作為預設 ID。</div>
+          </div>
+        </div>
 
-    <div id="chartWrap">
-      <canvas id="cleanlinessChart"></canvas>
+        <label for="address">地址 <span style="color:#ef4444">*</span></label>
+        <input id="address" name="address" type="text" placeholder="請輸入完整地址，例如：新北市三重區五華街7巷30號" required />
+        <div class="hint">地址越完整越好，便於成功轉換經緯度。</div>
+
+        <button type="submit" id="submitBtn">送出</button>
+        <div id="msg" class="msg"></div>
+
+        <div class="footer-note">送出後，會寫入 Google 試算表主資料；經緯度由系統自動轉換。</div>
+      </form>
     </div>
-    <div id="chartNote" class="muted"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     (function () {
-      const chartEl = document.getElementById('cleanlinessChart');
-      const noteEl = document.getElementById('chartNote');
+      const $ = (sel) => document.querySelector(sel);
+      const form = $("#toiletForm");
+      const btn = $("#submitBtn");
+      const msg = $("#msg");
+      const uidInput = $("#user_id");
 
-      // 根據目前路由決定使用名稱版或座標版 API
-      const path = window.location.pathname;
-      let api = null;
+      // 帶入上次使用的 UID（若有）
+      try {
+        const saved = localStorage.getItem("toilet_uid");
+        if (saved && !uidInput.value) uidInput.value = saved;
+      } catch (e) {}
 
-      if (path.startsWith('/toilet_feedback_by_coord/')) {
-        // /toilet_feedback_by_coord/<lat>/<lon>
-        const [_, __, lat, lon] = path.split('/');
-        api = `/get_clean_trend_by_coord/${lat}/${lon}`;
-      } else if (path.startsWith('/toilet_feedback/')) {
-        // /toilet_feedback/<toilet_name>
-        // 後端同頁渲染，直接帶模板變數比較保險（避免 URL 編碼問題）
-        const name = encodeURIComponent(`{{ toilet_name }}`);
-        api = `/get_clean_trend/${name}`;
-      }
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
 
-      if (!api) {
-        noteEl.textContent = '（無法判定路由類型，未載入趨勢圖）';
-        return;
-      }
+        const name = $("#name").value.trim();
+        const address = $("#address").value.trim();
+        let user_id = uidInput.value.trim() || "web"; // 預設 web
 
-      fetch(api)
-        .then(r => r.json())
-        .then(json => {
-          if (!json || !json.data || json.data.length === 0) {
-            noteEl.textContent = '（目前無法提供清潔度趨勢圖）';
-            return;
-          }
-          const labels = json.data.map((_, i) => `#${i + 1}`);
-          const scores = json.data.map(d => d.score);
+        if (!name || !address) {
+          showErr("請先填寫『廁所名稱』與『地址』");
+          return;
+        }
 
-          new Chart(chartEl.getContext('2d'), {
-            type: 'line',
-            data: {
-              labels,
-              datasets: [{
-                label: '清潔度預測',
-                data: scores,
-                borderColor: 'rgba(75, 192, 192, 1)',
-                fill: false,
-                tension: 0.25
-              }]
-            },
-            options: {
-              responsive: true,
-              scales: {
-                x: { title: { display: true, text: '回饋次數' } },
-                y: { min: 1, max: 5, title: { display: true, text: '清潔度（1~5）' } }
-              }
-            }
+        // 持久化 UID
+        try { localStorage.setItem("toilet_uid", user_id); } catch (e) {}
+
+        btn.disabled = true; btn.textContent = "送出中…";
+
+        try {
+          const res = await fetch("/submit_toilet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id, name, address })
           });
-        })
-        .catch(() => {
-          noteEl.textContent = '（趨勢資料載入失敗）';
-        });
+          const data = await res.json().catch(() => ({}));
+
+          if (res.ok && data && data.success) {
+            showOk(data.message || "✅ 已新增，感謝補點！");
+            // 清除名稱與地址（保留 UID）
+            $("#name").value = "";
+            $("#address").value = "";
+          } else {
+            showErr((data && data.message) || "新增失敗，請稍後再試");
+          }
+        } catch (err) {
+          showErr("網路或伺服器異常，請稍後重試");
+        } finally {
+          btn.disabled = false; btn.textContent = "送出";
+        }
+      });
+
+      function showOk(text) {
+        msg.className = "msg ok";
+        msg.textContent = text;
+        msg.style.display = "block";
+      }
+      function showErr(text) {
+        msg.className = "msg err";
+        msg.textContent = "❌ " + text;
+        msg.style.display = "block";
+      }
     })();
   </script>
 </body>
