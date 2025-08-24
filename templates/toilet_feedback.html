@@ -123,7 +123,7 @@
             if (!lat || !lon) return;
 
             // 1) 趨勢＆平均（沿用你原本的做法）
-            fetch(`/get_clean_trend_by_coord/${lat}/${lon}`)
+            fetch(`/get_clean_trend_by_coord/${lat}/${lon}?recompute=1`)
               .then(r => r.json())
               .then(data => {
                   const arr = (data && data.data) ? data.data : [];
