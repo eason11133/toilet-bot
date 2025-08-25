@@ -254,7 +254,7 @@ def query_overpass_toilets(lat, lon, radius=500):
             return sorted(toilets, key=lambda x: x["distance"])
         except Exception as e:
             last_err = e
-            logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
+            logging.warning(f"Overpass API 查詢失敗（endpoint {idx}: {e}")
 
     logging.error(f"Overpass 全部端點失敗：{last_err}")
     return []
@@ -461,11 +461,27 @@ def _pred_from_row(r, idx):
 
     return (score, rr, pp, aa)
 
+# === ✅ 平滑公式：前 4 筆平均 + 本次，再除以 2 ===
+def _apply_smoothing(preds, window=4):
+    """
+    每一筆的最終分數 = (前 window 筆的「原始預測」平均 + 當筆原始預測) / 2
+    若前面沒有資料就用當筆原始預測；不足 window 就用有的。
+    """
+    out = []
+    for i, p in enumerate(preds):
+        prev = preds[max(0, i - window):i]
+        if prev:
+            sm = (sum(prev) / len(prev) + p) / 2.0
+        else:
+            sm = p
+        out.append(round(sm, 2))
+    return out
+
 # === ✅ 以最近 N 筆做「即時預測」與 95% CI（一致化） ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     """
     最近 k 筆同座標的即時乾淨度(nowcast)與 95% CI。
-    使用 _pred_from_row 確保邏輯一致；若幾乎常數，退回簡易推估避免直線。
+    使用 _pred_from_row 確保邏輯一致。
     """
     try:
         rows = feedback_sheet.get_all_values()
@@ -502,17 +518,6 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
                 vals.append(float(sc))
         if not vals:
             return None
-
-        # 幾乎常數 → 改用簡易推估
-        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
-            vals = []
-            for r in recent:
-                sc, rr, pp, aa = _pred_from_row(r, idx)
-                sc2 = _simple_score(rr, pp, aa)
-                if sc2 is not None:
-                    vals.append(sc2)
-            if not vals:
-                return None
 
         mean = round(sum(vals) / len(vals), 2)
         if len(vals) == 1:
@@ -659,7 +664,7 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 讀取回饋列表（座標）錯誤: {e}")
         return []
 
-# === 以座標聚合的統計（摘要）— 分數一致化 ===
+# === 以座標聚合的統計（摘要）— 使用平滑規則 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     try:
         rows = feedback_sheet.get_all_values()
@@ -689,13 +694,14 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
         paper_counts = {"有": 0, "沒有": 0}
         access_counts = {"有": 0, "沒有": 0}
-        scores = []
+        rows_for_avg = []
         comments = []
 
         for r in matched:
             sc, rr, pp, aa = _pred_from_row(r, idx)
+            created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
             if isinstance(sc, (int, float)):
-                scores.append(float(sc))
+                rows_for_avg.append((created, float(sc)))
             if pp in paper_counts: paper_counts[pp] += 1
             if aa in access_counts: access_counts[aa] += 1
             if idx["comment"] is not None and len(r) > idx["comment"]:
@@ -703,7 +709,10 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
                 if c:
                     comments.append(c)
 
-        avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
+        rows_for_avg.sort(key=lambda t: t[0])
+        raw = [p for _, p in rows_for_avg]
+        smoothed = _apply_smoothing(raw) if raw else []
+        avg_score = round(sum(smoothed) / len(smoothed), 2) if smoothed else "未預測"
 
         summary = f"🔍 筆數：{len(matched)}\n"
         summary += f"🧼 平均清潔分數：{avg_score}\n"
@@ -716,9 +725,9 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
-# === 建清單：同座標的指示燈（🧻/♿/⭐）— 分數一致化 ===
+# === 建清單：同座標的指示燈（🧻/♿/⭐）— 用平滑後平均 ===
 def build_feedback_index():
-    """回傳 {(lat_s,lon_s): {'paper':'有/沒有/?','access':'有/沒有/?','avg':float or None}}，分數用一致邏輯重算。"""
+    """回傳 {(lat_s,lon_s): {'paper':'有/沒有/?','access':'有/沒有/?','avg':float or None}}，分數以時間排序後做平滑，再取平均。"""
     result = {}
     try:
         rows = feedback_sheet.get_all_values()
@@ -734,17 +743,21 @@ def build_feedback_index():
                 lon_s = norm_coord(r[idx["lon"]])
             except Exception:
                 continue
-            rec = bucket.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "scores":[]})
+            rec = bucket.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "rows":[]})
             sc, rr, pp, aa = _pred_from_row(r, idx)
+            created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
             if pp in rec["paper"]: rec["paper"][pp] += 1
             if aa in rec["access"]: rec["access"][aa] += 1
-            if isinstance(sc, (int, float)): rec["scores"].append(float(sc))
+            if isinstance(sc, (int, float)): rec["rows"].append((created, float(sc)))
 
         out = {}
         for key, v in bucket.items():
             paper = "有" if v["paper"]["有"] >= v["paper"]["沒有"] and sum(v["paper"].values())>0 else ("沒有" if sum(v["paper"].values())>0 else "?")
             access = "有" if v["access"]["有"] >= v["access"]["沒有"] and sum(v["access"].values())>0 else ("沒有" if sum(v["access"].values())>0 else "?")
-            avg = round(sum(v["scores"])/len(v["scores"]),2) if v["scores"] else None
+            v["rows"].sort(key=lambda t: t[0])
+            raw = [p for _, p in v["rows"]]
+            smoothed = _apply_smoothing(raw) if raw else []
+            avg = round(sum(smoothed)/len(smoothed),2) if smoothed else None
             out[key] = {"paper": paper, "access": access, "avg": avg}
         return out
     except Exception as e:
@@ -780,15 +793,15 @@ def toilet_feedback(toilet_name):
                    if len(r) > idx["address"] and (r[idx["address"]] or "").strip() == address.strip()]
 
         fbs = []
-        nums = []
+        rows_for_avg = []
         for r in matched:
             def val(k):
                 i = idx[k]
                 return (r[i] if i is not None and len(r) > i else "").strip()
-            # 用一致邏輯
             sc, rr, pp, aa = _pred_from_row(r, idx)
-            try: nums.append(float(sc))
-            except: pass
+            created = val("created")
+            if isinstance(sc, (int, float)):
+                rows_for_avg.append((created, float(sc)))
             fbs.append({
                 "rating": val("rating"),
                 "toilet_paper": val("paper"),
@@ -796,10 +809,14 @@ def toilet_feedback(toilet_name):
                 "time_of_use": val("time"),
                 "comment": val("comment"),
                 "cleanliness_score": str(sc) if sc is not None else "",
-                "created_at": val("created"),
+                "created_at": created,
             })
         fbs.sort(key=lambda d: d.get("created_at",""), reverse=True)
-        avg_pred_score = round(sum(nums)/len(nums), 2) if nums else "未預測"
+
+        rows_for_avg.sort(key=lambda t: t[0])
+        raw = [p for _, p in rows_for_avg]
+        smoothed = _apply_smoothing(raw) if raw else []
+        avg_pred_score = round(sum(smoothed)/len(smoothed), 2) if smoothed else "未預測"
 
         if matched:
             paper_counts = {"有": 0, "沒有": 0}
@@ -821,7 +838,7 @@ def toilet_feedback(toilet_name):
         logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
 
-# === 新路由：座標版（上方藍色平均也改成一致邏輯） ===
+# === 新路由：座標版（平均用平滑規則） ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
     try:
@@ -829,7 +846,7 @@ def toilet_feedback_by_coord(lat, lon):
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)
 
-        # 重新計算藍色框平均（一致邏輯）
+        # 重新計算藍色框平均（排序→平滑→平均）
         rows = feedback_sheet.get_all_values()
         header = rows[0]; data = rows[1:]
         idx = _feedback_indices(header)
@@ -838,15 +855,20 @@ def toilet_feedback_by_coord(lat, lon):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
-        scores = []
+        rows_for_avg = []
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
                 continue
             if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
                 sc, _, _, _ = _pred_from_row(r, idx)
-                if isinstance(sc, (int, float)):
-                    scores.append(float(sc))
-        avg_pred_score = round(sum(scores)/len(scores), 2) if scores else "未預測"
+                created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
+                if isinstance(sc, (int,float)):
+                    rows_for_avg.append((created, float(sc)))
+
+        rows_for_avg.sort(key=lambda t: t[0])
+        raw = [p for _, p in rows_for_avg]
+        smoothed = _apply_smoothing(raw) if raw else []
+        avg_pred_score = round(sum(smoothed)/len(smoothed), 2) if smoothed else "未預測"
 
         return render_template(
             "toilet_feedback.html",
@@ -862,7 +884,7 @@ def toilet_feedback_by_coord(lat, lon):
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
-# === 清潔度趨勢 API（座標）— 分數一致化 ===
+# === 清潔度趨勢 API（座標）— 先重算再平滑 ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
     try:
@@ -881,43 +903,25 @@ def get_clean_trend_by_coord(lat, lon):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
-        matched_rows = []
+        matched = []
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
                 continue
             if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                matched_rows.append(r)
-
-        if not matched_rows:
-            return {"success": True, "data": []}, 200
-
-        recomputed = []
-        for r in matched_rows:
-            created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            if sc is None:
-                sc = _simple_score(rr, pp, aa)
-            if isinstance(sc, (int, float)):
-                recomputed.append((created, float(sc)))
-
-        if not recomputed:
-            return {"success": True, "data": []}, 200
-
-        # 若幾乎一條直線 → 強制用簡易推估再跑一次
-        vals = [p for _, p in recomputed]
-        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
-            forced = []
-            for r in matched_rows:
                 created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-                _, rr, pp, aa = _pred_from_row(r, idx)
-                sc2 = _simple_score(rr, pp, aa)
-                if sc2 is not None:
-                    forced.append((created, float(sc2)))
-            if forced:
-                recomputed = forced
+                sc, rr, pp, aa = _pred_from_row(r, idx)
+                if sc is None:
+                    sc = _simple_score(rr, pp, aa)
+                if isinstance(sc, (int, float)):
+                    matched.append((created, float(sc)))
 
-        recomputed.sort(key=lambda t: t[0])
-        out = [{"score": round(p, 2)} for _, p in recomputed]
+        if not matched:
+            return {"success": True, "data": []}, 200
+
+        matched.sort(key=lambda t: t[0])
+        raw = [p for _, p in matched]
+        smoothed = _apply_smoothing(raw)
+        out = [{"score": v} for v in smoothed]
         return {"success": True, "data": out}, 200
 
     except Exception as e:
