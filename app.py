@@ -22,6 +22,7 @@ import joblib
 import threading
 import time
 import statistics  # ✅ 95% CI 用
+from difflib import SequenceMatcher  # ✅ 去重用
 
 # 可選：有 pandas 就用，避免 sklearn 特徵名稱警告；沒裝也不影響運作
 try:
@@ -40,7 +41,7 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 # 檔案
 DATA_DIR = os.path.join(os.getcwd(), "data")
-TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 備份用
+TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 公家資料（也被你當備份用）
 FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")
 os.makedirs(DATA_DIR, exist_ok=True)
 if not os.path.exists(FAVORITES_FILE_PATH):
@@ -80,7 +81,7 @@ def load_label_encoder():
 cleanliness_model = load_cleanliness_model()
 label_encoder = load_label_encoder()
 
-# === 參數：一起計算預測時納入的「最近回饋筆數」 ===
+# === 參數 ===
 LAST_N_HISTORY = 5
 
 # === 工具：座標標準化 ===
@@ -131,7 +132,6 @@ def is_duplicate_and_mark(key: str, window: int = DEDUPE_WINDOW) -> bool:
         logging.info(f"🔁 skip duplicate: {key}")
         return True
     _RECENT_EVENTS[key] = now
-    # 偶爾清理
     if len(_RECENT_EVENTS) > 1000:
         for k, tstamp in list(_RECENT_EVENTS.items()):
             if now - tstamp > window:
@@ -145,7 +145,6 @@ def is_redelivery(event) -> bool:
     except Exception:
         return False
 
-# === 可靠回覆：reply 失敗自動 push（但遇到重送/無效 token 就不 push，避免重複） ===
 def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
@@ -155,13 +154,9 @@ def safe_reply(event, messages):
             msg_txt = getattr(getattr(e, "error", None), "message", "") or str(e)
         except Exception:
             msg_txt = str(e)
-
-        # 重送或無效 token → 多半同一事件已處理過，不再 push 以免重複
         if is_redelivery(event) or ("Invalid reply token" in msg_txt):
             logging.warning(f"reply_message 失敗但不 push（避免重複）：{msg_txt}")
             return
-
-        # 其它錯誤才改用 push
         logging.warning(f"reply_message 失敗，改用 push：{msg_txt}")
         try:
             uid = getattr(event.source, "user_id", None)
@@ -170,11 +165,11 @@ def safe_reply(event, messages):
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
 
-# === 從 Google Sheets 查使用者新增廁所（唯一來源） ===
+# === 從 Google Sheets 查使用者新增廁所 ===
 def query_sheet_toilets(user_lat, user_lon, radius=500):
     toilets = []
     try:
-        rows = worksheet.get_all_values()  # 欄位：[user_id,name,address,lat,lon,timestamp]
+        rows = worksheet.get_all_values()
         data = rows[1:]
         for row in data:
             if len(row) < 5:
@@ -211,9 +206,9 @@ def query_overpass_toilets(lat, lon, radius=500):
     out center;
     """
     endpoints = [
-        "https://overpass-api.de/api/interpreter"
-        ,"https://overpass.kumi.systems/api/interpreter"
-        ,"https://overpass.openstreetmap.ru/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter",
     ]
     headers = {"User-Agent": "ToiletBot/1.0 (contact: you@example.com)"}
 
@@ -224,8 +219,7 @@ def query_overpass_toilets(lat, lon, radius=500):
             ctype = (resp.headers.get("Content-Type") or "").lower()
             if resp.status_code != 200 or "json" not in ctype:
                 snippet = (resp.text or "")[:200].replace("\n", " ")
-                logging.warning(f"Overpass 非 200 或非 JSON (endpoint {idx}): "
-                                f"status={resp.status_code}, ctype={ctype}, body~={snippet}")
+                logging.warning(f"Overpass 非 200 或非 JSON (endpoint {idx}): status={resp.status_code}, ctype={ctype}, body~={snippet}")
                 last_err = RuntimeError("overpass non-json")
                 continue
 
@@ -258,6 +252,71 @@ def query_overpass_toilets(lat, lon, radius=500):
 
     logging.error(f"Overpass 全部端點失敗：{last_err}")
     return []
+
+# === ✅ 讀本地 public_toilets.csv（普及度/大量點位） ===
+def query_public_csv_toilets(user_lat, user_lon, radius=500):
+    """
+    讀 data/public_toilets.csv，欄位預期：
+    country,city,village,number,name,address,administration,latitude,longitude,grade,type2,type,exec,diaper
+    回傳半徑內的點；若檔案不存在或欄位缺失會自動略過。
+    """
+    pts = []
+    if not os.path.exists(TOILETS_FILE_PATH):
+        return pts
+    try:
+        # 用 utf-8-sig 兼容 BOM；若你的檔是 Big5 可改 encoding="big5-hkscs"
+        with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    t_lat = float(row.get("latitude"))
+                    t_lon = float(row.get("longitude"))
+                except Exception:
+                    continue
+                dist = haversine(user_lat, user_lon, t_lat, t_lon)
+                if dist <= radius:
+                    name = (row.get("name") or "無名稱").strip()
+                    addr = (row.get("address") or "").strip()
+                    pts.append({
+                        "name": name,
+                        "lat": float(norm_coord(t_lat)),
+                        "lon": float(norm_coord(t_lon)),
+                        "address": addr,
+                        "distance": dist,
+                        "type": "public_csv",
+                        # 需要的話前端可使用這些欄位
+                        "grade": row.get("grade", ""),
+                        "category": row.get("type2", "")
+                    })
+    except Exception as e:
+        logging.error(f"讀 public_toilets.csv 失敗：{e}")
+    return sorted(pts, key=lambda x: x["distance"])
+
+# === ✅ 合併 + 簡單去重 ===
+def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
+    """
+    合併多來源清單；若名稱相似且彼此距離 <= dist_th(公尺) 則視為同點保留較近的一筆。
+    """
+    all_pts = []
+    for l in lists:
+        if l: all_pts.extend(l)
+    all_pts.sort(key=lambda x: x["distance"])  # 近的優先
+
+    merged = []
+    for p in all_pts:
+        dup = False
+        for q in merged:
+            try:
+                near = haversine(p["lat"], p["lon"], q["lat"], q["lon"]) <= dist_th
+            except Exception:
+                near = False
+            sim = SequenceMatcher(None, (p.get("name") or "").lower(), (q.get("name") or "").lower()).ratio()
+            if near and sim >= name_sim_th:
+                dup = True
+                break
+        if not dup:
+            merged.append(p)
+    return merged
 
 # === 最愛管理 ===
 def add_to_favorites(uid, toilet):
@@ -319,7 +378,7 @@ def geocode_address(address):
         logging.error(f"地址轉經緯度失敗: {e}")
     return None, None
 
-# === 附近廁所 API ===
+# === 附近廁所 API（已納入 CSV + 去重） ===
 @app.route("/nearby_toilets", methods=["GET"])
 def nearby_toilets():
     user_lat = request.args.get('lat')
@@ -330,9 +389,11 @@ def nearby_toilets():
     user_lat = float(user_lat)
     user_lon = float(user_lon)
 
+    public_csv_toilets = query_public_csv_toilets(user_lat, user_lon, radius=500) or []
+    sheet_toilets = query_sheet_toilets(user_lat, user_lon, radius=500) or []
     osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500) or []
-    sheet_toilets = query_sheet_toilets(user_lat, user_lon, radius=500)
-    all_toilets = osm_toilets + sheet_toilets
+
+    all_toilets = _merge_and_dedupe_lists(public_csv_toilets, sheet_toilets, osm_toilets)
 
     if not all_toilets:
         return {"message": "附近找不到廁所"}, 404
@@ -411,11 +472,8 @@ def expected_from_feats(feats):
         return None
 
 def _simple_score(rr, paper, acc):
-    """
-    評分 1~10 線性映射到 1~5，衛生紙/無障礙各 +0.25 分（上限 5）。
-    """
     try:
-        base = 1.0 + 4.0 * (int(rr) - 1) / 9.0  # 1..10 -> 1..5
+        base = 1.0 + 4.0 * (int(rr) - 1) / 9.0
     except Exception:
         return None
     bonus = (0.25 if (paper == "有") else 0.0) + (0.25 if (acc == "有") else 0.0)
@@ -424,11 +482,8 @@ def _simple_score(rr, paper, acc):
     if score > 5.0: score = 5.0
     return round(score, 2)
 
-# === ✅ 共用：從單列資料得到分數（模型 → 舊pred → 簡易推估） ===
+# === 共用：從單列資料得到分數 ===
 def _pred_from_row(r, idx):
-    """
-    回傳 (score, rating, paper文字, access文字)
-    """
     paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
     access_map = {"有": 1, "沒有": 0, "沒注意": 0}
 
@@ -442,31 +497,23 @@ def _pred_from_row(r, idx):
     aa = (r[idx["access"]] or "").strip() if idx["access"] is not None and len(r) > idx["access"] else "沒注意"
 
     score = None
-    # 1) 模型重算
     if rr is not None and cleanliness_model is not None:
         try:
             feat = [rr, paper_map.get(pp, 0), access_map.get(aa, 0)]
             score = expected_from_feats([feat])
         except Exception:
             score = None
-    # 2) 表內舊 pred
     if score is None and idx["pred"] is not None and len(r) > idx["pred"]:
         try:
             score = float((r[idx["pred"]] or "").strip())
         except:
             score = None
-    # 3) 簡易推估
     if score is None:
         score = _simple_score(rr, pp, aa)
-
     return (score, rr, pp, aa)
 
-# === ✅ 以最近 N 筆做「即時預測」與 95% CI（一致化） ===
+# === 以最近 N 筆做「即時預測」與 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
-    """
-    最近 k 筆同座標的即時乾淨度(nowcast)與 95% CI。
-    使用 _pred_from_row 確保邏輯一致；若幾乎常數，退回簡易推估避免直線。
-    """
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
@@ -503,7 +550,6 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
         if not vals:
             return None
 
-        # 幾乎常數 → 改用簡易推估
         if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
             vals = []
             for r in recent:
@@ -530,7 +576,7 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
         logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
         return None
 
-# === ✅ Nowcast API（前端呼叫） ===
+# === Nowcast API ===
 @app.route("/get_nowcast_by_coord/<lat>/<lon>")
 def get_nowcast_by_coord(lat, lon):
     try:
@@ -572,7 +618,6 @@ def submit_feedback():
         access_map = {"有": 1, "沒有": 0, "沒注意": 0}
         cur_feat = [r, paper_map.get(toilet_paper, 0), access_map.get(accessibility, 0)]
 
-        # 撈同座標歷史最近 N 筆
         hist_feats = []
         try:
             rows = feedback_sheet.get_all_values()
@@ -718,7 +763,6 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
 # === 建清單：同座標的指示燈（🧻/♿/⭐）— 分數一致化 ===
 def build_feedback_index():
-    """回傳 {(lat_s,lon_s): {'paper':'有/沒有/?','access':'有/沒有/?','avg':float or None}}，分數用一致邏輯重算。"""
     result = {}
     try:
         rows = feedback_sheet.get_all_values()
@@ -785,7 +829,6 @@ def toilet_feedback(toilet_name):
             def val(k):
                 i = idx[k]
                 return (r[i] if i is not None and len(r) > i else "").strip()
-            # 用一致邏輯
             sc, rr, pp, aa = _pred_from_row(r, idx)
             try: nums.append(float(sc))
             except: pass
@@ -829,7 +872,6 @@ def toilet_feedback_by_coord(lat, lon):
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)
 
-        # 重新計算藍色框平均（一致邏輯）
         rows = feedback_sheet.get_all_values()
         header = rows[0]; data = rows[1:]
         idx = _feedback_indices(header)
@@ -903,7 +945,6 @@ def get_clean_trend_by_coord(lat, lon):
         if not recomputed:
             return {"success": True, "data": []}, 200
 
-        # 若幾乎一條直線 → 強制用簡易推估再跑一次
         vals = [p for _, p in recomputed]
         if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
             forced = []
@@ -947,7 +988,7 @@ def _debug_predict():
 
 # === 建立 Flex：附近 / 最愛（含指示燈） ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
-    indicators = build_feedback_index()  # {(lat,lon): {'paper','access','avg'}}
+    indicators = build_feedback_index()
     bubbles = []
     for toilet in toilets[:5]:
         actions = []
@@ -956,27 +997,23 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         lon_s = norm_coord(toilet['lon'])
         addr_text = toilet.get('address') or "（無地址，使用座標）"
 
-        # 指示燈
         ind = indicators.get((lat_s, lon_s), {"paper":"?","access":"?","avg":None})
         star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
         paper_text = "🧻有" if ind.get("paper")=="有" else ("🧻無" if ind.get("paper")=="沒有" else "🧻—")
         access_text = "♿有" if ind.get("access")=="有" else ("♿無" if ind.get("access")=="沒有" else "♿—")
 
-        # ✅ 導航
         actions.append({
             "type": "uri",
             "label": "導航",
             "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
         })
-        # ✅ 查詢回饋（座標）
         actions.append({
             "type": "uri",
             "label": "查詢回饋（座標）",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
-        # ✅ 填回饋（帶座標；address 後備）
         addr_raw = toilet.get('address') or ""
-        addr_param = quote(addr_raw or "-")  # 沒地址用 - 佔位避免 404
+        addr_param = quote(addr_raw or "-")
         actions.append({
             "type": "uri",
             "label": "廁所回饋",
@@ -987,7 +1024,6 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             )
         })
 
-        # 收藏/移除
         if toilet.get("type") == "favorite" and uid:
             actions.append({
                 "type": "postback",
@@ -1028,7 +1064,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         bubbles.append(bubble)
     return {"type": "carousel", "contents": bubbles}
 
-# === 列出「我的貢獻」 & 刪除（真的刪主資料那一列） ===
+# === 列出「我的貢獻」 & 刪除 ===
 def get_user_contributions(uid):
     items = []
     try:
@@ -1037,7 +1073,7 @@ def get_user_contributions(uid):
             return items
         header = rows[0]; data = rows[1:]
         idx = _toilet_sheet_indices(header)
-        for i, r in enumerate(data, start=2):  # 1-based，含表頭
+        for i, r in enumerate(data, start=2):
             if idx["user_id"] is None: break
             if len(r) <= idx["user_id"]: continue
             if r[idx["user_id"]] != uid: continue
@@ -1122,13 +1158,11 @@ def handle_text(event):
     text_raw = event.message.text or ""
     text = text_raw.strip().lower()
 
-    # 去重：同一用戶同一文字，在視窗內不重覆處理
     if is_duplicate_and_mark(f"text|{uid}|{text}"):
         return
 
     reply_messages = []
 
-    # 刪除確認流程
     if uid in pending_delete_confirm:
         info = pending_delete_confirm[uid]
         if text == "確認刪除":
@@ -1156,7 +1190,12 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
             lat, lon = user_locations[uid]
-            toilets = (query_sheet_toilets(lat, lon) or []) + (query_overpass_toilets(lat, lon) or [])
+            # ✅ 這裡沿用 API 的三路來源 + 去重
+            toilets = _merge_and_dedupe_lists(
+                query_public_csv_toilets(lat, lon) or [],
+                query_sheet_toilets(lat, lon) or [],
+                query_overpass_toilets(lat, lon) or [],
+            )
             if not toilets:
                 reply_messages.append(TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
             else:
@@ -1199,7 +1238,6 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
-    # 去重：同一用戶同一座標（取 5 位小數）在視窗內不重覆處理
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
     if is_duplicate_and_mark(key):
         return
@@ -1213,7 +1251,6 @@ def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data or ""
 
-    # 去重：同一用戶相同 postback data 在視窗內不重覆處理
     if is_duplicate_and_mark(f"pb|{uid}|{data}"):
         return
 
@@ -1293,7 +1330,7 @@ def submit_toilet():
         worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
-        # （可選）備份 CSV
+        # （仍保留本地備份；寫到同檔不影響 DictReader，超出欄會被忽略）
         try:
             if not os.path.exists(TOILETS_FILE_PATH):
                 open(TOILETS_FILE_PATH, "a", encoding="utf-8").close()
