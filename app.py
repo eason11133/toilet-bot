@@ -1,3 +1,4 @@
+# app.py
 import os
 import csv
 import json
@@ -84,12 +85,29 @@ label_encoder = load_label_encoder()
 # === 參數 ===
 LAST_N_HISTORY = 5
 
-# === 工具：座標標準化 ===
+# === 工具：座標標準化／解析 ===
 def norm_coord(x, ndigits=6):
     try:
         return f"{round(float(x), ndigits):.{ndigits}f}"
     except:
         return str(x)
+
+def _parse_lat_lon(lat_s, lon_s):
+    """將表單來的經緯度字串轉 float；若發現 lat>90 而 lon<=90（常見送反），自動交換。"""
+    try:
+        lat = float(str(lat_s).strip())
+        lon = float(str(lon_s).strip())
+    except Exception:
+        return None, None
+
+    # 常見錯誤：lat=121.x、lon=25.x → 交換
+    if abs(lat) > 90 and abs(lon) <= 90:
+        lat, lon = lon, lat
+
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None, None
+
+    return lat, lon
 
 # === 初始化 Google Sheets ===
 def init_gsheet():
@@ -284,7 +302,6 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                         "address": addr,
                         "distance": dist,
                         "type": "public_csv",
-                        # 需要的話前端可使用這些欄位
                         "grade": row.get("grade", ""),
                         "category": row.get("type2", "")
                     })
@@ -596,8 +613,16 @@ def submit_feedback():
         data = request.form
         name = (data.get("name","") or "").strip()
         address = (data.get("address","") or "").strip()
-        lat = norm_coord((data.get("lat","") or "").strip())
-        lon = norm_coord((data.get("lon","") or "").strip())
+
+        # ✅ 堅固處理 lat/lon（自動偵測是否送反）
+        lat_raw = data.get("lat","")
+        lon_raw = data.get("lon","")
+        lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
+        if lat_f is None or lon_f is None:
+            return "座標格式錯誤", 400
+        lat = norm_coord(lat_f)
+        lon = norm_coord(lon_f)
+
         rating = (data.get("rating","") or "").strip()
         toilet_paper = (data.get("toilet_paper","") or "").strip()
         accessibility = (data.get("accessibility","") or "").strip()
@@ -1190,7 +1215,6 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
             lat, lon = user_locations[uid]
-            # ✅ 這裡沿用 API 的三路來源 + 去重
             toilets = _merge_and_dedupe_lists(
                 query_public_csv_toilets(lat, lon) or [],
                 query_sheet_toilets(lat, lon) or [],
