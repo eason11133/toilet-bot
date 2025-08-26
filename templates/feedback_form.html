@@ -30,6 +30,11 @@
       padding:10px 12px;border-radius:8px;margin:12px 0
     }
     .warning{color:#b00020;font-size:14px;display:none;margin-top:8px}
+    .toast{
+      position:fixed;left:50%;top:20px;transform:translateX(-50%);
+      background:#1a7f37;color:#fff;padding:10px 14px;border-radius:8px;box-shadow:var(--shadow);display:none;z-index:9999
+    }
+    .toast.error{background:#b00020}
   </style>
 </head>
 <body>
@@ -88,15 +93,54 @@
     <div class="hint">＊本表單會連同座標（lat/lon）寫入 Google Sheets，做為唯一識別。</div>
     <div id="warn" class="warning">缺少必要欄位或座標，請返回卡片重新開啟表單。</div>
 
-    <button type="submit">送出回饋</button>
+    <button type="submit" id="submitBtn">送出回饋</button>
   </form>
 
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
   <script>
-    // 基本前端檢查：必填與座標
+    // 基本前端檢查：必填與座標 + 以 fetch 送出，成功後嘗試關閉視窗/返回原畫面
     (function(){
       const form = document.getElementById('fbForm');
       const warn = document.getElementById('warn');
-      form.addEventListener('submit', function(e){
+      const btn  = document.getElementById('submitBtn');
+      const toast = document.getElementById('toast');
+
+      function showToast(msg, isErr=false){
+        toast.textContent = msg;
+        toast.classList.toggle('error', !!isErr);
+        toast.style.display = 'block';
+        setTimeout(()=>toast.style.display='none', 2000);
+      }
+
+      function tryCloseOrBack(){
+        // 通知 opener（如果有）
+        try {
+          if (window.opener && window.opener.postMessage) {
+            window.opener.postMessage({type:'toilet-feedback-submitted'}, '*');
+          }
+        } catch(e){}
+
+        // 嘗試關閉視窗（僅限 window.open 開啟時通常有效）
+        try { window.close(); } catch(e) {}
+
+        // 若無法關閉，嘗試回上一頁
+        if (history.length > 1) {
+          history.back();
+          return;
+        }
+
+        // 最後手段：導向空白並立即關閉（有些環境仍會被阻擋）
+        try {
+          location.replace('about:blank');
+          setTimeout(()=>{ try { window.close(); } catch(e){} }, 50);
+        } catch(e){}
+      }
+
+      form.addEventListener('submit', async function(e){
+        e.preventDefault(); // 攔截預設提交
+        warn.style.display = 'none';
+
         const lat = (form.lat.value || '').trim();
         const lon = (form.lon.value || '').trim();
         const name = (form.name.value || '').trim();
@@ -105,11 +149,41 @@
         const acc = (form.accessibility.value || '').trim();
 
         if(!lat || !lon || !name || !rating || !paper || !acc){
-          e.preventDefault();
           warn.style.display = 'block';
           warn.textContent = '缺少必要欄位或座標，請確認。';
           window.scrollTo({ top: 0, behavior: 'smooth' });
           return false;
+        }
+
+        // 鎖定按鈕避免重複送出
+        btn.disabled = true;
+        btn.textContent = '送出中...';
+
+        try{
+          const fd = new FormData(form);
+          const resp = await fetch(form.action, {
+            method: 'POST',
+            body: fd,
+            // 允許自動跟隨後端 redirect；我們不依賴返回頁面內容
+            redirect: 'follow',
+            credentials: 'same-origin'
+          });
+
+          if (resp.ok) {
+            showToast('已送出，即將返回');
+            // 短暫顯示成功訊息後收斂
+            setTimeout(tryCloseOrBack, 500);
+          } else {
+            // 若後端回 4xx/5xx，顯示錯誤
+            showToast('送出失敗，請稍後再試', true);
+            btn.disabled = false;
+            btn.textContent = '送出回饋';
+          }
+        } catch(err){
+          console.error(err);
+          showToast('網路異常，請稍後再試', true);
+          btn.disabled = false;
+          btn.textContent = '送出回饋';
         }
       });
     })();
