@@ -1,4 +1,3 @@
-# app.py
 import os
 import csv
 import json
@@ -22,10 +21,9 @@ from datetime import datetime
 import joblib
 import threading
 import time
-import statistics  # ✅ 95% CI 用
-from difflib import SequenceMatcher  # ✅ 去重用
+import statistics  # 95% CI 用
+from difflib import SequenceMatcher
 
-# 可選：有 pandas 就用，避免 sklearn 特徵名稱警告；沒裝也不影響運作
 try:
     import pandas as pd
 except Exception:
@@ -42,16 +40,28 @@ handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 # 檔案
 DATA_DIR = os.path.join(os.getcwd(), "data")
-TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 公家資料（也被你當備份用）
-FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")
+TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 公家資料/備份
+FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")     # 仍沿用原檔名，但以 csv 方式讀寫
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# 確保 favorites 檔存在
 if not os.path.exists(FAVORITES_FILE_PATH):
     open(FAVORITES_FILE_PATH, "a", encoding="utf-8").close()
+
+# 確保 public_toilets.csv 具有表頭（供 DictReader 使用）
+PUBLIC_HEADERS = [
+    "country","city","village","number","name","address","administration",
+    "latitude","longitude","grade","type2","type","exec","diaper"
+]
+if not os.path.exists(TOILETS_FILE_PATH):
+    with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(PUBLIC_HEADERS)
 
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 主資料（使用者新增）
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 主資料（使用者新增廁所）
 FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  # 回饋/預測
 
 gc = worksheet = feedback_sheet = None
@@ -93,14 +103,12 @@ def norm_coord(x, ndigits=6):
         return str(x)
 
 def _parse_lat_lon(lat_s, lon_s):
-    """將表單來的經緯度字串轉 float；若發現 lat>90 而 lon<=90（常見送反），自動交換。"""
     try:
         lat = float(str(lat_s).strip())
         lon = float(str(lon_s).strip())
     except Exception:
         return None, None
 
-    # 常見錯誤：lat=121.x、lon=25.x → 交換
     if abs(lat) > 90 and abs(lon) <= 90:
         lat, lon = lon, lat
 
@@ -150,7 +158,7 @@ def is_duplicate_and_mark(key: str, window: int = DEDUPE_WINDOW) -> bool:
         logging.info(f"🔁 skip duplicate: {key}")
         return True
     _RECENT_EVENTS[key] = now
-    if len(_RECENT_EVENTS) > 1000:
+    if len(_RECENT_EVENTS) > 5000 or (len(_RECENT_EVENTS) > 1000):
         for k, tstamp in list(_RECENT_EVENTS.items()):
             if now - tstamp > window:
                 _RECENT_EVENTS.pop(k, None)
@@ -228,7 +236,8 @@ def query_overpass_toilets(lat, lon, radius=500):
         "https://overpass.kumi.systems/api/interpreter",
         "https://overpass.openstreetmap.ru/api/interpreter",
     ]
-    headers = {"User-Agent": "ToiletBot/1.0 (contact: you@example.com)"}
+    ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
+    headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
 
     last_err = None
     for idx, url in enumerate(endpoints):
@@ -271,18 +280,12 @@ def query_overpass_toilets(lat, lon, radius=500):
     logging.error(f"Overpass 全部端點失敗：{last_err}")
     return []
 
-# === ✅ 讀本地 public_toilets.csv（普及度/大量點位） ===
+# === 讀本地 public_toilets.csv（普及度/大量點位） ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
-    """
-    讀 data/public_toilets.csv，欄位預期：
-    country,city,village,number,name,address,administration,latitude,longitude,grade,type2,type,exec,diaper
-    回傳半徑內的點；若檔案不存在或欄位缺失會自動略過。
-    """
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
         return pts
     try:
-        # 用 utf-8-sig 兼容 BOM；若你的檔是 Big5 可改 encoding="big5-hkscs"
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -309,15 +312,12 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
     return sorted(pts, key=lambda x: x["distance"])
 
-# === ✅ 合併 + 簡單去重 ===
+# === 合併 + 簡單去重 ===
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
-    """
-    合併多來源清單；若名稱相似且彼此距離 <= dist_th(公尺) 則視為同點保留較近的一筆。
-    """
     all_pts = []
     for l in lists:
         if l: all_pts.extend(l)
-    all_pts.sort(key=lambda x: x["distance"])  # 近的優先
+    all_pts.sort(key=lambda x: x["distance"])
 
     merged = []
     for p in all_pts:
@@ -335,13 +335,14 @@ def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
             merged.append(p)
     return merged
 
-# === 最愛管理 ===
+# === 最愛管理（改用 csv 模組，避免逗號問題） ===
 def add_to_favorites(uid, toilet):
     try:
         lat_s = norm_coord(toilet['lat'])
         lon_s = norm_coord(toilet['lon'])
-        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{uid},{toilet['name']},{lat_s},{lon_s},{toilet.get('address','')}\n")
+        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([uid, toilet['name'], lat_s, lon_s, toilet.get('address','')])
     except Exception as e:
         logging.error(f"加入最愛失敗: {e}")
 
@@ -349,14 +350,21 @@ def remove_from_favorites(uid, name, lat, lon):
     try:
         lat_s = norm_coord(lat)
         lon_s = norm_coord(lon)
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8") as f:
-            for line in lines:
-                data = line.strip().split(',')
-                if not (data[0] == uid and data[1] == name and data[2] == lat_s and data[3] == lon_s):
-                    f.write(line)
-        return True
+        rows = []
+        changed = False
+        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 5:
+                    rows.append(row); continue
+                if not (row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s):
+                    rows.append(row)
+                else:
+                    changed = True
+        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows(rows)
+        return changed
     except Exception as e:
         logging.error(f"移除最愛失敗: {e}")
         return False
@@ -364,17 +372,17 @@ def remove_from_favorites(uid, name, lat, lon):
 def get_user_favorites(uid):
     favs = []
     try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                data = line.strip().split(',')
-                if len(data) < 5:
+        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 5:
                     continue
-                if data[0] == uid:
+                if row[0] == uid:
                     favs.append({
-                        "name": data[1],
-                        "lat": float(data[2]),
-                        "lon": float(data[3]),
-                        "address": data[4],
+                        "name": row[1],
+                        "lat": float(row[2]),
+                        "lon": float(row[3]),
+                        "address": row[4],
                         "distance": 0,
                         "type": "favorite"
                     })
@@ -385,8 +393,9 @@ def get_user_favorites(uid):
 # === 地址轉經緯度 ===
 def geocode_address(address):
     try:
+        ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={quote(address)}"
-        headers = {"User-Agent": "ToiletBot/1.0"}
+        headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
         resp = requests.get(url, headers=headers, timeout=10)
         data = resp.json()
         if resp.status_code == 200 and data:
@@ -465,21 +474,43 @@ def _toilet_sheet_indices(header):
         "created": _find_idx(header, ["timestamp", "created_at", "建立時間"]),
     }
 
-# === 清潔度預測（單筆/多筆） ===
+# === 清潔度預測（單筆/多筆） — 類別對齊修正 ===
 def expected_from_feats(feats):
     try:
-        if not feats or cleanliness_model is None or label_encoder is None:
+        if not feats or cleanliness_model is None:
             return None
+
         if pd is not None:
             df = pd.DataFrame(feats, columns=["rating","toilet_paper","accessibility"])
             probs = cleanliness_model.predict_proba(df)
         else:
             probs = cleanliness_model.predict_proba(feats)
+
+        labels = None
         try:
-            classes_enc = cleanliness_model.classes_
-            labels = label_encoder.inverse_transform(classes_enc.astype(int))
+            labels = [float(c) for c in cleanliness_model.classes_]
         except Exception:
-            labels = cleanliness_model.classes_
+            labels = None
+
+        if labels is None and label_encoder is not None:
+            try:
+                classes_enc = cleanliness_model.classes_
+                if hasattr(classes_enc, "astype"):
+                    try:
+                        classes_enc = classes_enc.astype(int)
+                    except Exception:
+                        pass
+                inv = label_encoder.inverse_transform(classes_enc)
+                labels = [float(x) for x in inv]
+            except Exception:
+                labels = None
+
+        if labels is None:
+            try:
+                labels = [float(c) for c in cleanliness_model.classes_]
+            except Exception:
+                return None
+
         exps = []
         for p_row in probs:
             exps.append(sum(float(p) * float(l) for p, l in zip(p_row, labels)))
@@ -614,7 +645,6 @@ def submit_feedback():
         name = (data.get("name","") or "").strip()
         address = (data.get("address","") or "").strip()
 
-        # ✅ 堅固處理 lat/lon（自動偵測是否送反）
         lat_raw = data.get("lat","")
         lon_raw = data.get("lon","")
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
@@ -786,12 +816,21 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
-# === 建清單：同座標的指示燈（🧻/♿/⭐）— 分數一致化 ===
+# === 建清單：同座標的指示燈（🧻/♿/⭐）— 加入 30 秒快取 ===
+_feedback_index_cache = {"ts": 0, "data": {}}
+_FEEDBACK_INDEX_TTL = 30  # 秒
+
 def build_feedback_index():
+    global _feedback_index_cache
+    now = time.time()
+    if now - _feedback_index_cache["ts"] < _FEEDBACK_INDEX_TTL and _feedback_index_cache["data"]:
+        return _feedback_index_cache["data"]
+
     result = {}
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
+            _feedback_index_cache = {"ts": now, "data": {}}
             return result
         header = rows[0]; data = rows[1:]
         idx = _feedback_indices(header)
@@ -799,6 +838,8 @@ def build_feedback_index():
         bucket = {}
         for r in data:
             try:
+                if idx["lat"] is None or idx["lon"] is None:
+                    continue
                 lat_s = norm_coord(r[idx["lat"]])
                 lon_s = norm_coord(r[idx["lon"]])
             except Exception:
@@ -815,6 +856,8 @@ def build_feedback_index():
             access = "有" if v["access"]["有"] >= v["access"]["沒有"] and sum(v["access"].values())>0 else ("沒有" if sum(v["access"].values())>0 else "?")
             avg = round(sum(v["scores"])/len(v["scores"]),2) if v["scores"] else None
             out[key] = {"paper": paper, "access": access, "avg": avg}
+
+        _feedback_index_cache = {"ts": now, "data": out}
         return out
     except Exception as e:
         logging.warning(f"建立指示燈索引失敗：{e}")
@@ -1089,7 +1132,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         bubbles.append(bubble)
     return {"type": "carousel", "contents": bubbles}
 
-# === 列出「我的貢獻」 & 刪除 ===
+# === 列出「我的貢獻」 & 削除 ===
 def get_user_contributions(uid):
     items = []
     try:
@@ -1354,15 +1397,19 @@ def submit_toilet():
         worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
-        # （仍保留本地備份；寫到同檔不影響 DictReader，超出欄會被忽略）
+        # 備份至本地 CSV（14 欄，與 PUBLIC_HEADERS 對齊）
         try:
             if not os.path.exists(TOILETS_FILE_PATH):
-                open(TOILETS_FILE_PATH, "a", encoding="utf-8").close()
+                with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(PUBLIC_HEADERS)
             with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["00000","0000000","未知里","USERADD", name, address, "使用者補充",
-                                norm_coord(lat), norm_coord(lon),
-                                "普通級","公共場所","未知","使用者","0",""])
+                writer.writerow([
+                    "00000","0000000","未知里","USERADD", name, address, "使用者補充",
+                    norm_coord(lat), norm_coord(lon),
+                    "普通級","公共場所","未知","使用者","0"
+                ])
         except Exception as e:
             logging.warning(f"備份至本地 CSV 失敗：{e}")
 
