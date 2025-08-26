@@ -280,7 +280,7 @@ def query_overpass_toilets(lat, lon, radius=500):
     logging.error(f"Overpass 全部端點失敗：{last_err}")
     return []
 
-# === 讀本地 public_toilets.csv（普及度/大量點位） ===
+# === 讀本地 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
@@ -335,7 +335,7 @@ def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
             merged.append(p)
     return merged
 
-# === 最愛管理（改用 csv 模組，避免逗號問題） ===
+# === 最愛管理 ===
 def add_to_favorites(uid, toilet):
     try:
         lat_s = norm_coord(toilet['lat'])
@@ -474,50 +474,36 @@ def _toilet_sheet_indices(header):
         "created": _find_idx(header, ["timestamp", "created_at", "建立時間"]),
     }
 
-# === 清潔度預測（單筆/多筆） — 類別對齊修正 ===
+# === 清潔度預測 ===
 def expected_from_feats(feats):
     try:
         if not feats or cleanliness_model is None:
             return None
 
+        # 產生機率
         if pd is not None:
             df = pd.DataFrame(feats, columns=["rating","toilet_paper","accessibility"])
             probs = cleanliness_model.predict_proba(df)
         else:
             probs = cleanliness_model.predict_proba(feats)
 
-        labels = None
+        # 取得「對應到 1..5」的標籤
         try:
-            labels = [float(c) for c in cleanliness_model.classes_]
+            # ✅ 你的訓練流程需要這個：0..4 -> 1..5
+            classes_enc = cleanliness_model.classes_              # [0,1,2,3,4]
+            labels = label_encoder.inverse_transform(classes_enc) # [1,2,3,4,5]
+            labels = [float(x) for x in labels]
         except Exception:
-            labels = None
+            # 🛟 如果 encoder 讀不到，至少把 0..4 校正成 1..5
+            labels = [float(c) + 1.0 for c in cleanliness_model.classes_]
 
-        if labels is None and label_encoder is not None:
-            try:
-                classes_enc = cleanliness_model.classes_
-                if hasattr(classes_enc, "astype"):
-                    try:
-                        classes_enc = classes_enc.astype(int)
-                    except Exception:
-                        pass
-                inv = label_encoder.inverse_transform(classes_enc)
-                labels = [float(x) for x in inv]
-            except Exception:
-                labels = None
-
-        if labels is None:
-            try:
-                labels = [float(c) for c in cleanliness_model.classes_]
-            except Exception:
-                return None
-
-        exps = []
-        for p_row in probs:
-            exps.append(sum(float(p) * float(l) for p, l in zip(p_row, labels)))
-        return round(sum(exps) / len(exps), 2) if exps else None
+        # 算期望值
+        exps = [sum(float(p)*float(l) for p, l in zip(p_row, labels)) for p_row in probs]
+        return round(sum(exps)/len(exps), 2) if exps else None
     except Exception as e:
         logging.error(f"❌ 清潔度預測錯誤: {e}")
         return None
+
 
 def _simple_score(rr, paper, acc):
     try:
@@ -530,7 +516,7 @@ def _simple_score(rr, paper, acc):
     if score > 5.0: score = 5.0
     return round(score, 2)
 
-# === 共用：從單列資料得到分數 ===
+# === 從單列資料得到分數 ===
 def _pred_from_row(r, idx):
     paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
     access_map = {"有": 1, "沒有": 0, "沒注意": 0}
@@ -637,7 +623,7 @@ def get_nowcast_by_coord(lat, lon):
         logging.error(f"❌ Nowcast API 錯誤: {e}")
         return {"success": False}, 500
 
-# === 回饋：寫入前把同座標最近 N 筆也納入預測 ===
+# === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
     try:
@@ -816,7 +802,7 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
         return "讀取錯誤"
 
-# === 建清單：同座標的指示燈（🧻/♿/⭐）— 加入 30 秒快取 ===
+# === 建清單 ===
 _feedback_index_cache = {"ts": 0, "data": {}}
 _FEEDBACK_INDEX_TTL = 30  # 秒
 
@@ -863,7 +849,7 @@ def build_feedback_index():
         logging.warning(f"建立指示燈索引失敗：{e}")
         return {}
 
-# === 舊路由（名稱→地址）保留 ===
+# === 舊路由保留 ===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
     try:
