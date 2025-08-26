@@ -480,24 +480,19 @@ def expected_from_feats(feats):
         if not feats or cleanliness_model is None:
             return None
 
-        # 產生機率
         if pd is not None:
             df = pd.DataFrame(feats, columns=["rating","toilet_paper","accessibility"])
             probs = cleanliness_model.predict_proba(df)
         else:
             probs = cleanliness_model.predict_proba(feats)
 
-        # 取得「對應到 1..5」的標籤
         try:
-            # ✅ 你的訓練流程需要這個：0..4 -> 1..5
-            classes_enc = cleanliness_model.classes_              # [0,1,2,3,4]
-            labels = label_encoder.inverse_transform(classes_enc) # [1,2,3,4,5]
+            classes_enc = cleanliness_model.classes_              
+            labels = label_encoder.inverse_transform(classes_enc) 
             labels = [float(x) for x in labels]
         except Exception:
-            # 🛟 如果 encoder 讀不到，至少把 0..4 校正成 1..5
             labels = [float(c) + 1.0 for c in cleanliness_model.classes_]
 
-        # 算期望值
         exps = [sum(float(p)*float(l) for p, l in zip(p_row, labels)) for p_row in probs]
         return round(sum(exps)/len(exps), 2) if exps else None
     except Exception as e:
