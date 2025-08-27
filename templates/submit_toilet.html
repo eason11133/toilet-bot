@@ -24,22 +24,10 @@
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
     }
-    .wrap {
-      max-width: 720px; margin: 0 auto;
-    }
-    h1 {
-      font-size: 28px; margin: 0 0 10px;
-      letter-spacing: .5px;
-    }
-    p.sub {
-      margin: 0 0 18px; color: var(--muted);
-    }
-    .card {
-      background: var(--card);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 20px;
-    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 28px; margin: 0 0 10px; letter-spacing: .5px; }
+    p.sub { margin: 0 0 18px; color: var(--muted); }
+    .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
     label { display: block; margin: 14px 0 6px; font-weight: 600; }
     input[type="text"], textarea {
       width: 100%; padding: 10px 12px;
@@ -49,7 +37,6 @@
     .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
     .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
     @media (min-width: 640px) { .row.two { grid-template-columns: 1fr 1fr; } }
-
     button {
       margin-top: 18px;
       background: var(--primary); color: #fff;
@@ -59,14 +46,10 @@
     }
     button:hover { background: var(--primary-hover); }
     button[disabled] { opacity: .6; cursor: not-allowed; }
-
     .msg { margin-top: 14px; padding: 10px 12px; border-radius: 10px; display: none; }
     .msg.ok { background: #ecfdf5; color: var(--ok); display: block; }
     .msg.err { background: #fef2f2; color: var(--err); display: block; }
-
-    .footer-note {
-      margin-top: 16px; color: var(--muted); font-size: 13px;
-    }
+    .footer-note { margin-top: 16px; color: var(--muted); font-size: 13px; }
   </style>
 </head>
 <body>
@@ -89,13 +72,25 @@
         </div>
 
         <label for="address">地址 <span style="color:#ef4444">*</span></label>
-        <input id="address" name="address" type="text" placeholder="請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號" required />
-        <div class="hint">地址越完整越好，便於成功轉換經緯度(要空格)。</div>
+        <!-- 預填：優先使用後端傳入的 preset_address，其次用 URL 的 lat/lon 反向地理補上 -->
+        <input
+          id="address"
+          name="address"
+          type="text"
+          placeholder="請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號"
+          value="{{ preset_address or '' }}"
+          required
+        />
+        <div class="hint">若你剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。</div>
+
+        <!-- 隱藏欄位：經緯度（後端優先用這個；沒有才用地址去 geocode） -->
+        <input id="lat" name="lat" type="hidden" value="{{ preset_lat or (request.args.get('lat') or '') }}">
+        <input id="lon" name="lon" type="hidden" value="{{ preset_lon or (request.args.get('lon') or '') }}">
 
         <button type="submit" id="submitBtn">送出</button>
         <div id="msg" class="msg"></div>
 
-        <div class="footer-note">送出後，會寫入 Google 試算表主資料；經緯度由系統自動轉換。</div>
+        <div class="footer-note">送出後，會寫入 Google 試算表主資料；有提供 lat/lon 時會直接使用座標，否則以地址轉換。</div>
       </form>
     </div>
   </div>
@@ -107,24 +102,70 @@
       const btn = $("#submitBtn");
       const msg = $("#msg");
       const uidInput = $("#user_id");
+      const addrInput = $("#address");
+      const latInput = $("#lat");
+      const lonInput = $("#lon");
 
-      // 帶入上次使用的 UID（若有）
+      // 1) 儲存/帶入使用者 ID
       try {
         const saved = localStorage.getItem("toilet_uid");
         if (saved && !uidInput.value) uidInput.value = saved;
       } catch (e) {}
 
+      // 2) 若沒有後端預填地址，但 URL 上有 lat/lon，就用 OSM Reverse 來補地址
+      (async function maybeReverseGeocode() {
+        const hasAddress = (addrInput.value || "").trim().length > 0;
+        const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
+        const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
+        if (hasAddress || !lat || !lon) return;
+
+        // 寫回 hidden（讓後端直接用）
+        latInput.value = lat;
+        lonInput.value = lon;
+
+        try {
+          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
+          const res = await fetch(url, { headers: { "Accept": "application/json" } });
+          if (!res.ok) throw new Error("reverse geocode 失敗");
+          const data = await res.json();
+
+          // 組 OSM 友善地址（比單純 display_name 更乾淨）
+          const a = data.address || {};
+          const pretty =
+            [
+              a.country || "",
+              a.state || a.region || "",
+              a.city || a.town || a.village || a.county || "",
+              a.suburb || a.neighbourhood || "",
+              a.road || "",
+              a.house_number || "",
+              a.postcode || ""
+            ]
+            .filter(Boolean)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+          addrInput.value = pretty || (data.display_name || "");
+        } catch (e) {
+          // 失敗就忽略，讓使用者手動輸入
+          console.warn("OSM reverse geocode 失敗", e);
+        }
+      })();
+
+      // 3) 送出表單
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
 
         const name = $("#name").value.trim();
-        const address = $("#address").value.trim();
+        const address = addrInput.value.trim();
         let user_id = uidInput.value.trim() || "web"; // 預設 web
+        const lat = (latInput.value || "").trim();
+        const lon = (lonInput.value || "").trim();
 
         if (!name || !address) {
-          showErr("請先填寫『廁所名稱』與『地址』");
-          return;
+          return showErr("請先填寫『廁所名稱』與『地址』");
         }
 
         // 持久化 UID
@@ -133,18 +174,23 @@
         btn.disabled = true; btn.textContent = "送出中…";
 
         try {
+          // 後端已改成：若有 lat/lon 就直接用；沒有才用 address geocode
+          const payload = { user_id, name, address };
+          if (lat && lon) { payload.lat = lat; payload.lon = lon; }
+
           const res = await fetch("/submit_toilet", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_id, name, address })
+            body: JSON.stringify(payload)
           });
           const data = await res.json().catch(() => ({}));
 
           if (res.ok && data && data.success) {
             showOk(data.message || "✅ 已新增，感謝補點！");
-            // 清除名稱與地址（保留 UID）
+            // 清除名稱與地址（保留 UID 與 lat/lon，以便連續新增同區點）
             $("#name").value = "";
-            $("#address").value = "";
+            // address 維持現值，方便複製同一地點不同名稱；若你想清空，就取消下一行註解
+            // addrInput.value = "";
           } else {
             showErr((data && data.message) || "新增失敗，請稍後再試");
           }

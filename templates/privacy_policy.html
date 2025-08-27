@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <title>隱私權政策 | 廁所幫手</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans TC",Arial;
+         line-height:1.7; margin:0; background:#0b1320; color:#e6f0ff}
+    .wrap{max-width:860px; margin:0 auto; padding:24px}
+    h1{font-size:1.6rem; margin:0 0 12px}
+    h2{font-size:1.2rem; margin:22px 0 8px}
+    p,li{color:#c9d6ea}
+    a{color:#8cc8ff}
+    .card{background:#0e1a2b;border:1px solid #1f2b41;border-radius:14px;padding:20px}
+    .muted{color:#9fb0cb}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>隱私權政策</h1>
+      <p class="muted">最後更新：<span id="d"></span></p>
+
+      <h2>我們蒐集哪些資料</h2>
+      <ul>
+        <li>LINE 使用者識別（用於辨識是否已同意、我的最愛/貢獻歸屬）。</li>
+        <li>位置資訊：僅在你主動傳送「位置訊息」或於 LIFF「隱私模式」同意後，以即時查詢附近廁所。</li>
+        <li>回饋內容（評分、是否有衛生紙/無障礙、留言等）。</li>
+      </ul>
+
+      <h2>我們如何使用</h2>
+      <ul>
+        <li>提供附近廁所與導航、彙整回饋分數與趨勢。</li>
+        <li>改善服務品質與除錯（僅統計性使用）。</li>
+      </ul>
+
+      <h2>我們如何保存</h2>
+      <ul>
+        <li>回饋與評分儲存在 Google Sheets；僅授權的系統帳號可存取。</li>
+        <li>位置為即時使用，不做長期保存；隱私模式下僅存近似網格或不存坐標。</li>
+      </ul>
+
+      <h2>分享與第三方</h2>
+      <ul>
+        <li>不出售個資；不對外揭露可識別個人之資訊。</li>
+        <li>必要時依法律或主管機關要求提供。</li>
+      </ul>
+
+      <h2>你的權利</h2>
+      <ul>
+        <li>你可隨時撤回同意；撤回後將無法使用需要同意的功能。</li>
+        <li>你可要求查詢或刪除你在本服務的紀錄：請透過 LINE 官方帳號傳送「資料刪除」。</li>
+      </ul>
+
+      <h2>聯絡方式</h2>
+      <p>如有隱私疑問，請聯絡：<a href="mailto:you@example.com">you@example.com</a></p>
+    </div>
+  </div>
+  <script>
+    document.getElementById('d').textContent = new Date().toISOString().slice(0,10);
+  </script>
+</body>
+</html>

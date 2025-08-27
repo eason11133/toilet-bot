@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>隱私同意 | 廁所幫手</title>
+  <!-- LIFF v2 SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root{
+      --bg:#0b1320; --card:#0e1a2b; --text:#e6f0ff; --muted:#a8b3c7;
+      --accent:#4da3ff; --accent2:#6ce0c9; --danger:#ff6b6b; --border:#1f2b41;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,"Noto Sans TC",Arial; background:var(--bg); color:var(--text)}
+    .wrap{max-width:640px; margin:0 auto; padding:16px}
+    .card{background:linear-gradient(180deg,#0f1e33 0%, #0a1626 100%); border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow:0 8px 32px rgba(0,0,0,.35)}
+    h1{font-size:20px; margin:0 0 8px}
+    p{margin:8px 0; color:var(--muted); line-height:1.6}
+    .badge{display:inline-block; padding:4px 10px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted); margin:6px 0 14px}
+    .list{margin:10px 0 14px; padding-left:18px; color:var(--muted)}
+    label.chk{display:flex; gap:10px; align-items:flex-start; background:#0b1a2c; border:1px solid var(--border); padding:12px; border-radius:12px; margin:12px 0}
+    label.chk input{margin-top:3px}
+    .btns{display:flex; gap:10px; margin-top:14px}
+    button{flex:1; padding:12px 14px; border:none; border-radius:12px; font-weight:700; cursor:pointer}
+    .btn-ok{background:linear-gradient(90deg,var(--accent) 0%, #7db8ff 100%); color:#081629}
+    .btn-no{background:transparent; color:#ff9a9a; border:1px solid #2b1d22}
+    .btn-ok[disabled]{opacity:.5; cursor:not-allowed}
+    .hr{height:1px; background:var(--border); margin:14px 0}
+    .tip{font-size:12px; color:#93a3bf}
+    .who{display:flex; align-items:center; gap:10px; margin:10px 0 6px}
+    .avatar{width:36px; height:36px; border-radius:50%; background:#15223a; border:1px solid var(--border)}
+    .toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:#091526; color:#e8f2ff; border:1px solid var(--border); padding:10px 14px; border-radius:12px; display:none}
+    .small{font-size:12px}
+    a{color:#9ad1ff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <span class="badge">隱私與使用同意</span>
+      <h1>開始前，請先閱讀並同意</h1>
+      <p>為了幫你找附近廁所與提供回饋，我們需要暫時處理你的 <b>LINE 使用者識別</b> 與（若你選擇「精確模式」）<b>位置資訊</b>。我們承諾：</p>
+      <ul class="list">
+        <li>僅用於提供查詢與功能使用，不做商業販售或不當分享</li>
+        <li>位置只做即時查詢，不會永久儲存（隱私模式下僅使用近似網格）</li>
+        <li>你可隨時撤回同意，並要求刪除紀錄</li>
+      </ul>
+
+      <div class="who">
+        <img id="avatar" class="avatar" alt="">
+        <div>
+          <div id="hello">您好</div>
+          <div id="uid" class="small tip">讀取中...</div>
+        </div>
+      </div>
+
+      <label class="chk">
+        <input id="agreeChk" type="checkbox" />
+        <div>
+          我已閱讀並同意
+          <a href="https://school-i9co.onrender.com/privacy" target="_blank" rel="noopener">《隱私權政策》</a>
+          與使用條款；我了解若不同意將無法使用本服務。
+        </div>
+      </label>
+
+      <div class="btns">
+        <button id="btnOk" class="btn-ok" disabled>同意並開始使用</button>
+        <button id="btnNo" class="btn-no">不同意</button>
+      </div>
+
+      <div class="hr"></div>
+      <p class="tip">若你是誤觸此頁，請直接關閉視窗即可回到 LINE 聊天。</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    // ====== 需要你替換的兩個變數 ======
+    const LIFF_ID = "2007674330-0XpoR2dW";                  // ← 你的 LIFF ID
+    const API_ENDPOINT = "https://school-i9co.onrender.com/api/consent"; // ← 你的後端 API（POST）
+
+    // 可選：成功送出後，Web 環境（非 LINE App）要導回的頁面
+    const WEB_FALLBACK_URL = "https://line.me/R/ti/p/@439avyvf";
+
+    // ====== 小工具 ======
+    const $ = (q)=>document.querySelector(q);
+    const toast = (msg)=>{
+      const t = $('#toast');
+      t.textContent = msg; t.style.display='block';
+      setTimeout(()=> t.style.display='none', 2200);
+    };
+    const disableButtons = (b)=>{
+      $('#btnOk').disabled = b;
+      $('#btnNo').disabled = b;
+    };
+
+    // ====== 啟動流程 ======
+    (async function main(){
+      try{
+        await liff.init({ liffId: LIFF_ID });
+
+        if (!liff.isLoggedIn()) {
+          // 回到目前網址，避免中斷
+          return liff.login({ redirectUri: location.href });
+        }
+
+        // 抓使用者資料
+        let displayName = '使用者';
+        let pictureUrl = '';
+        let userId = '';
+
+        try{
+          const profile = await liff.getProfile();
+          displayName = profile.displayName || displayName;
+          pictureUrl = profile.pictureUrl || '';
+          userId = profile.userId || '';
+        }catch(e){
+          console.warn('getProfile 失敗', e);
+        }
+
+        // 也可從 ID Token 取 sub 當作 userId 備援
+        try{
+          const idt = liff.getDecodedIDToken();
+          if(!userId && idt && idt.sub) userId = idt.sub;
+        }catch(e){}
+
+        // 畫面顯示
+        $('#hello').textContent = `嗨，${displayName}`;
+        $('#uid').textContent   = userId ? userId : '無法取得 userId（仍可送出）';
+        if(pictureUrl) $('#avatar').src = pictureUrl;
+
+        // 勾選檢查
+        $('#agreeChk').addEventListener('change', (e)=>{
+          $('#btnOk').disabled = !e.target.checked;
+        });
+
+        // 同意
+        $('#btnOk').addEventListener('click', async ()=>{
+          if($('#btnOk').disabled) return;
+          disableButtons(true);
+          try{
+            // 組 payload
+            const ctx = liff.getContext() || {};
+            const payload = {
+              agree: true,
+              userId,
+              displayName,
+              sourceType: ctx.type || 'unknown',
+              ts: new Date().toISOString(),
+              ua: navigator.userAgent
+            };
+
+            const res = await fetch(API_ENDPOINT, {
+              method: 'POST',
+              headers: { 'Content-Type':'application/json' },
+              body: JSON.stringify(payload),
+            });
+
+            if(!res.ok){
+              throw new Error('同意送出失敗，請稍候再試');
+            }
+
+            toast('已完成同意，正在返回 LINE...');
+            setTimeout(()=>{
+              if(liff.isInClient()){
+                liff.closeWindow();
+              }else{
+                // 不在 LINE App 的 Web 環境
+                location.href = WEB_FALLBACK_URL;
+              }
+            }, 600);
+          }catch(err){
+            console.error(err);
+            toast(err.message || '送出發生錯誤');
+            disableButtons(false);
+          }
+        });
+
+        // 不同意
+        $('#btnNo').addEventListener('click', async ()=>{
+          disableButtons(true);
+          try{
+            const ctx = liff.getContext() || {};
+            await fetch(API_ENDPOINT, {
+              method: 'POST',
+              headers: { 'Content-Type':'application/json' },
+              body: JSON.stringify({
+                agree:false,
+                userId,
+                displayName,
+                sourceType: ctx.type || 'unknown',
+                ts: new Date().toISOString(),
+                ua: navigator.userAgent
+              }),
+            });
+          }catch(e){/* 失敗也不阻擋離開流程 */}
+          toast('未同意，將無法使用此服務');
+          setTimeout(()=>{
+            if(liff.isInClient()){
+              liff.closeWindow();
+            }else{
+              history.length > 1 ? history.back() : location.replace('about:blank');
+            }
+          }, 800);
+        });
+
+      }catch(err){
+        console.error('LIFF 初始化失敗', err);
+        toast('LIFF 初始化失敗，請稍後重試');
+      }
+    })();
+  </script>
+</body>
+</html>

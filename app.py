@@ -64,7 +64,11 @@ GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
 TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 主資料（使用者新增廁所）
 FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  # 回饋/預測
 
-gc = worksheet = feedback_sheet = None
+# ★ 同意書設定
+CONSENT_SHEET_TITLE = "consent"
+CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL", "https://school-i9co.onrender.com/consent")
+
+gc = worksheet = feedback_sheet = consent_ws = None
 
 # === 載入模型 ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -119,16 +123,26 @@ def _parse_lat_lon(lat_s, lon_s):
 
 # === 初始化 Google Sheets ===
 def init_gsheet():
-    global gc, worksheet, feedback_sheet
+    global gc, worksheet, feedback_sheet, consent_ws
     try:
         if not GSHEET_CREDENTIALS_JSON:
             raise RuntimeError("缺少 GSHEET_CREDENTIALS_JSON")
         creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
+
         worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
-        feedback_sheet = gc.open_by_key(FEEDBACK_SPREADSHEET_ID).sheet1
-        logging.info("✅ Sheets 初始化完成")
+        fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
+        feedback_sheet = fb_spread.sheet1
+
+        # ★ 取得或建立 consent 工作表
+        try:
+            consent_ws = fb_spread.worksheet(CONSENT_SHEET_TITLE)
+        except gspread.exceptions.WorksheetNotFound:
+            consent_ws = fb_spread.add_worksheet(title=CONSENT_SHEET_TITLE, rows=1000, cols=10)
+            consent_ws.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
+
+        logging.info("✅ Sheets 初始化完成（含 consent）")
     except Exception as e:
         logging.critical(f"❌ Sheets 初始化失敗: {e}")
         raise
@@ -190,6 +204,86 @@ def safe_reply(event, messages):
                 line_bot_api.push_message(uid, messages)
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
+
+# === 同意工具 ===
+def _booly(v):
+    s = str(v).strip().lower()
+    return s in ["1", "true", "yes", "y", "同意"]
+
+def has_consented(user_id: str) -> bool:
+    """查 consent sheet 是否有 agree=true 的紀錄"""
+    try:
+        if not user_id or consent_ws is None:
+            return False
+        rows = consent_ws.get_all_values()
+        if not rows or len(rows) < 2:
+            return False
+        header = rows[0]; data = rows[1:]
+        try:
+            i_uid = header.index("user_id")
+            i_ag  = header.index("agreed")
+        except ValueError:
+            return False
+        for r in data:
+            if len(r) <= max(i_uid, i_ag):
+                continue
+            if (r[i_uid] or "").strip() == user_id and _booly(r[i_ag]):
+                return True
+        return False
+    except Exception as e:
+        logging.warning(f"查詢同意失敗: {e}")
+        return False
+
+def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: str, ua: str, ts_iso: str):
+    """以 user_id 進行 upsert 到 consent sheet"""
+    try:
+        rows = consent_ws.get_all_values()
+        if not rows:
+            consent_ws.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
+            rows = [["user_id","agreed","display_name","source_type","ua","timestamp"]]
+        header = rows[0]; data = rows[1:]
+
+        idx = {h:i for i,h in enumerate(header)}
+        for k in ["user_id","agreed","display_name","source_type","ua","timestamp"]:
+            if k not in idx:
+                header.append(k); idx[k] = len(header)-1
+        if len(header) != len(rows[0]):
+            consent_ws.update("A1", [header])
+
+        # 找舊資料列
+        row_to_update = None
+        for i, r in enumerate(data, start=2):
+            if len(r) > idx["user_id"] and (r[idx["user_id"]] or "").strip() == user_id:
+                row_to_update = i
+                break
+
+        row_values = [""] * len(header)
+        row_values[idx["user_id"]] = user_id or ""
+        row_values[idx["agreed"]] = "true" if agreed else "false"
+        row_values[idx["display_name"]] = display_name or ""
+        row_values[idx["source_type"]] = source_type or ""
+        row_values[idx["ua"]] = ua or ""
+        row_values[idx["timestamp"]] = ts_iso or datetime.utcnow().isoformat()
+
+        if row_to_update:
+            consent_ws.update(f"A{row_to_update}", [row_values])
+        else:
+            consent_ws.append_row(row_values, value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        logging.error(f"寫入/更新同意失敗: {e}")
+        return False
+
+def ensure_consent_or_prompt(user_id: str):
+    """未同意時回傳引導訊息（要在 handler 內用 safe_reply 發送後 return）"""
+    if has_consented(user_id):
+        return None
+    tip = (
+        "🛡️ 使用前請先完成同意：\n"
+        f"{CONSENT_PAGE_URL}\n\n"
+        "若不同意，部分功能將無法提供。"
+    )
+    return TextSendMessage(text=tip)
 
 # === 從 Google Sheets 查使用者新增廁所 ===
 def query_sheet_toilets(user_lat, user_lon, radius=500):
@@ -487,8 +581,8 @@ def expected_from_feats(feats):
             probs = cleanliness_model.predict_proba(feats)
 
         try:
-            classes_enc = cleanliness_model.classes_              
-            labels = label_encoder.inverse_transform(classes_enc) 
+            classes_enc = cleanliness_model.classes_
+            labels = label_encoder.inverse_transform(classes_enc)
             labels = [float(x) for x in labels]
         except Exception:
             labels = [float(c) + 1.0 for c in cleanliness_model.classes_]
@@ -1014,6 +1108,40 @@ def get_clean_trend_by_coord(lat, lon):
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
 
+# === 同意頁面 / 隱私頁 ===
+@app.route("/consent", methods=["GET"])
+def render_consent_page():
+    return render_template("consent.html")
+
+@app.route("/privacy", methods=["GET"])
+def render_privacy_page():
+    # 你的檔名是 privacy.html
+    return render_template("privacy.html")
+
+# === LIFF 送資料回來的 API ===
+@app.route("/api/consent", methods=["POST"])
+def api_consent():
+    try:
+        payload = request.get_json(force=True, silent=False) or {}
+        agreed = bool(payload.get("agree"))
+        user_id = (payload.get("userId") or "").strip()
+        display_name = payload.get("displayName") or ""
+        source_type = payload.get("sourceType") or ""
+        ua = payload.get("ua") or request.headers.get("User-Agent","")
+        ts = payload.get("ts") or datetime.utcnow().isoformat()
+
+        if not user_id:
+            return {"ok": False, "message": "缺少 userId"}, 400
+
+        ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
+        if not ok:
+            return {"ok": False, "message": "寫入失敗"}, 500
+
+        return {"ok": True}, 200
+    except Exception as e:
+        logging.error(f"/api/consent 失敗: {e}")
+        return {"ok": False}, 500
+
 @app.route("/_debug_predict")
 def _debug_predict():
     try:
@@ -1058,7 +1186,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         })
         actions.append({
             "type": "uri",
-            "label": "查詢回饋（座標）",
+            "label": "查詢回饋",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
         addr_raw = toilet.get('address') or ""
@@ -1210,6 +1338,12 @@ def handle_text(event):
     if is_duplicate_and_mark(f"text|{uid}|{text}"):
         return
 
+    # ★ 同意門檻（新舊使用者都要先同意一次）
+    gate_msg = ensure_consent_or_prompt(uid)
+    if gate_msg:
+        safe_reply(event, gate_msg)
+        return
+
     reply_messages = []
 
     if uid in pending_delete_confirm:
@@ -1270,7 +1404,13 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="你還沒有新增過廁所喔。"))
 
     elif text == "新增廁所":
-        reply_messages.append(TextSendMessage(text="請前往此頁新增廁所：\nhttps://school-i9co.onrender.com/add"))
+        base = "https://school-i9co.onrender.com/add"
+        if uid in user_locations:
+            la, lo = user_locations[uid]
+            url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}"
+        else:
+            url = base
+        reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
 
     elif text == "回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
@@ -1286,6 +1426,12 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
+    # ★ 沒同意就不處理定位
+    gate_msg = ensure_consent_or_prompt(uid)
+    if gate_msg:
+        safe_reply(event, gate_msg)
+        return
+
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
     if is_duplicate_and_mark(key):
         return
@@ -1300,6 +1446,12 @@ def handle_postback(event):
     data = event.postback.data or ""
 
     if is_duplicate_and_mark(f"pb|{uid}|{data}"):
+        return
+
+    # ★ 沒同意就不處理互動
+    gate_msg = ensure_consent_or_prompt(uid)
+    if gate_msg:
+        safe_reply(event, gate_msg)
         return
 
     try:
@@ -1355,30 +1507,78 @@ def handle_postback(event):
 # === 新增廁所頁面 ===
 @app.route("/add", methods=["GET"])
 def render_add_page():
-    return render_template("submit_toilet.html")
+    uid = request.args.get("uid", "")
+    lat = request.args.get("lat", "")
+    lon = request.args.get("lon", "")
+    preset_address = ""
 
-# （可選）使用者新增廁所 API（保留）
+    # 若 URL 有 lat/lon，嘗試用 OSM reverse geocode 預填地址
+    if lat and lon:
+        try:
+            ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
+            url = f"https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat={lat}&lon={lon}&addressdetails=1"
+            headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                a = data.get("address", {})
+                pretty = " ".join(filter(None, [
+                    a.get("country", ""),
+                    a.get("state", a.get("region", "")),
+                    a.get("city", a.get("town", a.get("village", a.get("county", "")))),
+                    a.get("suburb", a.get("neighbourhood", "")),
+                    a.get("road", ""),
+                    a.get("house_number", ""),
+                    a.get("postcode", "")
+                ])).strip()
+                preset_address = pretty or data.get("display_name", "")
+        except Exception as e:
+            logging.warning(f"reverse geocode 失敗: {e}")
+
+    return render_template(
+        "submit_toilet.html",
+        preset_address=preset_address,
+        preset_lat=lat,
+        preset_lon=lon
+    )
+
+
+# === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     try:
         data = request.get_json()
         logging.info(f"📥 收到表單資料: {data}")
 
-        uid = data.get("user_id")
+        uid = data.get("user_id") or "web"
         name = data.get("name")
         address = data.get("address")
+        lat = data.get("lat", "")
+        lon = data.get("lon", "")
 
-        if not all([uid, name, address]):
+        if not all([name, address]):
             return {"success": False, "message": "缺少參數"}, 400
 
-        lat, lon = geocode_address(address)
-        if lat is None or lon is None:
+        # 若 lat/lon 已存在，直接用；否則嘗試 geocode
+        lat_f, lon_f = None, None
+        if lat and lon:
+            lat_f, lon_f = _parse_lat_lon(lat, lon)
+        if lat_f is None or lon_f is None:
+            lat_f, lon_f = geocode_address(address)
+
+        if lat_f is None or lon_f is None:
             return {"success": False, "message": "地址轉換失敗"}, 400
 
-        worksheet.append_row([uid, name, address, float(norm_coord(lat)), float(norm_coord(lon)), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")])
+        lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
+
+        # 寫入 Google Sheets
+        worksheet.append_row([
+            uid, name, address, float(lat_s), float(lon_s),
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        ])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
-        # 備份至本地 CSV（14 欄，與 PUBLIC_HEADERS 對齊）
+        # 備份到本地 CSV
         try:
             if not os.path.exists(TOILETS_FILE_PATH):
                 with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
@@ -1388,7 +1588,7 @@ def submit_toilet():
                 writer = csv.writer(f)
                 writer.writerow([
                     "00000","0000000","未知里","USERADD", name, address, "使用者補充",
-                    norm_coord(lat), norm_coord(lon),
+                    lat_s, lon_s,
                     "普通級","公共場所","未知","使用者","0"
                 ])
         except Exception as e:
