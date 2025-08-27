@@ -1407,9 +1407,9 @@ def handle_text(event):
         base = "https://school-i9co.onrender.com/add"
         if uid in user_locations:
             la, lo = user_locations[uid]
-            url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}"
+            url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
         else:
-            url = base
+            url = f"{base}#openExternalBrowser=1"
         reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
 
     elif text == "回饋":
@@ -1426,7 +1426,6 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
-    # ★ 沒同意就不處理定位
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -1448,7 +1447,6 @@ def handle_postback(event):
     if is_duplicate_and_mark(f"pb|{uid}|{data}"):
         return
 
-    # ★ 沒同意就不處理互動
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -1512,7 +1510,6 @@ def render_add_page():
     lon = request.args.get("lon", "")
     preset_address = ""
 
-    # 若 URL 有 lat/lon，嘗試用 OSM reverse geocode 預填地址
     if lat and lon:
         try:
             ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
@@ -1542,7 +1539,6 @@ def render_add_page():
         preset_lon=lon
     )
 
-
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
@@ -1559,7 +1555,6 @@ def submit_toilet():
         if not all([name, address]):
             return {"success": False, "message": "缺少參數"}, 400
 
-        # 若 lat/lon 已存在，直接用；否則嘗試 geocode
         lat_f, lon_f = None, None
         if lat and lon:
             lat_f, lon_f = _parse_lat_lon(lat, lon)
@@ -1571,14 +1566,12 @@ def submit_toilet():
 
         lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
 
-        # 寫入 Google Sheets
         worksheet.append_row([
             uid, name, address, float(lat_s), float(lon_s),
             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ])
         logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
 
-        # 備份到本地 CSV
         try:
             if not os.path.exists(TOILETS_FILE_PATH):
                 with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
