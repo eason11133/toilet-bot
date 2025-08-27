@@ -1115,8 +1115,7 @@ def render_consent_page():
 
 @app.route("/privacy", methods=["GET"])
 def render_privacy_page():
-    # 你的檔名是 privacy.html
-    return render_template("privacy.html")
+    return render_template("privacy_policy.html")
 
 # === LIFF 送資料回來的 API ===
 @app.route("/api/consent", methods=["POST"])
