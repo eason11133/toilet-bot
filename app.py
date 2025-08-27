@@ -1408,7 +1408,7 @@ def handle_text(event):
             la, lo = user_locations[uid]
             url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
         else:
-            url = f"{base}#openExternalBrowser=1"
+            url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
         reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
 
     elif text == "回饋":
