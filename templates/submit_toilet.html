@@ -1,217 +1,128 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8" />
-  <title>新增廁所</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --card: #ffffff;
-      --text: #2c3e50;
-      --muted: #6b7280;
-      --primary: #3498db;
-      --primary-hover: #2980b9;
-      --ok: #16a34a;
-      --err: #dc2626;
-      --shadow: 0 2px 6px rgba(0,0,0,.08);
-      --radius: 12px;
+<script>
+(function () {
+  const $ = (sel) => document.querySelector(sel);
+  const form = $("#toiletForm");
+  const btn = $("#submitBtn");
+  const msg = $("#msg");
+  const uidInput = $("#user_id");
+  const uidBlock = document.querySelector("[data-userid-block]");
+  const addrInput = $("#address");
+  const latInput = $("#lat");
+  const lonInput = $("#lon");
+
+  // ==== A) 自動帶入 userId ====
+  const LIFF_ID = "2007674330-0XpoR2dW"; // 你的 LIFF ID
+
+  async function autofillUserId() {
+    // 1) 先吃 URL 的 uid
+    const qs = new URLSearchParams(location.search);
+    const urlUid = qs.get("uid");
+    if (urlUid) {
+      uidInput.value = urlUid;
+      if (uidBlock) uidBlock.style.display = "none"; // 隱藏整塊
+      return;
     }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 24px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-    }
-    .wrap { max-width: 720px; margin: 0 auto; }
-    h1 { font-size: 28px; margin: 0 0 10px; letter-spacing: .5px; }
-    p.sub { margin: 0 0 18px; color: var(--muted); }
-    .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
-    label { display: block; margin: 14px 0 6px; font-weight: 600; }
-    input[type="text"], textarea {
-      width: 100%; padding: 10px 12px;
-      border: 1px solid #d1d5db; border-radius: 10px;
-      font-size: 16px; background: #fff;
-    }
-    .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
-    .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
-    @media (min-width: 640px) { .row.two { grid-template-columns: 1fr 1fr; } }
-    button {
-      margin-top: 18px;
-      background: var(--primary); color: #fff;
-      border: none; border-radius: 10px;
-      padding: 12px 18px; font-size: 16px;
-      cursor: pointer;
-    }
-    button:hover { background: var(--primary-hover); }
-    button[disabled] { opacity: .6; cursor: not-allowed; }
-    .msg { margin-top: 14px; padding: 10px 12px; border-radius: 10px; display: none; }
-    .msg.ok { background: #ecfdf5; color: var(--ok); display: block; }
-    .msg.err { background: #fef2f2; color: var(--err); display: block; }
-    .footer-note { margin-top: 16px; color: var(--muted); font-size: 13px; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>新增廁所</h1>
-    <p class="sub">填寫名稱與地址即可建立，地址會由系統自動轉為座標。</p>
 
-    <div class="card">
-      <form id="toiletForm" autocomplete="on">
-        <div class="row two">
-          <div>
-            <label for="name">廁所名稱(可備註樓層) <span style="color:#ef4444">*</span></label>
-            <input id="name" name="name" type="text" placeholder="例如：五常公園 公廁" required />
-          </div>
-          <div>
-            <label for="user_id">你的使用者 ID（可留空）</label>
-            <input id="user_id" name="user_id" type="text" placeholder="例如：你的 LINE UID / 暱稱" />
-            <div class="hint">若留空，系統會以 <code>web</code> 作為預設 ID。</div>
-          </div>
-        </div>
-
-        <label for="address">地址 <span style="color:#ef4444">*</span></label>
-        <!-- 預填：優先使用後端傳入的 preset_address，其次用 URL 的 lat/lon 反向地理補上 -->
-        <input
-          id="address"
-          name="address"
-          type="text"
-          placeholder="請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號"
-          value="{{ preset_address or '' }}"
-          required
-        />
-        <div class="hint">若你剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。</div>
-
-        <!-- 隱藏欄位：經緯度（後端優先用這個；沒有才用地址去 geocode） -->
-        <input id="lat" name="lat" type="hidden" value="{{ preset_lat or (request.args.get('lat') or '') }}">
-        <input id="lon" name="lon" type="hidden" value="{{ preset_lon or (request.args.get('lon') or '') }}">
-
-        <button type="submit" id="submitBtn">送出</button>
-        <div id="msg" class="msg"></div>
-
-        <div class="footer-note">送出後，會寫入 Google 試算表主資料；有提供 lat/lon 時會直接使用座標，否則以地址轉換。</div>
-      </form>
-    </div>
-  </div>
-
-  <script>
-    (function () {
-      const $ = (sel) => document.querySelector(sel);
-      const form = $("#toiletForm");
-      const btn = $("#submitBtn");
-      const msg = $("#msg");
-      const uidInput = $("#user_id");
-      const addrInput = $("#address");
-      const latInput = $("#lat");
-      const lonInput = $("#lon");
-
-      // 1) 儲存/帶入使用者 ID
+    // 2) 沒有 uid 參數，再嘗試 LIFF（若在 LINE 內）
+    if (window.liff) {
       try {
-        const saved = localStorage.getItem("toilet_uid");
-        if (saved && !uidInput.value) uidInput.value = saved;
-      } catch (e) {}
-
-      // 2) 若沒有後端預填地址，但 URL 上有 lat/lon，就用 OSM Reverse 來補地址
-      (async function maybeReverseGeocode() {
-        const hasAddress = (addrInput.value || "").trim().length > 0;
-        const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
-        const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
-        if (hasAddress || !lat || !lon) return;
-
-        // 寫回 hidden（讓後端直接用）
-        latInput.value = lat;
-        lonInput.value = lon;
-
-        try {
-          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
-          const res = await fetch(url, { headers: { "Accept": "application/json" } });
-          if (!res.ok) throw new Error("reverse geocode 失敗");
-          const data = await res.json();
-
-          // 組 OSM 友善地址（比單純 display_name 更乾淨）
-          const a = data.address || {};
-          const pretty =
-            [
-              a.country || "",
-              a.state || a.region || "",
-              a.city || a.town || a.village || a.county || "",
-              a.suburb || a.neighbourhood || "",
-              a.road || "",
-              a.house_number || "",
-              a.postcode || ""
-            ]
-            .filter(Boolean)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim();
-
-          addrInput.value = pretty || (data.display_name || "");
-        } catch (e) {
-          // 失敗就忽略，讓使用者手動輸入
-          console.warn("OSM reverse geocode 失敗", e);
-        }
-      })();
-
-      // 3) 送出表單
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
-
-        const name = $("#name").value.trim();
-        const address = addrInput.value.trim();
-        let user_id = uidInput.value.trim() || "web"; // 預設 web
-        const lat = (latInput.value || "").trim();
-        const lon = (lonInput.value || "").trim();
-
-        if (!name || !address) {
-          return showErr("請先填寫『廁所名稱』與『地址』");
-        }
-
-        // 持久化 UID
-        try { localStorage.setItem("toilet_uid", user_id); } catch (e) {}
-
-        btn.disabled = true; btn.textContent = "送出中…";
-
-        try {
-          // 後端已改成：若有 lat/lon 就直接用；沒有才用 address geocode
-          const payload = { user_id, name, address };
-          if (lat && lon) { payload.lat = lat; payload.lon = lon; }
-
-          const res = await fetch("/submit_toilet", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-          const data = await res.json().catch(() => ({}));
-
-          if (res.ok && data && data.success) {
-            showOk(data.message || "✅ 已新增，感謝補點！");
-            // 清除名稱與地址（保留 UID 與 lat/lon，以便連續新增同區點）
-            $("#name").value = "";
-            // address 維持現值，方便複製同一地點不同名稱；若你想清空，就取消下一行註解
-            // addrInput.value = "";
-          } else {
-            showErr((data && data.message) || "新增失敗，請稍後再試");
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) {
+          // 若需要可自動登入；這頁多半在外部瀏覽器，不一定要叫 login
+          // liff.login({ redirectUri: location.href });
+        } else {
+          const profile = await liff.getProfile();
+          if (profile && profile.userId) {
+            uidInput.value = profile.userId;
+            if (uidBlock) uidBlock.style.display = "none";
+            return;
           }
-        } catch (err) {
-          showErr("網路或伺服器異常，請稍後重試");
-        } finally {
-          btn.disabled = false; btn.textContent = "送出";
         }
-      });
+      } catch (e) {
+        console.warn("LIFF 取 userId 失敗", e);
+      }
+    }
 
-      function showOk(text) {
-        msg.className = "msg ok";
-        msg.textContent = text;
-        msg.style.display = "block";
+    // 3) 最後才用 localStorage 備援（保留你原本的行為）
+    try {
+      const saved = localStorage.getItem("toilet_uid");
+      if (saved && !uidInput.value) uidInput.value = saved;
+    } catch {}
+  }
+  autofillUserId();
+
+  // ==== B) 若沒有後端預填地址，但 URL 上有 lat/lon，就反查地址 ====
+  (async function maybeReverseGeocode() {
+    const hasAddress = (addrInput.value || "").trim().length > 0;
+    const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
+    const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
+    if (hasAddress || !lat || !lon) return;
+
+    latInput.value = lat;
+    lonInput.value = lon;
+
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
+      const res = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error("reverse geocode 失敗");
+      const data = await res.json();
+      const a = data.address || {};
+      const pretty = [
+        a.country || "", a.state || a.region || "",
+        a.city || a.town || a.village || a.county || "",
+        a.suburb || a.neighbourhood || "", a.road || "",
+        a.house_number || "", a.postcode || ""
+      ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      addrInput.value = pretty || (data.display_name || "");
+    } catch (e) {
+      console.warn("OSM reverse geocode 失敗", e);
+    }
+  })();
+
+  // ==== C) 送出 ====
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
+
+    const name = $("#name").value.trim();
+    const address = addrInput.value.trim();
+    let user_id = (uidInput.value || "").trim() || "web";   // 自動帶入後就有值了
+    const lat = (latInput.value || "").trim();
+    const lon = (lonInput.value || "").trim();
+
+    if (!name || !address) {
+      return showErr("請先填寫『廁所名稱』與『地址』");
+    }
+
+    // 記住 user_id（即使是自動填的，也存一下）
+    try { localStorage.setItem("toilet_uid", user_id); } catch {}
+
+    btn.disabled = true; btn.textContent = "送出中…";
+    try {
+      const payload = { user_id, name, address };
+      if (lat && lon) { payload.lat = lat; payload.lon = lon; }
+
+      const res = await fetch("/submit_toilet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data && data.success) {
+        showOk(data.message || "✅ 已新增，感謝補點！");
+        $("#name").value = "";
+      } else {
+        showErr((data && data.message) || "新增失敗，請稍後再試");
       }
-      function showErr(text) {
-        msg.className = "msg err";
-        msg.textContent = "❌ " + text;
-        msg.style.display = "block";
-      }
-    })();
-  </script>
-</body>
-</html>
+    } catch {
+      showErr("網路或伺服器異常，請稍後重試");
+    } finally {
+      btn.disabled = false; btn.textContent = "送出";
+    }
+  });
+
+  function showOk(text) { msg.className = "msg ok"; msg.textContent = text; msg.style.display = "block"; }
+  function showErr(text) { msg.className = "msg err"; msg.textContent = "❌ " + text; msg.style.display = "block"; }
+})();
+</script>
