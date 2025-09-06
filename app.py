@@ -21,9 +21,9 @@ from datetime import datetime
 import joblib
 import threading
 import time
-import statistics  # 95% CI 用
+import statistics  
 from difflib import SequenceMatcher
-import random  # ⬅️ 自我保活用的抖動
+import random  
 
 try:
     import pandas as pd
@@ -47,7 +47,7 @@ class _NoHealthzFilter(logging.Filter):
 
 logging.getLogger("werkzeug").addFilter(_NoHealthzFilter())
 
-# === 極輕量健康檢查端點（新增） ===
+# === 健康檢查端點 ===
 @app.route("/healthz", methods=["GET", "HEAD"])
 def healthz():
     headers = {
@@ -56,22 +56,20 @@ def healthz():
         "X-Robots-Tag": "noindex",
     }
     if request.method == "HEAD":
-        return Response(status=204, headers=headers)  # 無 body、更省
+        return Response(status=204, headers=headers)  
     return Response("ok", status=200, headers=headers)
 
-# === 自我保活設定（新增） ===
+# === 自我激活設定（ ===
 KEEPALIVE_URL = (
-    os.getenv("KEEPALIVE_URL")  # 推薦直接設這個：如 https://<你的-app>.onrender.com/healthz
+    os.getenv("KEEPALIVE_URL")  
     or (os.getenv("PUBLIC_URL") and os.getenv("PUBLIC_URL").rstrip("/") + "/healthz")
     or (os.getenv("RENDER_EXTERNAL_URL") and os.getenv("RENDER_EXTERNAL_URL").rstrip("/") + "/healthz")
 )
-KEEPALIVE_ENABLE = os.getenv("KEEPALIVE_ENABLE", "1") == "1"  # 設 0 可關
-KEEPALIVE_INTERVAL_SECONDS = int(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))  # 預設 10 分鐘
-KEEPALIVE_JITTER_SECONDS   = int(os.getenv("KEEPALIVE_JITTER_SECONDS", "60"))   # 0~60 秒抖動
+KEEPALIVE_ENABLE = os.getenv("KEEPALIVE_ENABLE", "1") == "1"  
+KEEPALIVE_INTERVAL_SECONDS = int(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))  
+KEEPALIVE_JITTER_SECONDS   = int(os.getenv("KEEPALIVE_JITTER_SECONDS", "60"))   
 
 def _self_keepalive_background():
-    """定期 HEAD /healthz 讓 Render 視為有流量，避免 15 分鐘無請求而睡眠。
-       注意：服務一旦睡著，本執行緒也會停，不負責喚醒。"""
     if not KEEPALIVE_ENABLE or not KEEPALIVE_URL:
         logging.info("⏭️ keepalive disabled (no URL or disabled by env).")
         return
@@ -88,17 +86,17 @@ def _self_keepalive_background():
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# 檔案
+# === 檔案 ===
 DATA_DIR = os.path.join(os.getcwd(), "data")
-TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  # 公家資料/備份
-FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")     # 仍沿用原檔名，但以 csv 方式讀寫
+TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")  
+FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")     
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# 確保 favorites 檔存在
+
 if not os.path.exists(FAVORITES_FILE_PATH):
     open(FAVORITES_FILE_PATH, "a", encoding="utf-8").close()
 
-# 確保 public_toilets.csv 具有表頭（供 DictReader 使用）
+
 PUBLIC_HEADERS = [
     "country","city","village","number","name","address","administration",
     "latitude","longitude","grade","type2","type","exec","diaper"
@@ -111,10 +109,10 @@ if not os.path.exists(TOILETS_FILE_PATH):
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  # 主資料（使用者新增廁所）
-FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  # 回饋/預測
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  
+FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"  
 
-# ★ 同意書設定
+# === 同意書設定 ===
 CONSENT_SHEET_TITLE = "consent"
 CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL", "https://school-i9co.onrender.com/consent")
 
@@ -211,7 +209,7 @@ def haversine(lat1, lon1, lat2, lon2):
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === 防重複（10 秒視為重複） ===
+# === 防重複 ===
 DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "10"))
 _RECENT_EVENTS = {}
 
@@ -300,7 +298,7 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
         if len(header) != len(rows[0]):
             consent_ws.update("A1", [header])
 
-        # 找舊資料列
+        
         row_to_update = None
         for i, r in enumerate(data, start=2):
             if len(r) > idx["user_id"] and (r[idx["user_id"]] or "").strip() == user_id:
@@ -424,7 +422,7 @@ def query_overpass_toilets(lat, lon, radius=500):
     logging.error(f"Overpass 全部端點失敗：{last_err}")
     return []
 
-# === 讀本地 public_toilets.csv ===
+# === 讀取 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
@@ -456,7 +454,7 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
     return sorted(pts, key=lambda x: x["distance"])
 
-# === 合併 + 簡單去重 ===
+# === 合併 + 去重 ===
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
     all_pts = []
     for l in lists:
@@ -548,7 +546,7 @@ def geocode_address(address):
         logging.error(f"地址轉經緯度失敗: {e}")
     return None, None
 
-# === 附近廁所 API（已納入 CSV + 去重） ===
+# === 附近廁所 API ===
 @app.route("/nearby_toilets", methods=["GET"])
 def nearby_toilets():
     user_lat = request.args.get('lat')
@@ -569,7 +567,7 @@ def nearby_toilets():
         return {"message": "附近找不到廁所"}, 404
     return {"toilets": all_toilets}, 200
 
-# === 顯示回饋表單（允許沒有 address） ===
+# === 顯示回饋表單 ===
 @app.route("/feedback_form/<toilet_name>/", defaults={'address': ''})
 @app.route("/feedback_form/<toilet_name>/<path:address>")
 def feedback_form(toilet_name, address):
@@ -685,7 +683,7 @@ def _pred_from_row(r, idx):
         score = _simple_score(rr, pp, aa)
     return (score, rr, pp, aa)
 
-# === 以最近 N 筆做「即時預測」與 95% CI ===
+# === 「即時預測」與 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     try:
         rows = feedback_sheet.get_all_values()
@@ -884,7 +882,7 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
         logging.error(f"❌ 讀取回饋列表（座標）錯誤: {e}")
         return []
 
-# === 以座標聚合的統計（摘要）— 分數一致化 ===
+# === 座標聚合統計 — 分數一致化 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     try:
         rows = feedback_sheet.get_all_values()
@@ -1057,7 +1055,7 @@ def toilet_feedback(toilet_name):
         logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
 
-# === 新路由：座標版（上方藍色平均也改成一致邏輯） ===
+# === 新路由 ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
     try:
@@ -1195,8 +1193,8 @@ def api_consent():
 def _debug_predict():
     try:
         r = int(request.args.get("rating"))
-        paper = request.args.get("paper", "沒注意")
-        acc = request.args.get("access", "沒注意")
+        paper = request.get("paper", "沒注意")
+        acc = request.get("access", "沒注意")
 
         paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
         access_map = {"有": 1, "沒有": 0, "沒注意": 0}
@@ -1212,7 +1210,7 @@ def _debug_predict():
         logging.error(e)
         return {"ok": False}, 500
 
-# === 建立 Flex：附近 / 最愛（含指示燈） ===
+# === 建立 Flex ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     indicators = build_feedback_index()
     bubbles = []
@@ -1290,7 +1288,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
         bubbles.append(bubble)
     return {"type": "carousel", "contents": bubbles}
 
-# === 列出「我的貢獻」 & 削除 ===
+# === 列出 我的貢獻 & 削除 ===
 def get_user_contributions(uid):
     items = []
     try:
@@ -1387,7 +1385,7 @@ def handle_text(event):
     if is_duplicate_and_mark(f"text|{uid}|{text}"):
         return
 
-    # ★ 同意門檻（新舊使用者都要先同意一次）
+    #  同意門檻
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -1418,10 +1416,11 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
     elif text == "附近廁所":
-        if uid not in user_locations:
+        loc = user_locations.pop(uid, None)
+        if not loc:
             reply_messages.append(TextSendMessage(text="請先傳送位置"))
         else:
-            lat, lon = user_locations[uid]
+            lat, lon = loc
             toilets = _merge_and_dedupe_lists(
                 query_public_csv_toilets(lat, lon) or [],
                 query_sheet_toilets(lat, lon) or [],
@@ -1432,14 +1431,16 @@ def handle_text(event):
             else:
                 msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
                 reply_messages.append(FlexSendMessage("附近廁所", msg))
+            reply_messages.append(TextSendMessage(text="🔒 已清除你的定位，下次請先傳送位置"))
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
         else:
-            if uid in user_locations:
-                lat, lon = user_locations[uid]
+            loc = user_locations.get(uid)
+            if loc:
+                lat, lon = loc
                 for f in favs:
                     f["distance"] = haversine(lat, lon, f["lat"], f["lon"])
             msg = create_toilet_flex_messages(favs, show_delete=True, uid=uid)
@@ -1454,8 +1455,9 @@ def handle_text(event):
 
     elif text == "新增廁所":
         base = "https://school-i9co.onrender.com/add"
-        if uid in user_locations:
-            la, lo = user_locations[uid]
+        loc = user_locations.get(uid)
+        if loc:
+            la, lo = loc
             url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
         else:
             url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
@@ -1653,7 +1655,6 @@ def auto_predict_cleanliness_background():
 # === 啟動 ===
 if __name__ == "__main__":
     threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
-    # ⬇️ 自我保活執行緒（新增）
     threading.Thread(target=_self_keepalive_background, daemon=True).start()
 
     port = int(os.getenv("PORT", 10000))
