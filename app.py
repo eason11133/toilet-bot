@@ -6,7 +6,7 @@ import requests
 import traceback
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
-from flask import Flask, request, abort, render_template, redirect, url_for
+from flask import Flask, request, abort, render_template, redirect, url_for, Response
 from dotenv import load_dotenv
 from urllib.parse import quote, unquote
 from linebot import LineBotApi, WebhookHandler
@@ -23,6 +23,7 @@ import threading
 import time
 import statistics  # 95% CI 用
 from difflib import SequenceMatcher
+import random  # ⬅️ 自我保活用的抖動
 
 try:
     import pandas as pd
@@ -34,6 +35,55 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 CORS(app)
+
+# === 過濾 /healthz 的 werkzeug access log（新增） ===
+class _NoHealthzFilter(logging.Filter):
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return "/healthz" not in msg
+
+logging.getLogger("werkzeug").addFilter(_NoHealthzFilter())
+
+# === 極輕量健康檢查端點（新增） ===
+@app.route("/healthz", methods=["GET", "HEAD"])
+def healthz():
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+    }
+    if request.method == "HEAD":
+        return Response(status=204, headers=headers)  # 無 body、更省
+    return Response("ok", status=200, headers=headers)
+
+# === 自我保活設定（新增） ===
+KEEPALIVE_URL = (
+    os.getenv("KEEPALIVE_URL")  # 推薦直接設這個：如 https://<你的-app>.onrender.com/healthz
+    or (os.getenv("PUBLIC_URL") and os.getenv("PUBLIC_URL").rstrip("/") + "/healthz")
+    or (os.getenv("RENDER_EXTERNAL_URL") and os.getenv("RENDER_EXTERNAL_URL").rstrip("/") + "/healthz")
+)
+KEEPALIVE_ENABLE = os.getenv("KEEPALIVE_ENABLE", "1") == "1"  # 設 0 可關
+KEEPALIVE_INTERVAL_SECONDS = int(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600"))  # 預設 10 分鐘
+KEEPALIVE_JITTER_SECONDS   = int(os.getenv("KEEPALIVE_JITTER_SECONDS", "60"))   # 0~60 秒抖動
+
+def _self_keepalive_background():
+    """定期 HEAD /healthz 讓 Render 視為有流量，避免 15 分鐘無請求而睡眠。
+       注意：服務一旦睡著，本執行緒也會停，不負責喚醒。"""
+    if not KEEPALIVE_ENABLE or not KEEPALIVE_URL:
+        logging.info("⏭️ keepalive disabled (no URL or disabled by env).")
+        return
+    headers = {"User-Agent": f"SelfKeepalive/1.0 (+{os.getenv('CONTACT_EMAIL','you@example.com')})"}
+    while True:
+        try:
+            requests.head(KEEPALIVE_URL, timeout=8, headers=headers)
+            logging.debug("✅ keepalive ok")
+        except Exception as e:
+            logging.debug(f"⚠️ keepalive failed: {e}")
+        sleep_for = KEEPALIVE_INTERVAL_SECONDS + random.randint(0, KEEPALIVE_JITTER_SECONDS)
+        time.sleep(sleep_for)
 
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
@@ -1358,7 +1408,7 @@ def handle_text(event):
                 msg = "✅ 已刪除你的貢獻" if ok else "❌ 刪除失敗"
             else:
                 success = remove_from_favorites(uid, info["name"], info["lat"], info["lon"])
-                msg = "✅ 已刪除該廁所" if success else "❌ 刪除失敗"
+                msg = "✅ 已刪除該廁所" if success else "❌ 移除失敗"
             del pending_delete_confirm[uid]
             reply_messages.append(TextSendMessage(text=msg))
         elif text == "取消":
@@ -1603,5 +1653,8 @@ def auto_predict_cleanliness_background():
 # === 啟動 ===
 if __name__ == "__main__":
     threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
+    # ⬇️ 自我保活執行緒（新增）
+    threading.Thread(target=_self_keepalive_background, daemon=True).start()
+
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
