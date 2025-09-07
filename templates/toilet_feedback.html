@@ -20,6 +20,7 @@
         .no-feedback { color: #999; }
         #cleanlinessChart { width: 100%; height: 300px; margin-top: 14px; }
         .muted { color:#888; font-size: 12px; }
+        .meta { color:#555; }
     </style>
 </head>
 <body>
@@ -30,7 +31,7 @@
         平均預測清潔分數(最高5分)：<span id="avgPredScore">未預測</span>
     </div>
 
-    <!-- ✅ 新增：即時清潔指數 Nowcast + 95% CI -->
+    <!-- ✅ 即時清潔指數 Nowcast + 95% CI -->
     <div class="nowcast-box">
         <div id="nowcastText">即時清潔指數載入中…</div>
         <div class="muted">* 以上為最近回饋的即時估計，括號為 95% 信賴區間；n 為納入計算的筆數</div>
@@ -50,10 +51,13 @@
         {% endif %}
         <ul id="feedbackList">
             <li>
-                <p><strong>🌟 評分:</strong> {{ feedbacks[0].rating }} ｜ 
-                   <strong>🧻 衛生紙:</strong> {{ feedbacks[0].toilet_paper }} ｜ 
-                   <strong>♿ 無障礙設施:</strong> {{ feedbacks[0].accessibility }} ｜ 
-                   <strong>🕒 使用時間:</strong> {{ feedbacks[0].time_of_use or '未填寫' }}</p>
+                <p class="meta">
+                    <strong>🌟 評分:</strong> {{ feedbacks[0].rating }} ｜ 
+                    <strong>🧻 衛生紙:</strong> {{ feedbacks[0].toilet_paper }} ｜ 
+                    <strong>♿ 無障礙設施:</strong> {{ feedbacks[0].accessibility }} ｜ 
+                    <strong>🕒 使用時間:</strong> {{ feedbacks[0].time_of_use or '未填寫' }} ｜ 
+                    <strong>🏢 位置/樓層:</strong> {{ feedbacks[0].floor or '樓層未知' }}
+                </p>
                 <p class="comment">
                     <strong>💬 留言:</strong>
                     {% if feedbacks[0].comment and feedbacks[0].comment.strip() %}
@@ -67,10 +71,13 @@
 
             {% for c in feedbacks[1:] %}
                 <li class="collapsed">
-                    <p><strong>🌟 評分:</strong> {{ c.rating }} ｜ 
-                       <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
-                       <strong>♿ 無障礙設施:</strong> {{ c.accessibility }} ｜ 
-                       <strong>🕒 使用時間:</strong> {{ c.time_of_use or '未填寫' }}</p>
+                    <p class="meta">
+                        <strong>🌟 評分:</strong> {{ c.rating }} ｜ 
+                        <strong>🧻 衛生紙:</strong> {{ c.toilet_paper }} ｜ 
+                        <strong>♿ 無障礙設施:</strong> {{ c.accessibility }} ｜ 
+                        <strong>🕒 使用時間:</strong> {{ c.time_of_use or '未填寫' }} ｜ 
+                        <strong>🏢 位置/樓層:</strong> {{ c.floor or '樓層未知' }}
+                    </p>
                     <p class="comment">
                         <strong>💬 留言:</strong>
                         {% if c.comment and c.comment.strip() %}
@@ -99,17 +106,13 @@
             });
         }
 
-        // 取得座標：先試模板變數，失敗則從網址 /toilet_feedback_by_coord/<lat>/<lon> 解析
+        // 取得座標
         function getLatLon() {
             let lat = "{{ lat|default('', true) }}";
             let lon = "{{ lon|default('', true) }}";
             if (lat && lon) return {lat, lon};
-
-            // 從 URL path 抓
             const m = decodeURIComponent(location.pathname).match(/\/toilet_feedback_by_coord\/([^/]+)\/([^/]+)/);
             if (m && m[1] && m[2]) return { lat: m[1], lon: m[2] };
-
-            // 從 address 嘗試 "lat,lon"
             const addrNode = document.querySelector('.addr');
             if (addrNode) {
                 const m2 = (addrNode.textContent || '').match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
@@ -122,14 +125,13 @@
             const { lat, lon } = getLatLon();
             if (!lat || !lon) return;
 
-            // 1) 趨勢＆平均（沿用你原本的做法）
+            // 趨勢＆平均
             fetch(`/get_clean_trend_by_coord/${lat}/${lon}?recompute=1`)
               .then(r => r.json())
               .then(data => {
                   const arr = (data && data.data) ? data.data : [];
                   const ctx = document.getElementById('cleanlinessChart').getContext('2d');
 
-                  // 計算平均並顯示在藍色盒
                   const avgNode = document.getElementById('avgPredScore');
                   if (arr.length > 0) {
                       const avg = (arr.reduce((s,x)=>s + (Number(x.score)||0), 0) / arr.length).toFixed(2);
@@ -138,7 +140,6 @@
                       if (avgNode) avgNode.textContent = '未預測';
                   }
 
-                  // 畫圖
                   new Chart(ctx, {
                       type: 'line',
                       data: {
@@ -164,7 +165,7 @@
                   console.error('取得趨勢資料失敗:', err);
               });
 
-            // 2) ✅ Nowcast 即時清潔指數 + 95% CI
+            // Nowcast 即時清潔指數 + 95% CI
             fetch(`/get_nowcast_by_coord/${lat}/${lon}`)
               .then(r => r.json())
               .then(data => {

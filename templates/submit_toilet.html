@@ -8,7 +8,7 @@
     :root {
       --bg: #f4f6f8;
       --card: #ffffff;
-      --text: #2c3e50;
+      --text: #1f2937;
       --muted: #6b7280;
       --primary: #3498db;
       --primary-hover: #2980b9;
@@ -16,6 +16,8 @@
       --err: #dc2626;
       --shadow: 0 2px 6px rgba(0,0,0,.08);
       --radius: 12px;
+      --chip:#eff6ff;
+      --chip-b:#93c5fd;
     }
     * { box-sizing: border-box; }
     body {
@@ -24,19 +26,20 @@
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
     }
-    .wrap { max-width: 720px; margin: 0 auto; }
+    .wrap { max-width: 820px; margin: 0 auto; }
     h1 { font-size: 28px; margin: 0 0 10px; letter-spacing: .5px; }
     p.sub { margin: 0 0 18px; color: var(--muted); }
     .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
     label { display: block; margin: 14px 0 6px; font-weight: 600; }
-    input[type="text"], textarea {
+    input[type="text"], textarea, select {
       width: 100%; padding: 10px 12px;
       border: 1px solid #d1d5db; border-radius: 10px;
       font-size: 16px; background: #fff;
     }
+    textarea { resize: vertical; min-height: 80px; }
     .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
     .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
-    @media (min-width: 640px) { .row.two { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 720px) { .row.two { grid-template-columns: 1fr 1fr; } .row.three { grid-template-columns: 1fr 1fr 1fr; } }
     button {
       margin-top: 18px;
       background: var(--primary); color: #fff;
@@ -50,23 +53,30 @@
     .msg.ok { background: #ecfdf5; color: var(--ok); display: block; }
     .msg.err { background: #fef2f2; color: var(--err); display: block; }
     .footer-note { margin-top: 16px; color: var(--muted); font-size: 13px; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+    .chip { background:var(--chip); border:1px solid var(--chip-b); color:#1d4ed8; padding:6px 10px; border-radius:999px; font-size:13px; cursor:pointer; }
+    .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .inline a { color:#2563eb; text-decoration: none; }
+    .inline a:hover { text-decoration: underline; }
+    .hr { height:1px; background:#e5e7eb; margin:16px 0; }
+    .small { font-size:12px; color:#6b7280; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>新增廁所</h1>
-    <p class="sub">填寫名稱與地址即可建立，地址會由系統自動轉為座標。</p>
+    <p class="sub">請盡量提供樓層與入口提示，能大幅降低使用者迷路風險。</p>
 
     <div class="card">
       <form id="toiletForm" autocomplete="on">
         <div class="row two">
           <div>
-            <label for="name">廁所名稱(可備註樓層) <span style="color:#ef4444">*</span></label>
-            <input id="name" name="name" type="text" placeholder="例如：五常公園 公廁" required />
+            <label for="name">廁所名稱 <span style="color:#ef4444">*</span></label>
+            <input id="name" name="name" type="text" placeholder="例如：五常公園 公廁 / XX商場 南棟 2F 廁所" required />
+            <div class="hint">建築物內請寫到館別/翼/區域，例：A館 南棟 2F 廁所。</div>
           </div>
           <div>
             <label for="user_id">你的 LINE ID</label>
-            <!-- 自動帶入 LINE UID（來自 /add?uid=...），唯讀 -->
             <input id="user_id" name="user_id" type="text" value="{{ request.args.get('uid','web') }}" readonly />
             <div class="hint">系統會自動帶入你的 LINE UID。</div>
           </div>
@@ -81,16 +91,79 @@
           value="{{ preset_address or '' }}"
           required
         />
-        <div class="hint">若你剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。</div>
+        <div class="hint">若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。</div>
 
-        <!-- 隱藏欄位：經緯度 -->
-        <input id="lat" name="lat" type="hidden" value="{{ preset_lat or (request.args.get('lat') or '') }}">
-        <input id="lon" name="lon" type="hidden" value="{{ preset_lon or (request.args.get('lon') or '') }}">
+        <!-- 📍 座標 -->
+        <div class="row two">
+          <div>
+            <label for="lat">緯度 (lat)</label>
+            <input id="lat" name="lat" type="text" inputmode="decimal" placeholder="例如：25.033964" value="{{ preset_lat or (request.args.get('lat') or '') }}">
+          </div>
+          <div>
+            <label for="lon">經度 (lon)</label>
+            <input id="lon" name="lon" type="text" inputmode="decimal" placeholder="例如：121.564468" value="{{ preset_lon or (request.args.get('lon') or '') }}">
+          </div>
+        </div>
+        <div class="inline">
+          <button type="button" id="btnGeo">用我現在的位置</button>
+          <a id="mapPreview" href="#" target="_blank" rel="noopener">Google 地圖預覽</a>
+          <span class="small">（會以 lat/lon 或地址開啟）</span>
+        </div>
+
+        <div class="hr"></div>
+
+        <!-- 🏢 樓層 / 位置 -->
+        <div class="row two">
+          <div>
+            <label for="level">樓層</label>
+            <select id="level" name="level">
+              <option value="">— 選擇樓層 / 戶外 —</option>
+              <option value="戶外（無建築）">戶外（無建築）</option>
+              <option value="B3">B3</option>
+              <option value="B2">B2</option>
+              <option value="B1">B1</option>
+              <option value="1F">1F（地面）</option>
+              <option value="2F">2F</option>
+              <option value="3F">3F</option>
+              <option value="4F">4F</option>
+              <option value="5F+">5F 以上</option>
+              <option value="屋頂">屋頂</option>
+            </select>
+            <div class="chips" aria-hidden="true">
+              <span class="chip" data-level="1F">地面</span>
+              <span class="chip" data-level="B1">地下</span>
+              <span class="chip" data-level="2F">樓上</span>
+            </div>
+          </div>
+          <div>
+            <label for="floor_hint">位置描述 <span style="color:#ef4444">*</span></label>
+            <input id="floor_hint" name="floor_hint" type="text" placeholder="例：南棟 2F 靠電梯、B1 超商後方、戶外西側涼亭旁" required />
+            <div class="hint">請提供到達指引：靠近哪個店/電梯/樓梯/出入口，或「地下/地面/樓上」。</div>
+          </div>
+        </div>
+
+        <!-- 🚪 入口/導引 & 限制 -->
+        <label for="entrance_hint">入口/導引（選填）</label>
+        <textarea id="entrance_hint" name="entrance_hint" placeholder="例：從中庭電扶梯上 2F 左轉 30 公尺；捷運 X 出口出站右轉直走。"></textarea>
+
+        <div class="row two">
+          <div>
+            <label for="access_note">是否需密碼/店員（選填）</label>
+            <input id="access_note" name="access_note" type="text" placeholder="例：需店員開門 / 櫃台索取密碼 1024" />
+          </div>
+          <div>
+            <label for="open_hours">開放時間（選填）</label>
+            <input id="open_hours" name="open_hours" type="text" placeholder="例：每日 07:00–22:00 / 週一公休" />
+          </div>
+        </div>
 
         <button type="submit" id="submitBtn">送出</button>
         <div id="msg" class="msg"></div>
 
-        <div class="footer-note">送出後，會寫入 Google 試算表主資料；有提供 lat/lon 時會直接使用座標，否則以地址轉換。</div>
+        <div class="footer-note">
+          送出後會寫入主資料。若提供 lat/lon 會直接使用座標，否則以地址轉換。<br/>
+          建議盡量填寫「樓層/位置描述」與「入口/導引」，能讓使用者更快找到廁所。
+        </div>
       </form>
     </div>
   </div>
@@ -105,20 +178,62 @@
       const addrInput = $("#address");
       const latInput = $("#lat");
       const lonInput = $("#lon");
+      const levelSel = $("#level");
+      const mapPreview = $("#mapPreview");
 
-      // 1) 自動填入 LINE UID（若後端沒帶 uid，就 fallback 為 "web"）
-      if (!uidInput.value) {
-        uidInput.value = "web";
+      // 自動填入 LINE UID（若後端沒帶 uid，就 fallback 為 "web"）
+      if (!uidInput.value) { uidInput.value = "web"; }
+
+      // 快速樓層 Chips
+      document.querySelectorAll(".chip").forEach(ch => {
+        ch.addEventListener("click", () => {
+          levelSel.value = ch.dataset.level || "";
+        });
+      });
+
+      // 更新地圖預覽連結
+      function updateMapPreview() {
+        const lat = (latInput.value || "").trim();
+        const lon = (lonInput.value || "").trim();
+        if (lat && lon) {
+          mapPreview.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
+        } else {
+          const q = (addrInput.value || "").trim();
+          mapPreview.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : "#";
+        }
       }
+      [latInput, lonInput, addrInput].forEach(el => el.addEventListener("input", updateMapPreview));
+      updateMapPreview();
 
-      // 2) 若沒有後端預填地址，但 URL 上有 lat/lon，就用 OSM Reverse 來補地址
+      // 一鍵抓目前座標
+      $("#btnGeo").addEventListener("click", () => {
+        if (!navigator.geolocation) {
+          return showErr("此裝置不支援定位");
+        }
+        btn.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            latInput.value = pos.coords.latitude.toFixed(6);
+            lonInput.value = pos.coords.longitude.toFixed(6);
+            showOk("已帶入目前座標");
+            btn.disabled = false;
+            updateMapPreview();
+          },
+          (err) => {
+            showErr("定位失敗，請檢查權限或訊號");
+            btn.disabled = false;
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      });
+
+      // 若沒有後端預填地址，但 URL 上有 lat/lon，就用 OSM Reverse 來補地址
       (async function maybeReverseGeocode() {
         const hasAddress = (addrInput.value || "").trim().length > 0;
         const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
         const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
         if (hasAddress || !lat || !lon) return;
 
-        // 寫回 hidden
         latInput.value = lat;
         lonInput.value = lon;
 
@@ -145,12 +260,13 @@
             .trim();
 
           addrInput.value = pretty || (data.display_name || "");
+          updateMapPreview();
         } catch (e) {
           console.warn("OSM reverse geocode 失敗", e);
         }
       })();
 
-      // 3) 送出表單
+      // 表單送出
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
@@ -160,15 +276,24 @@
         const user_id = uidInput.value.trim() || "web";
         const lat = (latInput.value || "").trim();
         const lon = (lonInput.value || "").trim();
+        const level = (levelSel.value || "").trim();
+        const floor_hint = ($("#floor_hint").value || "").trim();
+        const entrance_hint = ($("#entrance_hint").value || "").trim();
+        const access_note = ($("#access_note").value || "").trim();
+        const open_hours = ($("#open_hours").value || "").trim();
 
         if (!name || !address) {
           return showErr("請先填寫『廁所名稱』與『地址』");
+        }
+        // 位置描述強制至少 4 字，避免空泛
+        if (floor_hint.length < 4) {
+          return showErr("請補充更清楚的『位置描述』（至少 4 個字）");
         }
 
         btn.disabled = true; btn.textContent = "送出中…";
 
         try {
-          const payload = { user_id, name, address };
+          const payload = { user_id, name, address, floor_hint, level, entrance_hint, access_note, open_hours };
           if (lat && lon) { payload.lat = lat; payload.lon = lon; }
 
           const res = await fetch("/submit_toilet", {
@@ -181,6 +306,12 @@
           if (res.ok && data && data.success) {
             showOk(data.message || "✅ 已新增，感謝補點！");
             $("#name").value = "";
+            // 不清空地址，方便連續補點同區域；清空其他指引欄位
+            $("#floor_hint").value = "";
+            $("#entrance_hint").value = "";
+            $("#access_note").value = "";
+            $("#open_hours").value = "";
+            levelSel.value = "";
           } else {
             showErr((data && data.message) || "新增失敗，請稍後再試");
           }
