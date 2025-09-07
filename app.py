@@ -24,6 +24,7 @@ import time
 import statistics
 from difflib import SequenceMatcher
 import random
+import re  
 
 try:
     import pandas as pd
@@ -186,6 +187,69 @@ def _floor_from_tags(tags: dict):
         return "地面"
     return None
 
+_ZH_DIGIT = {"零":0,"〇":0,"一":1,"二":2,"兩":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9}
+
+def _zh_to_int_word(word: str):
+    if not word:
+        return None
+    w = word.replace("两","兩")
+    if "十" not in w:
+        return _ZH_DIGIT.get(w)
+    left, _, right = w.partition("十")
+    tens = 10 if left == "" else (_ZH_DIGIT.get(left, 0) * 10)
+    ones = 0 if right == "" else _ZH_DIGIT.get(right, 0)
+    val = tens + ones
+    return val if val > 0 else None
+
+def _normalize_floor_label(n: int, underground: bool=False):
+    try:
+        n = int(n)
+    except Exception:
+        return None
+    if underground:
+        return f"地下{abs(n)}F"
+    if n == 0:
+        return "地面"
+    return f"{n}F"
+
+def _floor_from_name(name: str):
+    if not name:
+        return None
+    s = str(name).strip()
+    s_lower = s.lower()
+
+    if re.search(r'(?:^|[^a-z])g\s*/?\s*f(?:[^a-z]|$)', s_lower) or re.search(r'ground\s*floor', s_lower):
+        return "地面"
+
+    m = re.search(r'(?:^|[^a-z])[bＢ]\s*-?\s*(\d{1,2})\s*(?:f|樓|層)?(?:[^0-9]|$)', s_lower)
+    if m:
+        n = int(m.group(1))
+        if n > 0:
+            return _normalize_floor_label(n, underground=True)
+
+    m = re.search(r'地下\s*([一二兩三四五六七八九十〇零\d]{1,3})\s*(?:樓|層|f)?', s_lower)
+    if m:
+        token = m.group(1)
+        n = int(token) if token.isdigit() else _zh_to_int_word(token)
+        if n and n > 0:
+            return _normalize_floor_label(n, underground=True)
+
+    m = re.search(r'(\d{1,3})\s*(?:f|樓|層)(?:[^a-z0-9]|$)', s_lower)
+    if m:
+        return _normalize_floor_label(int(m.group(1)))
+
+    m = re.search(r'第?\s*([一二兩三四五六七八九十〇零]{1,3})\s*(?:樓|層)', s_lower)
+    if m:
+        n = _zh_to_int_word(m.group(1))
+        if n:
+            return _normalize_floor_label(n)
+
+    m = re.search(r'(?:^|[^a-z])l\s*(\d{1,3})(?:[^0-9]|$)', s_lower)
+    if m:
+        return _normalize_floor_label(int(m.group(1)))
+
+    return None
+
 # === 依附近場館命名 ===
 _ENRICH_CACHE = {}
 _ENRICH_TTL = 120
@@ -266,7 +330,6 @@ def init_gsheet():
         fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
         feedback_sheet = fb_spread.sheet1
 
-        # ★ 取得或建立 consent 工作表
         try:
             consent_ws = fb_spread.worksheet(CONSENT_SHEET_TITLE)
         except gspread.exceptions.WorksheetNotFound:
@@ -280,7 +343,7 @@ def init_gsheet():
 
 init_gsheet()
 
-# === 使用者新增廁所：需求表頭與自動補齊（新增） ===
+# === 使用者新增廁所 ===
 TOILET_REQUIRED_HEADER = [
     "user_id", "name", "address", "lat", "lon",
     "level", "floor_hint", "entrance_hint", "access_note", "open_hours",
@@ -455,13 +518,16 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 continue
             dist = haversine(user_lat, user_lon, t_lat, t_lon)
             if dist <= radius:
+                # ✅ 新增：名稱推斷樓層
+                floor_hint = _floor_from_name(name)
                 toilets.append({
                     "name": name,
                     "lat": float(norm_coord(t_lat)),
                     "lon": float(norm_coord(t_lon)),
                     "address": address,
                     "distance": dist,
-                    "type": "sheet"
+                    "type": "sheet",
+                    "floor_hint": floor_hint
                 })
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
@@ -513,6 +579,10 @@ def query_overpass_toilets(lat, lon, radius=500):
                 address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
                 floor_hint = _floor_from_tags(tags)
 
+                # ✅ 若 OSM 標籤沒樓層，改用名稱推斷
+                if not floor_hint:
+                    floor_hint = _floor_from_name(name)
+
                 toilets.append({
                     "name": name,
                     "lat": float(norm_coord(t_lat)),
@@ -561,6 +631,8 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                 if dist <= radius:
                     name = (row.get("name") or "無名稱").strip()
                     addr = (row.get("address") or "").strip()
+                    # ✅ 新增：名稱推斷樓層
+                    floor_hint = _floor_from_name(name)
                     pts.append({
                         "name": name,
                         "lat": float(norm_coord(t_lat)),
@@ -569,7 +641,8 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                         "distance": dist,
                         "type": "public_csv",
                         "grade": row.get("grade", ""),
-                        "category": row.get("type2", "")
+                        "category": row.get("type2", ""),
+                        "floor_hint": floor_hint
                     })
     except Exception as e:
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
@@ -912,6 +985,14 @@ def submit_feedback():
                 return "清潔度評分必須在 1 到 10 之間", 400
         except ValueError:
             return "清潔度評分必須是數字", 400
+
+        if floor_hint and len(floor_hint) < 4:
+            return "『位置描述』太短，請至少 4 個字", 400
+
+        if not floor_hint:
+            inferred = _floor_from_name(name)
+            if inferred:
+                floor_hint = inferred
 
         paper_map = {"有": 1, "沒有": 0, "沒注意": 0}
         access_map = {"有": 1, "沒有": 0, "沒注意": 0}
@@ -1725,13 +1806,6 @@ def render_add_page():
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
-    """
-    接收前端 submit_toilet.html 傳來的 JSON，欄位：
-      必填：user_id(可為 'web')、name、address
-      選填：lat、lon（若無則以 address geocode）
-      新增：level、floor_hint、entrance_hint、access_note、open_hours（皆選填）
-    會自動補齊/對齊 Google Sheet 表頭後寫入；也備份到本地 public_toilets.csv。
-    """
     try:
         data = request.get_json(force=True, silent=False) or {}
         logging.info(f"📥 收到表單資料: {data}")
@@ -1754,6 +1828,11 @@ def submit_toilet():
 
         if floor_hint and len(floor_hint) < 4:
             return {"success": False, "message": "『位置描述』太短，請至少 4 個字"}, 400
+
+        if not floor_hint:
+            inferred = _floor_from_name(name)
+            if inferred:
+                floor_hint = inferred
 
         lat_f, lon_f = (None, None)
         if lat_in and lon_in:
@@ -1781,7 +1860,7 @@ def submit_toilet():
         put("lat", lat_s)
         put("lon", lon_s)
         put("level", level)
-        put("floor_hint", floor_hint)
+        put("floor_hint", floor_hint)  
         put("entrance_hint", entrance_hint)
         put("access_note", access_note)
         put("open_hours", open_hours)
