@@ -31,6 +31,103 @@ try:
 except Exception:
     pd = None
 
+# ======================== Sheets 安全外掛層（新增，不動原功能） ========================
+SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
+SHEETS_RETRY_MAX = int(os.getenv("SHEETS_RETRY_MAX", "6"))
+SHEETS_READ_TTL_SEC = int(os.getenv("SHEETS_READ_TTL_SEC", "30"))
+SHEETS_CACHE_MAX_ROWS = int(os.getenv("SHEETS_CACHE_MAX_ROWS", "20000"))
+
+_sheets_sem = threading.Semaphore(SHEETS_MAX_CONCURRENCY)
+_read_cache = {}            # key: (sheet_id, ws_title, op) -> {ts, val}
+_cache_lock = threading.Lock()
+
+def _is_quota_or_retryable(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return ("429" in s or "quota" in s or "rate limit" in s or
+            "timeout" in s or "timed out" in s or "503" in s or "500" in s)
+
+def _with_retry(func, *args, **kwargs):
+    backoff = 0.7
+    for i in range(SHEETS_RETRY_MAX):
+        try:
+            with _sheets_sem:
+                return func(*args, **kwargs)
+        except Exception as e:
+            if _is_quota_or_retryable(e):
+                sleep_s = backoff * (2 ** i) + random.uniform(0, 0.25*i)
+                time.sleep(sleep_s)
+                continue
+            raise
+    raise
+
+class SafeWS:
+    """包裝 gspread worksheet：讀取加 TTL 快取；所有操作加退避與併發閥。"""
+    def __init__(self, ws, sheet_id: str, name: str):
+        self._ws = ws
+        self._sheet_id = sheet_id
+        self._name = name
+
+    def get_all_values(self):
+        key = (self._sheet_id, self._name, "get_all_values")
+        now = time.time()
+        with _cache_lock:
+            c = _read_cache.get(key)
+            if c and now - c["ts"] < SHEETS_READ_TTL_SEC:
+                return c["val"]
+        def _do():
+            return self._ws.get_all_values()
+        val = _with_retry(_do)
+        if len(val) <= SHEETS_CACHE_MAX_ROWS:
+            with _cache_lock:
+                _read_cache[key] = {"ts": now, "val": val}
+        return val
+
+    def _invalidate(self):
+        key = (self._sheet_id, self._name, "get_all_values")
+        with _cache_lock:
+            _read_cache.pop(key, None)
+
+    def update(self, rng, values):
+        def _do():
+            return self._ws.update(rng, values)
+        out = _with_retry(_do); self._invalidate(); return out
+
+    def append_row(self, values, value_input_option="RAW"):
+        def _do():
+            return self._ws.append_row(values, value_input_option=value_input_option)
+        out = _with_retry(_do); self._invalidate(); return out
+
+    def delete_rows(self, index):
+        def _do():
+            return self._ws.delete_rows(index)
+        out = _with_retry(_do); self._invalidate(); return out
+
+    # 轉發
+    def row_values(self, i):           return _with_retry(self._ws.row_values, i)
+    def worksheet(self, title):        return self.__class__(self._ws.worksheet(title), self._sheet_id, title)
+    @property
+    def title(self):                   return self._ws.title
+
+# consent 背景排隊（429 時不回 500）
+_consent_q = []
+_consent_lock = threading.Lock()
+def _start_consent_worker():
+    def loop():
+        while True:
+            job = None
+            with _consent_lock:
+                if _consent_q:
+                    job = _consent_q.pop(0)
+            if not job:
+                time.sleep(0.2); continue
+            try:
+                job()
+            except Exception as e:
+                logging.error(f"Consent worker error: {e}")
+    threading.Thread(target=loop, daemon=True).start()
+_start_consent_worker()
+# ====================== /Sheets 安全外掛層 ======================
+
 # === 初始化 ===
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -294,7 +391,7 @@ def enrich_nearby_places(lat, lon, radius=500):
                         clat, clon = c.get("lat"), c.get("lon")
                     if clat is None or clon is None:
                         continue
-                    t = e.get("tags", {})
+                    t = e.get("tags", {}) or {}
                     nm = t.get("name")
                     if nm:
                         out.append({"name": nm, "lat": float(clat), "lon": float(clon)})
@@ -316,7 +413,7 @@ def sort_toilets(toilets):
     toilets.sort(key=lambda x: (int(x.get("distance", 1e9)), -_findability_bonus(x)))
     return toilets
 
-# === 初始化 Google Sheets ===
+# === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
     global gc, worksheet, feedback_sheet, consent_ws
     try:
@@ -326,17 +423,22 @@ def init_gsheet():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
 
-        worksheet = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
+        worksheet_raw = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
         fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
-        feedback_sheet = fb_spread.sheet1
+        feedback_raw = fb_spread.sheet1
 
         try:
-            consent_ws = fb_spread.worksheet(CONSENT_SHEET_TITLE)
+            consent_raw = fb_spread.worksheet(CONSENT_SHEET_TITLE)
         except gspread.exceptions.WorksheetNotFound:
-            consent_ws = fb_spread.add_worksheet(title=CONSENT_SHEET_TITLE, rows=1000, cols=10)
-            consent_ws.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
+            consent_raw = fb_spread.add_worksheet(title=CONSENT_SHEET_TITLE, rows=1000, cols=10)
+            consent_raw.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
 
-        logging.info("✅ Sheets 初始化完成（含 consent）")
+        # 包裝成 SafeWS，底下所有呼叫維持原 API
+        worksheet = SafeWS(worksheet_raw, TOILET_SPREADSHEET_ID, worksheet_raw.title)
+        feedback_sheet = SafeWS(feedback_raw, FEEDBACK_SPREADSHEET_ID, feedback_raw.title)
+        consent_ws = SafeWS(consent_raw, FEEDBACK_SPREADSHEET_ID, consent_raw.title)
+
+        logging.info("✅ Sheets 初始化完成（含 consent；啟用 SafeWS 快取/重試/併發控管）")
     except Exception as e:
         logging.critical(f"❌ Sheets 初始化失敗: {e}")
         raise
@@ -518,7 +620,6 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 continue
             dist = haversine(user_lat, user_lon, t_lat, t_lon)
             if dist <= radius:
-                # ✅ 新增：名稱推斷樓層
                 floor_hint = _floor_from_name(name)
                 toilets.append({
                     "name": name,
@@ -579,7 +680,6 @@ def query_overpass_toilets(lat, lon, radius=500):
                 address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
                 floor_hint = _floor_from_tags(tags)
 
-                # ✅ 若 OSM 標籤沒樓層，改用名稱推斷
                 if not floor_hint:
                     floor_hint = _floor_from_name(name)
 
@@ -631,7 +731,6 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                 if dist <= radius:
                     name = (row.get("name") or "無名稱").strip()
                     addr = (row.get("address") or "").strip()
-                    # ✅ 新增：名稱推斷樓層
                     floor_hint = _floor_from_name(name)
                     pts.append({
                         "name": name,
@@ -1368,7 +1467,10 @@ def render_consent_page():
 def render_privacy_page():
     return render_template("privacy_policy.html")
 
-# === LIFF 同意 API ===
+# === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
+_last_consent_ts = {}
+CONSENT_MIN_INTERVAL = float(os.getenv("CONSENT_MIN_INTERVAL", "1.0"))
+
 @app.route("/api/consent", methods=["POST"])
 def api_consent():
     try:
@@ -1383,9 +1485,23 @@ def api_consent():
         if not user_id:
             return {"ok": False, "message": "缺少 userId"}, 400
 
+        now = time.time()
+        last = _last_consent_ts.get(user_id, 0.0)
+        if now - last < CONSENT_MIN_INTERVAL:
+            return {"ok": True, "message": "accepted"}, 200
+        _last_consent_ts[user_id] = now
+
         ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
         if not ok:
-            return {"ok": False, "message": "寫入失敗"}, 500
+            def job():
+                try:
+                    upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
+                except Exception:
+                    pass
+            with _consent_lock:
+                if len(_consent_q) < 1000:
+                    _consent_q.append(job)
+            return {"ok": True, "message": "queued"}, 200
 
         return {"ok": True}, 200
     except Exception as e:
