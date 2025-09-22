@@ -240,7 +240,9 @@ class MessagingGuard:
         self.monthly_used = 0
         self.lock = threading.Lock()
         self.user_daily = defaultdict(lambda: {"date":"", "count":0})
+        self._guard = SomeGuard()  
         self._start_usage_poller()
+
 
     def reply(self, event, messages, fallback_text_with_url=None):
         uid = getattr(event.source, "user_id", None)
