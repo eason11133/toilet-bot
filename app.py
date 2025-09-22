@@ -15,7 +15,7 @@ from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     FlexSendMessage, PostbackEvent, TextSendMessage
 )
-from some_module import SomeGuard  
+from some_guard import SomeGuard 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
