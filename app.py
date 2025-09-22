@@ -101,8 +101,6 @@ def process_toilet_query(uid, lat, lon):
         toilets = sorted(toilets, key=lambda x: x.get("distance", 0))
     return toilets
 
-# 使用異步處理
-Parallel(n_jobs=1)(delayed(process_toilet_query)(uid, lat, lon) for uid, lat, lon in locations)
 
 def async_query_toilet(uid, lat, lon):
     # 這是個簡單的線程任務
