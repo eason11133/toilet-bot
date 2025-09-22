@@ -146,10 +146,10 @@ def _worker_loop():
             logging.error(f"[worker] error: {e}", exc_info=True)
         finally:
             TASK_Q.task_done()
-
+# 背景工作者的啟動
 for _ in range(BOT_WORKERS):
     threading.Thread(target=_worker_loop, daemon=True).start()
-
+           
 # === 初始化 ===
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
