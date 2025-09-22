@@ -131,8 +131,8 @@ _start_consent_worker()
 # ====================== /Sheets 安全外掛層 ======================
 
 # === Fast-ACK 佇列與工人 ===
-TASK_Q = Queue(maxsize=int(os.getenv("TASK_QUEUE_SIZE", "2000")))
-BOT_WORKERS = int(os.getenv("BOT_WORKERS", "4"))
+TASK_Q = Queue(maxsize=int(os.getenv("TASK_QUEUE_SIZE", "5000")))
+BOT_WORKERS = int(os.getenv("BOT_WORKERS", "8"))
 
 def _worker_loop():
     while True:
@@ -673,81 +673,90 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
 
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
-    query = f"""
-    [out:json][timeout:25];
-    (
-      node["amenity"="toilets"](around:{radius},{lat},{lon});
-      way["amenity"="toilets"](around:{radius},{lat},{lon});
-      relation["amenity"="toilets"](around:{radius},{lat},{lon});
-    );
-    out center tags;
-    """
+    overall_deadline = time.time() + 8.0  # 最多 8 秒
+    def _left():
+        return max(1.0, overall_deadline - time.time())
+
+    ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
+    headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
     endpoints = [
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
         "https://overpass.openstreetmap.ru/api/interpreter",
     ]
-    ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
-    headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
 
-    last_err = None
-    for idx, url in enumerate(endpoints):
-        try:
-            resp = requests.post(url, data=query, headers=headers, timeout=30)
-            ctype = (resp.headers.get("Content-Type") or "").lower()
-            if resp.status_code != 200 or "json" not in ctype:
-                snippet = (resp.text or "")[:200].replace("\n", " ")
-                logging.warning(f"Overpass 非 200 或非 JSON (endpoint {idx}): status={resp.status_code}, ctype={ctype}, body~={snippet}")
-                last_err = RuntimeError("overpass non-json")
-                continue
+    for r in (300, radius):
+        if time.time() >= overall_deadline:
+            break
 
-            data = resp.json()
-            elements = data.get("elements", [])
-            toilets = []
-            for elem in elements:
-                if elem["type"] == "node":
-                    t_lat, t_lon = elem["lat"], elem["lon"]
-                elif "center" in elem:
-                    t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
-                else:
+        query = f"""
+        [out:json][timeout:25];
+        (
+          node["amenity"="toilets"](around:{r},{lat},{lon});
+          way["amenity"="toilets"](around:{r},{lat},{lon});
+          relation["amenity"="toilets"](around:{r},{lat},{lon});
+        );
+        out center tags;
+        """
+
+        last_err = None
+        for idx, url in enumerate(endpoints):
+            if time.time() >= overall_deadline:
+                break
+            try:
+                resp = requests.post(url, data=query, headers=headers, timeout=min(8, _left()))
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if resp.status_code != 200 or "json" not in ctype:
+                    last_err = RuntimeError(f"overpass non-json {resp.status_code}")
                     continue
 
-                tags = elem.get("tags", {}) or {}
-                name = tags.get("name", "無名稱")
-                address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
-                floor_hint = _floor_from_tags(tags)
+                data = resp.json()
+                elements = data.get("elements", [])
+                toilets = []
+                for elem in elements:
+                    if "center" in elem:
+                        t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
+                    elif elem.get("type") == "node":
+                        t_lat, t_lon = elem["lat"], elem["lon"]
+                    else:
+                        continue
 
-                if not floor_hint:
-                    floor_hint = _floor_from_name(name)
+                    tags = elem.get("tags", {}) or {}
+                    name = tags.get("name", "無名稱")
+                    address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
+                    floor_hint = _floor_from_tags(tags) or _floor_from_name(name)
 
-                toilets.append({
-                    "name": name,
-                    "lat": float(norm_coord(t_lat)),
-                    "lon": float(norm_coord(t_lon)),
-                    "address": address,
-                    "distance": haversine(lat, lon, t_lat, t_lon),
-                    "type": "osm",
-                    "floor_hint": floor_hint
-                })
+                    toilets.append({
+                        "name": name,
+                        "lat": float(norm_coord(t_lat)),
+                        "lon": float(norm_coord(t_lon)),
+                        "address": address,
+                        "distance": haversine(lat, lon, t_lat, t_lon),
+                        "type": "osm",
+                        "floor_hint": floor_hint
+                    })
 
-            nearby_named = enrich_nearby_places(lat, lon, radius=500)
-            if nearby_named:
-                for t in toilets:
-                    if (not t.get("name")) or t["name"] == "無名稱":
-                        best = None; best_d = 61
-                        for p in nearby_named:
-                            d = haversine(t["lat"], t["lon"], p["lat"], p["lon"])
-                            if d < best_d:
-                                best_d = d; best = p
-                        if best:
-                            t["place_hint"] = best["name"]
+                # 只有在拿到資料時才做 enrich（避免多餘請求）
+                try:
+                    nearby_named = enrich_nearby_places(lat, lon, radius=500)
+                    if nearby_named:
+                        for t in toilets:
+                            if (not t.get("name")) or t["name"] == "無名稱":
+                                best = None; best_d = 61
+                                for p in nearby_named:
+                                    d = haversine(t["lat"], t["lon"], p["lat"], p["lon"])
+                                    if d < best_d:
+                                        best_d = d; best = p
+                                if best:
+                                    t["place_hint"] = best["name"]
+                except Exception:
+                    pass
 
-            return sorted(toilets, key=lambda x: x["distance"])
-        except Exception as e:
-            last_err = e
-            logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
-
-    logging.error(f"Overpass 全部端點失敗：{last_err}")
+                return sorted(toilets, key=lambda x: x["distance"])
+            except Exception as e:
+                last_err = e
+                logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
+        logging.warning(f"Overpass 半徑 {r} 失敗：{last_err}")
     return []
 
 # === 讀取 public_toilets.csv ===
@@ -1742,20 +1751,26 @@ pending_delete_confirm = {}
 
 def _do_nearby_toilets_and_push(uid, lat, lon):
     try:
-        toilets = _merge_and_dedupe_lists(
+        # 先查快的來源（CSV + Sheets），幾百毫秒內可出
+        quick = _merge_and_dedupe_lists(
             query_public_csv_toilets(lat, lon) or [],
             query_sheet_toilets(lat, lon) or [],
-            query_overpass_toilets(lat, lon) or [],
         )
-        sort_toilets(toilets)
+        sort_toilets(quick)
+        if quick:
+            msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
+            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
 
-        if not toilets:
-            msgs = [TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦")]
-        else:
-            msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-            msgs = [FlexSendMessage("附近廁所", msg)]
+        # 再跑 OSM（有 8 秒上限）
+        osm = query_overpass_toilets(lat, lon, radius=500) or []
+        all_pts = _merge_and_dedupe_lists(quick, osm)
+        sort_toilets(all_pts)
 
-        line_bot_api.push_message(uid, msgs)
+        if len(all_pts) > len(quick):  # 有新增結果才補推，避免洗頻
+            msg2 = create_toilet_flex_messages(all_pts, show_delete=False, uid=uid)
+            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（更新）", msg2))
+        elif not quick and not all_pts:
+            line_bot_api.push_message(uid, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
     except Exception as e:
         logging.error(f"bg nearby error: {e}", exc_info=True)
         try:
@@ -1809,13 +1824,14 @@ def handle_text(event):
             safe_reply(event, TextSendMessage(text="請先傳送位置"))
         else:
             la, lo = loc
-            # 立即回覆，確保 webhook 很快回 200
             safe_reply(event, TextSendMessage(text="✅ 收到，幫你找附近廁所中…"))
-            # 丟到背景工人
             try:
                 TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
             except Full:
                 line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍候再試 🙏"))
+            except Exception as e:
+                logging.error(f"enqueue error: {e}", exc_info=True)
+                line_bot_api.push_message(uid, TextSendMessage(text="排程失敗，請再傳一次位置 🙏"))
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
