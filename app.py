@@ -48,6 +48,10 @@ def _is_quota_or_retryable(exc: Exception) -> bool:
     return ("429" in s or "quota" in s or "rate limit" in s or
             "timeout" in s or "timed out" in s or "503" in s or "500" in s)
 
+def delay_request():
+    delay_time = random.uniform(0.5, 1.5)  # 隨機延遲時間，根據需求調整
+    time.sleep(delay_time)
+
 def _with_retry(func, *args, **kwargs):
     backoff = 0.7
     for i in range(SHEETS_RETRY_MAX):
@@ -56,6 +60,7 @@ def _with_retry(func, *args, **kwargs):
                 return func(*args, **kwargs)
         except Exception as e:
             if _is_quota_or_retryable(e):
+                delay_request()  # 在重試之前加入隨機延遲
                 sleep_s = backoff * (2 ** i) + random.uniform(0, 0.25*i)
                 time.sleep(sleep_s)
                 continue
@@ -134,10 +139,15 @@ _start_consent_worker()
 TASK_Q = Queue(maxsize=int(os.getenv("TASK_QUEUE_SIZE", "5000")))
 BOT_WORKERS = int(os.getenv("BOT_WORKERS", "8"))
 
+# 更新佇列檢查
 def _worker_loop():
     while True:
         try:
-            job = TASK_Q.get(timeout=0.2)
+            # 限制只有當佇列大小在門檻以下時才執行 Google Sheets 請求
+            if TASK_Q.qsize() <= 2:  # 設定此值來控制佇列長度
+                job = TASK_Q.get(timeout=0.2)
+            else:
+                continue
         except Empty:
             continue
         try:
@@ -146,6 +156,7 @@ def _worker_loop():
             logging.error(f"[worker] error: {e}", exc_info=True)
         finally:
             TASK_Q.task_done()
+
 # 背景工作者的啟動
 for _ in range(BOT_WORKERS):
     threading.Thread(target=_worker_loop, daemon=True).start()
@@ -761,6 +772,7 @@ def query_overpass_toilets(lat, lon, radius=500):
 
 # === 讀取 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
+    delay_request()
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
         return pts
