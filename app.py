@@ -2,8 +2,10 @@ import os
 import csv
 import json
 import logging
+import sqlite3
 import requests
 import traceback
+from threading import Thread
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for, Response
@@ -26,6 +28,7 @@ from difflib import SequenceMatcher
 import random
 import re
 from queue import Queue, Empty, Full
+from joblib import Parallel, delayed
 
 load_dotenv()
 try:
@@ -66,6 +69,52 @@ def _with_retry(func, *args, **kwargs):
                 continue
             raise
     raise
+
+def batch_query_sheets(query_keys):
+    # 同時查詢多個快取的資料
+    results = []
+    for key in query_keys:
+        cached_data = get_cached_data(key)
+        if cached_data:
+            results.append(cached_data)
+        else:
+            results.append(None)  # 若無快取，會再進行 API 請求
+    return results
+
+def retry_request(func, *args, **kwargs):
+    retries = 3
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if i < retries - 1:
+                time.sleep(2 ** i)  # Exponential backoff
+                continue
+            else:
+                raise e
+
+def process_toilet_query(uid, lat, lon):
+    # 先獲取查詢結果，然後進行需要的處理
+    toilets = get_nearby_toilets(uid, lat, lon)
+    if toilets:
+        # 做一些數據處理，比如排序、過濾等
+        toilets = sorted(toilets, key=lambda x: x.get("distance", 0))
+    return toilets
+
+# 使用異步處理
+Parallel(n_jobs=1)(delayed(process_toilet_query)(uid, lat, lon) for uid, lat, lon in locations)
+
+def async_query_toilet(uid, lat, lon):
+    # 這是個簡單的線程任務
+    thread = Thread(target=do_nearby_toilets_and_push, args=(uid, lat, lon))
+    thread.start()
+
+def do_nearby_toilets_and_push(uid, lat, lon):
+    # 異步查詢並推送結果
+    toilets = get_nearby_toilets(uid, lat, lon)
+    if toilets:
+        # 在這裡進行推送
+        pass
 
 class SafeWS:
     """包裝 gspread worksheet：讀取加 TTL 快取；所有操作加退避與併發閥。"""
@@ -214,6 +263,18 @@ def _self_keepalive_background():
 
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
+
+_CACHE = {}
+
+def get_nearby_toilets(uid, lat, lon):
+    key = f"{lat},{lon}"
+    if key in _CACHE:
+        return _CACHE[key]
+    
+    # 若快取中不存在該位置，則發送請求
+    toilets = query_public_csv_toilets(lat, lon)
+    _CACHE[key] = toilets  # 快取結果
+    return toilets
 
 # === 檔案 ===
 DATA_DIR = os.path.join(os.getcwd(), "data")
@@ -383,7 +444,7 @@ def _floor_from_name(name: str):
 _ENRICH_CACHE = {}
 _ENRICH_TTL = 120
 
-def enrich_nearby_places(lat, lon, radius=500):
+def enrich_nearby_places(lat, lon, radius=200):
     key = f"{round(lat,4)},{round(lon,4)}:{radius}"
     now = time.time()
     cached = _ENRICH_CACHE.get(key)
@@ -652,7 +713,62 @@ def ensure_consent_or_prompt(user_id: str):
     return TextSendMessage(text=tip)
 
 # === 從 Google Sheets 查使用者新增廁所 ===
-def query_sheet_toilets(user_lat, user_lon, radius=500):
+# 設定 SQLite 資料庫位置
+CACHE_DB_PATH = "cache.db"
+
+# 建立 SQLite 連線
+def create_cache_db():
+    if not os.path.exists(CACHE_DB_PATH):
+        conn = sqlite3.connect(CACHE_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sheets_cache (
+            query_key TEXT PRIMARY KEY,
+            data TEXT,
+            timestamp REAL
+        )
+        """)
+        conn.commit()
+        conn.close()
+
+# 確認快取是否有效
+def get_cached_data(query_key, ttl_sec=60*5):
+    conn = sqlite3.connect(CACHE_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT data, timestamp FROM sheets_cache WHERE query_key = ?", (query_key,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        data, timestamp = result
+        if time.time() - timestamp < ttl_sec:
+            return json.loads(data)
+    return None
+
+# 儲存快取
+def save_cache(query_key, data):
+    conn = sqlite3.connect(CACHE_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT OR REPLACE INTO sheets_cache (query_key, data, timestamp)
+    VALUES (?, ?, ?)
+    """, (query_key, json.dumps(data), time.time()))
+    conn.commit()
+    conn.close()
+
+# 快取初始化
+create_cache_db()
+
+# 查詢廁所資料
+def query_sheet_toilets(user_lat, user_lon, radius=200):
+    # 用 lat 和 lon 組成唯一的查詢 key
+    query_key = f"{user_lat},{user_lon},{radius}"
+
+    # 嘗試從快取中獲取結果
+    cached_data = get_cached_data(query_key)
+    if cached_data:
+        return cached_data
+
     toilets = []
     try:
         rows = worksheet.get_all_values()
@@ -663,7 +779,8 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             name = (row[1] if len(row) > 1 else "").strip() or "無名稱"
             address = (row[2] if len(row) > 2 else "").strip()
             try:
-                t_lat = float(row[3]); t_lon = float(row[4])
+                t_lat = float(row[3])
+                t_lon = float(row[4])
             except:
                 continue
             dist = haversine(user_lat, user_lon, t_lat, t_lon)
@@ -680,6 +797,11 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 })
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
+
+    # 儲存查詢結果到快取
+    save_cache(query_key, toilets)
+
+    # 返回排序後的廁所資料
     return sorted(toilets, key=lambda x: x["distance"])
 
 # === OSM Overpass ===
@@ -1765,7 +1887,7 @@ pending_delete_confirm = {}
 def _do_nearby_toilets_and_push(uid, lat, lon):
     try:
         # 只有當佇列訊息數量不多時才查詢 Sheets
-        if TASK_Q.qsize() <= 2:  # 這裡設定只當訊息小於或等於2則時才查詢
+        if TASK_Q.qsize() <= 2:  # 設定此值來控制佇列長度
             # 查詢 Google Sheets
             quick = _merge_and_dedupe_lists(
                 query_public_csv_toilets(lat, lon) or [],
@@ -1777,7 +1899,7 @@ def _do_nearby_toilets_and_push(uid, lat, lon):
                 line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
 
         # 再跑 OSM（有 8 秒上限）
-        osm = query_overpass_toilets(lat, lon, radius=500) or []
+        osm = query_overpass_toilets(lat, lon, radius=200) or []
         all_pts = _merge_and_dedupe_lists(quick, osm)
         sort_toilets(all_pts)
 
