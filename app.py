@@ -1759,7 +1759,7 @@ def _do_nearby_toilets_and_push(uid, lat, lon):
         sort_toilets(quick)
         if quick:
             msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
-            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
+            line_bot_api.push_message(uid, FlexSendMessage("附近廁所", msg))
 
         # 再跑 OSM（有 8 秒上限）
         osm = query_overpass_toilets(lat, lon, radius=500) or []
@@ -1824,7 +1824,6 @@ def handle_text(event):
             safe_reply(event, TextSendMessage(text="請先傳送位置"))
         else:
             la, lo = loc
-            safe_reply(event, TextSendMessage(text="✅ 收到，幫你找附近廁所中…"))
             try:
                 TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
             except Full:
