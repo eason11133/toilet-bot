@@ -1959,7 +1959,6 @@ def handle_text(event):
             safe_reply(event, TextSendMessage(text="請先傳送位置"))
         else:
             la, lo = loc
-            safe_reply(event, TextSendMessage(text="✅ 收到，幫你找附近廁所中…"))
             try:
                 TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
             except Full:
