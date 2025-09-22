@@ -1749,17 +1749,20 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 
+# 修改這段代碼，在worker啟動時，檢查佇列大小
 def _do_nearby_toilets_and_push(uid, lat, lon):
     try:
-        # 先查快的來源（CSV + Sheets），幾百毫秒內可出
-        quick = _merge_and_dedupe_lists(
-            query_public_csv_toilets(lat, lon) or [],
-            query_sheet_toilets(lat, lon) or [],
-        )
-        sort_toilets(quick)
-        if quick:
-            msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
-            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
+        # 只有當佇列訊息數量不多時才查詢 Sheets
+        if TASK_Q.qsize() <= 2:  # 這裡設定只當訊息小於或等於2則時才查詢
+            # 查詢 Google Sheets
+            quick = _merge_and_dedupe_lists(
+                query_public_csv_toilets(lat, lon) or [],
+                query_sheet_toilets(lat, lon) or [],
+            )
+            sort_toilets(quick)
+            if quick:
+                msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
+                line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
 
         # 再跑 OSM（有 8 秒上限）
         osm = query_overpass_toilets(lat, lon, radius=500) or []
