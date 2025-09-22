@@ -15,6 +15,7 @@ from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     FlexSendMessage, PostbackEvent, TextSendMessage
 )
+from some_module import SomeGuard  
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -239,9 +240,10 @@ class MessagingGuard:
         self.monthly_limit = None
         self.monthly_used = 0
         self.lock = threading.Lock()
-        self.user_daily = defaultdict(lambda: {"date":"", "count":0})
-        self._guard = SomeGuard()  
+        self.user_daily = defaultdict(lambda: {"date": "", "count": 0})
+        self._guard = SomeGuard()  # 使用正確的 SomeGuard 類別
         self._start_usage_poller()
+
 
 
     def reply(self, event, messages, fallback_text_with_url=None):
