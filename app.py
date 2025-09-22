@@ -15,7 +15,6 @@ from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     FlexSendMessage, PostbackEvent, TextSendMessage
 )
-from some_guard import SomeGuard 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -24,7 +23,6 @@ import threading
 import time
 import statistics
 from difflib import SequenceMatcher
-from collections import defaultdict
 import random
 import re
 from queue import Queue, Empty, Full
@@ -167,18 +165,6 @@ class _NoHealthzFilter(logging.Filter):
 
 logging.getLogger("werkzeug").addFilter(_NoHealthzFilter())
 
-@app.route("/statusz", methods=["GET"])
-def statusz():
-    payload = {
-        "mode": guard.mode,
-        "suspended_until": guard.suspended_until,
-        "monthly_limit": guard.monthly_limit,
-        "monthly_used": guard.monthly_used,
-    }
-    return Response(json.dumps(payload, ensure_ascii=False),
-                    status=200,
-                    headers={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"})
-
 # === 健康檢查端點 ===
 @app.route("/healthz", methods=["GET", "HEAD"])
 def healthz():
@@ -217,164 +203,6 @@ def _self_keepalive_background():
 
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
-
-# === 永久版：MessagingGuard（配額/降級/上限 一次搞定） ===
-LINE_LIMIT_COOLDOWN_SEC = int(os.getenv("LINE_LIMIT_COOLDOWN_SEC", str(7*24*3600)))
-USER_DAILY_LIMIT = int(os.getenv("USER_DAILY_LIMIT", "6"))
-DEGRADE_WARN_REMAIN_PCT = float(os.getenv("DEGRADE_WARN_REMAIN_PCT", "0.15"))
-USAGE_POLL_SECONDS = int(os.getenv("USAGE_POLL_SECONDS", "600"))
-SEND_UPDATE_CARD = os.getenv("SEND_UPDATE_CARD", "0") == "1"  # 2 張卡改成可開關
-
-CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-_session = requests.Session()
-
-class Mode:
-    NORMAL="NORMAL"
-    SAVER="SAVER"
-    HARD_STOP="HARD_STOP"
-
-class MessagingGuard:
-    def __init__(self):
-        self.mode = Mode.NORMAL
-        self.suspended_until = 0.0
-        self.monthly_limit = None
-        self.monthly_used = 0
-        self.lock = threading.Lock()
-        self.user_daily = defaultdict(lambda: {"date": "", "count": 0})
-        self._guard = SomeGuard()  # 使用正確的 SomeGuard 類別
-        self._start_usage_poller()
-
-
-
-    def reply(self, event, messages, fallback_text_with_url=None):
-        uid = getattr(event.source, "user_id", None)
-        if not self._allow_send(uid):
-            self._log_skip(uid, "reply")
-            if fallback_text_with_url and self.mode != Mode.HARD_STOP:
-                self._safe_reply_text(event, fallback_text_with_url)
-            return False
-        ok = self._guard.reply(event, messages, uid)
-        if ok: self._bump(uid)
-        return ok
-
-    def push(self, uid, messages, fallback_text_with_url=None):
-        if not self._allow_send(uid):
-            self._log_skip(uid, "push")
-            if fallback_text_with_url and self.mode != Mode.HARD_STOP:
-                self._safe_push_text(uid, fallback_text_with_url)
-            return False
-        ok = self._safe_push(uid, messages)
-        if ok: self._bump(uid)
-        return ok
-
-    # ---- 判斷/統計 ----
-    def _allow_send(self, uid):
-        now = time.time()
-        with self.lock:
-            if now < self.suspended_until:
-                self.mode = Mode.HARD_STOP
-                return False
-            if self.mode == Mode.HARD_STOP:
-                return False
-            if uid:
-                today = datetime.utcnow().strftime("%Y-%m-%d")
-                rec = self.user_daily[uid]
-                if rec["date"] != today:
-                    rec["date"], rec["count"] = today, 0
-                if rec["count"] >= USER_DAILY_LIMIT:
-                    return False
-            return True  # SAVER/NORMAL 都允許，由呼叫端決定送什麼內容
-
-    def _bump(self, uid):
-        if not uid: return
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        rec = self.user_daily[uid]
-        if rec["date"] != today:
-            rec["date"], rec["count"] = today, 0
-        rec["count"] += 1
-
-    def _log_skip(self, uid, kind):
-        logging.info("⏭️ guard-skip %s uid=%s mode=%s used=%s limit=%s",
-                     kind, uid, self.mode, self.monthly_used, self.monthly_limit)
-
-    # ---- 真正送訊（含 429 熔絲） ----
-    def _safe_reply(self, event, messages, uid):
-        try:
-            line_bot_api.reply_message(event.reply_token, messages)
-            return True
-        except LineBotApiError as e:
-            if self._is_monthly_limit(e): self._trip_fuse(); return False
-            logging.warning(f"reply_message 失敗：{e}")
-            return False
-
-    def _safe_push(self, uid, messages):
-        try:
-            guard.push(uid, messages)
-            return True
-        except LineBotApiError as e:
-            if self._is_monthly_limit(e): self._trip_fuse(); return False
-            logging.error(f"push_message 失敗：{e}")
-            return False
-
-    def _safe_reply_text(self, event, text):
-        try:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
-        except Exception as e:
-            if self._is_monthly_limit(e): self._trip_fuse()
-
-    def _safe_push_text(self, uid, text):
-        try:
-            guard.push(uid, TextSendMessage(text=text))
-        except Exception as e:
-            if self._is_monthly_limit(e): self._trip_fuse()
-
-    def _is_monthly_limit(self, err):
-        s = str(err).lower()
-        return ("you have reached your monthly limit" in s) or ("status_code=429" in s)
-
-    def _trip_fuse(self):
-        with self.lock:
-            self.suspended_until = time.time() + LINE_LIMIT_COOLDOWN_SEC
-            self.mode = Mode.HARD_STOP
-        logging.error("🚫 LINE monthly limit reached -> HARD_STOP for %d sec", LINE_LIMIT_COOLDOWN_SEC)
-
-    # ---- 監控：定期抓用量並自動降級 ----
-    def _poll_usage_once(self):
-        if not CHANNEL_ACCESS_TOKEN: return
-        headers = {"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"}
-        try:
-            r1 = _session.get("https://api.line.me/v2/bot/message/quota", headers=headers, timeout=8)
-            if r1.ok:
-                data = r1.json()
-                if data.get("type") == "limited":
-                    self.monthly_limit = int(data.get("value", 0))
-                else:
-                    self.monthly_limit = None
-            r2 = _session.get("https://api.line.me/v2/bot/message/quota/consumption", headers=headers, timeout=8)
-            if r2.ok:
-                self.monthly_used = int(r2.json().get("totalUsage", 0))
-            with self.lock:
-                if self.monthly_limit and self.monthly_limit > 0:
-                    remain = max(self.monthly_limit - self.monthly_used, 0)
-                    ratio = remain / float(self.monthly_limit)
-                    if ratio <= DEGRADE_WARN_REMAIN_PCT and self.mode != Mode.HARD_STOP:
-                        self.mode = Mode.SAVER
-                    elif ratio > (DEGRADE_WARN_REMAIN_PCT + 0.05) and time.time() >= self.suspended_until:
-                        self.mode = Mode.NORMAL
-                else:
-                    if time.time() >= self.suspended_until and self.mode != Mode.HARD_STOP:
-                        self.mode = Mode.NORMAL
-        except Exception as e:
-            logging.warning(f"用量輪詢失敗：{e}")
-
-    def _start_usage_poller(self):
-        def loop():
-            while True:
-                self._poll_usage_once()
-                time.sleep(USAGE_POLL_SECONDS)
-        threading.Thread(target=loop, daemon=True).start()
-
-guard = MessagingGuard()
 
 # === 檔案 ===
 DATA_DIR = os.path.join(os.getcwd(), "data")
@@ -716,7 +544,7 @@ def safe_reply(event, messages):
         try:
             uid = getattr(event.source, "user_id", None)
             if uid:
-                guard.push(uid, messages)
+                line_bot_api.push_message(uid, messages)
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
 
@@ -1922,11 +1750,6 @@ user_locations = {}
 pending_delete_confirm = {}
 
 def _do_nearby_toilets_and_push(uid, lat, lon):
-    # --- 降級模式直接跳過 ---
-    if guard.mode in (Mode.SAVER, Mode.HARD_STOP):
-        logging.info("⏭️ degrade mode=%s — skip bg push, rely on link", guard.mode)
-        return
-
     try:
         # 先查快的來源（CSV + Sheets），幾百毫秒內可出
         quick = _merge_and_dedupe_lists(
@@ -1934,34 +1757,26 @@ def _do_nearby_toilets_and_push(uid, lat, lon):
             query_sheet_toilets(lat, lon) or [],
         )
         sort_toilets(quick)
-
         if quick:
             msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
-            guard.push(uid,
-                       FlexSendMessage("附近廁所", msg),
-                       fallback_text_with_url=f"📉 額度不足，請用網頁查詢： https://school-i9co.onrender.com/toilet_feedback_by_coord/{norm_coord(lat)}/{norm_coord(lon)}")
+            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
 
         # 再跑 OSM（有 8 秒上限）
         osm = query_overpass_toilets(lat, lon, radius=500) or []
         all_pts = _merge_and_dedupe_lists(quick, osm)
         sort_toilets(all_pts)
 
-        if SEND_UPDATE_CARD and len(all_pts) > len(quick):  # 控制是否推更新卡
+        if len(all_pts) > len(quick):  # 有新增結果才補推，避免洗頻
             msg2 = create_toilet_flex_messages(all_pts, show_delete=False, uid=uid)
-            guard.push(uid,
-                       FlexSendMessage("附近廁所（更新）", msg2),
-                       fallback_text_with_url=f"📉 額度不足，請用網頁查詢： https://school-i9co.onrender.com/toilet_feedback_by_coord/{norm_coord(lat)}/{norm_coord(lon)}")
-
+            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（更新）", msg2))
         elif not quick and not all_pts:
-            guard.push(uid,
-                       TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"),
-                       fallback_text_with_url=f"📉 額度不足，請用網頁查詢： https://school-i9co.onrender.com/toilet_feedback_by_coord/{norm_coord(lat)}/{norm_coord(lon)}")
-
+            line_bot_api.push_message(uid, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
     except Exception as e:
         logging.error(f"bg nearby error: {e}", exc_info=True)
-        guard.push(uid,
-                   TextSendMessage(text="系統忙線中，請稍後再試 🙏"),
-                   fallback_text_with_url=f"📉 額度不足，請用網頁查詢： https://school-i9co.onrender.com/toilet_feedback_by_coord/{norm_coord(lat)}/{norm_coord(lon)}")
+        try:
+            line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+        except Exception:
+            pass
 
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
@@ -1976,7 +1791,7 @@ def handle_text(event):
     
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        guard.reply(event, gate_msg)
+        safe_reply(event, gate_msg)
         return
 
     reply_messages = []
@@ -2006,21 +1821,17 @@ def handle_text(event):
     elif text == "附近廁所":
         loc = user_locations.pop(uid, None)
         if not loc:
-            guard.reply(event, TextSendMessage(text="請先傳送位置"))
+            safe_reply(event, TextSendMessage(text="請先傳送位置"))
         else:
             la, lo = loc
-            link = f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{norm_coord(la)}/{norm_coord(lo)}"
-            # 降級模式：不排背景推送，改回連結
-            if guard.mode != Mode.NORMAL:
-                guard.reply(event, TextSendMessage(text=f"📉 本月訊息額度緊張，請改用網頁查看：\n{link}"))
-                return
+            safe_reply(event, TextSendMessage(text="✅ 收到，幫你找附近廁所中…"))
             try:
                 TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
             except Full:
-                guard.push(uid, TextSendMessage(text="系統忙線中，請稍候再試 🙏"), fallback_text_with_url=link)
+                line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍候再試 🙏"))
             except Exception as e:
                 logging.error(f"enqueue error: {e}", exc_info=True)
-                guard.push(uid, TextSendMessage(text="排程失敗，請再傳一次位置 🙏"), fallback_text_with_url=link)
+                line_bot_api.push_message(uid, TextSendMessage(text="排程失敗，請再傳一次位置 🙏"))
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
@@ -2057,7 +1868,7 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
     if reply_messages:
-        guard.reply(event, reply_messages)
+        safe_reply(event, reply_messages)
 
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
@@ -2068,7 +1879,7 @@ def handle_location(event):
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        guard.reply(event, gate_msg)
+        safe_reply(event, gate_msg)
         return
 
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
@@ -2076,7 +1887,7 @@ def handle_location(event):
         return
 
     user_locations[uid] = (lat, lon)
-    guard.reply(event, TextSendMessage(text="✅ 位置已更新"))
+    safe_reply(event, TextSendMessage(text="✅ 位置已更新"))
 
 # === Postback ===
 @handler.add(PostbackEvent)
@@ -2089,7 +1900,7 @@ def handle_postback(event):
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        guard.reply(event, gate_msg)
+        safe_reply(event, gate_msg)
         return
 
     try:
@@ -2105,14 +1916,14 @@ def handle_postback(event):
                 "type": "sheet"
             }
             add_to_favorites(uid, toilet)
-            guard.reply(event, TextSendMessage(text=f"✅ 已收藏 {name}"))
+            safe_reply(event, TextSendMessage(text=f"✅ 已收藏 {name}"))
 
         elif data.startswith("remove_fav:"):
             _, qname, lat, lon = data.split(":", 3)
             name = unquote(qname)
             success = remove_from_favorites(uid, name, lat, lon)
             msg = "✅ 已移除最愛" if success else "❌ 移除失敗"
-            guard.reply(event, TextSendMessage(text=msg))
+            safe_reply(event, TextSendMessage(text=msg))
 
         elif data.startswith("confirm_delete:"):
             _, qname, qaddr, lat, lon = data.split(":", 4)
@@ -2123,7 +1934,7 @@ def handle_postback(event):
                 "lat": norm_coord(lat),
                 "lon": norm_coord(lon)
             }
-            guard.reply(event, [
+            safe_reply(event, [
                 TextSendMessage(text=f"⚠️ 確定要刪除 {name} 嗎？（目前刪除為移除最愛）"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
@@ -2134,7 +1945,7 @@ def handle_postback(event):
                 "mode": "sheet_row",
                 "row": int(row_str)
             }
-            guard.reply(event, [
+            safe_reply(event, [
                 TextSendMessage(text="⚠️ 確定要刪除此『你新增的廁所』嗎？此動作會從主資料表刪除該列。"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
