@@ -24,8 +24,10 @@ import time
 import statistics
 from difflib import SequenceMatcher
 import random
-import re  
+import re
+from queue import Queue, Empty, Full
 
+load_dotenv()
 try:
     import pandas as pd
 except Exception:
@@ -128,8 +130,27 @@ def _start_consent_worker():
 _start_consent_worker()
 # ====================== /Sheets 安全外掛層 ======================
 
+# === Fast-ACK 佇列與工人 ===
+TASK_Q = Queue(maxsize=int(os.getenv("TASK_QUEUE_SIZE", "2000")))
+BOT_WORKERS = int(os.getenv("BOT_WORKERS", "4"))
+
+def _worker_loop():
+    while True:
+        try:
+            job = TASK_Q.get(timeout=0.2)
+        except Empty:
+            continue
+        try:
+            job()  # 任務內會用 push_message 回覆
+        except Exception as e:
+            logging.error(f"[worker] error: {e}", exc_info=True)
+        finally:
+            TASK_Q.task_done()
+
+for _ in range(BOT_WORKERS):
+    threading.Thread(target=_worker_loop, daemon=True).start()
+
 # === 初始化 ===
-load_dotenv()
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 CORS(app)
@@ -204,8 +225,8 @@ if not os.path.exists(TOILETS_FILE_PATH):
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"  
-FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk" 
+TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
+FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"
 
 # === 同意書設定 ===
 CONSENT_SHEET_TITLE = "consent"
@@ -532,25 +553,39 @@ def _booly(v):
     s = str(v).strip().lower()
     return s in ["1", "true", "yes", "y", "同意"]
 
+# （可選微優化）本機同意快取，TTL 預設 10 分鐘；失敗時當未同意（不影響功能）
+_consent_cache = {}   # user_id -> (ts, bool)
+_CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
+
 def has_consented(user_id: str) -> bool:
     try:
         if not user_id or consent_ws is None:
             return False
+        now = time.time()
+        hit = _consent_cache.get(user_id)
+        if hit and (now - hit[0] < _CONSENT_TTL):
+            return hit[1]
+
         rows = consent_ws.get_all_values()
         if not rows or len(rows) < 2:
+            _consent_cache[user_id] = (now, False)
             return False
         header = rows[0]; data = rows[1:]
         try:
             i_uid = header.index("user_id")
             i_ag  = header.index("agreed")
         except ValueError:
+            _consent_cache[user_id] = (now, False)
             return False
+        ok = False
         for r in data:
             if len(r) <= max(i_uid, i_ag):
                 continue
             if (r[i_uid] or "").strip() == user_id and _booly(r[i_ag]):
-                return True
-        return False
+                ok = True
+                break
+        _consent_cache[user_id] = (now, ok)
+        return ok
     except Exception as e:
         logging.warning(f"查詢同意失敗: {e}")
         return False
@@ -588,6 +623,8 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
             consent_ws.update(f"A{row_to_update}", [row_values])
         else:
             consent_ws.append_row(row_values, value_input_option="USER_ENTERED")
+        # 更新本機快取
+        _consent_cache[user_id] = (time.time(), bool(agreed))
         return True
     except Exception as e:
         logging.error(f"寫入/更新同意失敗: {e}")
@@ -1703,6 +1740,29 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 
+def _do_nearby_toilets_and_push(uid, lat, lon):
+    try:
+        toilets = _merge_and_dedupe_lists(
+            query_public_csv_toilets(lat, lon) or [],
+            query_sheet_toilets(lat, lon) or [],
+            query_overpass_toilets(lat, lon) or [],
+        )
+        sort_toilets(toilets)
+
+        if not toilets:
+            msgs = [TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦")]
+        else:
+            msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
+            msgs = [FlexSendMessage("附近廁所", msg)]
+
+        line_bot_api.push_message(uid, msgs)
+    except Exception as e:
+        logging.error(f"bg nearby error: {e}", exc_info=True)
+        try:
+            line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+        except Exception:
+            pass
+
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -1746,21 +1806,16 @@ def handle_text(event):
     elif text == "附近廁所":
         loc = user_locations.pop(uid, None)
         if not loc:
-            reply_messages.append(TextSendMessage(text="請先傳送位置"))
+            safe_reply(event, TextSendMessage(text="請先傳送位置"))
         else:
-            lat, lon = loc
-            toilets = _merge_and_dedupe_lists(
-                query_public_csv_toilets(lat, lon) or [],
-                query_sheet_toilets(lat, lon) or [],
-                query_overpass_toilets(lat, lon) or [],
-            )
-            sort_toilets(toilets)
-            if not toilets:
-                reply_messages.append(TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
-            else:
-                msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-                reply_messages.append(FlexSendMessage("附近廁所", msg))
-            reply_messages.append(TextSendMessage(text="🔒 已清除你的定位，下次請先傳送位置"))
+            la, lo = loc
+            # 立即回覆，確保 webhook 很快回 200
+            safe_reply(event, TextSendMessage(text="✅ 收到，幫你找附近廁所中…"))
+            # 丟到背景工人
+            try:
+                TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
+            except Full:
+                line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍候再試 🙏"))
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
