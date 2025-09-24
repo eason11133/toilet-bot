@@ -639,9 +639,6 @@ def reply_only(event, messages):
     except Exception as ex:
         logging.error(f"reply_only 執行錯誤：{ex}")
 
-# 讓舊程式呼叫 safe_reply 也會走 reply-only 的邏輯
-safe_reply = reply_only
-
 # === 同意工具 ===
 def _booly(v):
     s = str(v).strip().lower()
