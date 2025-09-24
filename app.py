@@ -5,7 +5,6 @@ import logging
 import sqlite3
 import requests
 import traceback
-from threading import Thread
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for, Response
@@ -15,8 +14,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
-    FlexSendMessage, PostbackEvent, TextSendMessage
+    FlexSendMessage, PostbackEvent, TextSendMessage, LocationAction
 )
+from linebot.models import QuickReply, QuickReplyButton
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -27,8 +27,6 @@ import statistics
 from difflib import SequenceMatcher
 import random
 import re
-from queue import Queue, Empty, Full
-from joblib import Parallel, delayed
 
 load_dotenv()
 try:
@@ -57,18 +55,20 @@ def delay_request():
 
 def _with_retry(func, *args, **kwargs):
     backoff = 0.7
+    last_exc = None
     for i in range(SHEETS_RETRY_MAX):
         try:
             with _sheets_sem:
                 return func(*args, **kwargs)
         except Exception as e:
+            last_exc = e
             if _is_quota_or_retryable(e):
-                delay_request()  # 在重試之前加入隨機延遲
+                delay_request()
                 sleep_s = backoff * (2 ** i) + random.uniform(0, 0.25*i)
                 time.sleep(sleep_s)
                 continue
             raise
-    raise
+    raise last_exc if last_exc else RuntimeError("Sheets retry exhausted")
 
 def batch_query_sheets(query_keys):
     # 同時查詢多個快取的資料
@@ -92,27 +92,6 @@ def retry_request(func, *args, **kwargs):
                 continue
             else:
                 raise e
-
-def process_toilet_query(uid, lat, lon):
-    # 先獲取查詢結果，然後進行需要的處理
-    toilets = get_nearby_toilets(uid, lat, lon)
-    if toilets:
-        # 做一些數據處理，比如排序、過濾等
-        toilets = sorted(toilets, key=lambda x: x.get("distance", 0))
-    return toilets
-
-
-def async_query_toilet(uid, lat, lon):
-    # 這是個簡單的線程任務
-    thread = Thread(target=do_nearby_toilets_and_push, args=(uid, lat, lon))
-    thread.start()
-
-def do_nearby_toilets_and_push(uid, lat, lon):
-    # 異步查詢並推送結果
-    toilets = get_nearby_toilets(uid, lat, lon)
-    if toilets:
-        # 在這裡進行推送
-        pass
 
 class SafeWS:
     """包裝 gspread worksheet：讀取加 TTL 快取；所有操作加退避與併發閥。"""
@@ -180,34 +159,15 @@ def _start_consent_worker():
                 logging.error(f"Consent worker error: {e}")
     threading.Thread(target=loop, daemon=True).start()
 _start_consent_worker()
-# ====================== /Sheets 安全外掛層 ======================
 
-# === Fast-ACK 佇列與工人 ===
-TASK_Q = Queue(maxsize=int(os.getenv("TASK_QUEUE_SIZE", "5000")))
-BOT_WORKERS = int(os.getenv("BOT_WORKERS", "8"))
+def make_location_quick_reply(prompt_text="📍 請分享你的位置"):
+    return TextSendMessage(
+        text=prompt_text,
+        quick_reply=QuickReply(items=[
+            QuickReplyButton(action=LocationAction(label="傳送我的位置"))
+        ])
+    )
 
-# 更新佇列檢查
-def _worker_loop():
-    while True:
-        try:
-            # 限制只有當佇列大小在門檻以下時才執行 Google Sheets 請求
-            if TASK_Q.qsize() <= 2:  # 設定此值來控制佇列長度
-                job = TASK_Q.get(timeout=0.2)
-            else:
-                continue
-        except Empty:
-            continue
-        try:
-            job()  # 任務內會用 push_message 回覆
-        except Exception as e:
-            logging.error(f"[worker] error: {e}", exc_info=True)
-        finally:
-            TASK_Q.task_done()
-
-# 背景工作者的啟動
-for _ in range(BOT_WORKERS):
-    threading.Thread(target=_worker_loop, daemon=True).start()
-           
 # === 初始化 ===
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
@@ -220,6 +180,43 @@ class _NoHealthzFilter(logging.Filter):
         except Exception:
             return True
         return "/healthz" not in msg
+
+# === 安全標頭與快取策略（新增） ===
+@app.after_request
+def add_security_headers(resp):
+    try:
+        # 避免敏感回應被中繼快取
+        resp.headers.setdefault("Cache-Control", "no-store")
+        resp.headers.setdefault("Pragma", "no-cache")
+
+        # 基本安全標頭
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # 簡易 CSP（若之後要載入更多第三方，可再放寬）
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';"
+        )
+    except Exception as e:
+        logging.debug(f"add_security_headers skipped: {e}")
+    return resp
+
+# === 就緒檢查端點（新增） ===
+@app.route("/readyz", methods=["GET", "HEAD"])
+def readyz():
+    _ensure_sheets_ready()
+    ok = (worksheet is not None) and (feedback_sheet is not None) and (consent_ws is not None)
+    status = 200 if ok else 503
+    msg = "ready" if ok else "not-ready"
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+    }
+    if request.method == "HEAD":
+        return Response(status=204 if ok else 503, headers=headers)
+    return Response(msg, status=status, headers=headers)
 
 logging.getLogger("werkzeug").addFilter(_NoHealthzFilter())
 
@@ -509,7 +506,8 @@ def init_gsheet():
     global gc, worksheet, feedback_sheet, consent_ws
     try:
         if not GSHEET_CREDENTIALS_JSON:
-            raise RuntimeError("缺少 GSHEET_CREDENTIALS_JSON")
+            logging.critical("❌ 缺少 GSHEET_CREDENTIALS_JSON")
+            return  # 不 raise，讓服務先活著
         creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
         gc = gspread.authorize(creds)
@@ -524,15 +522,22 @@ def init_gsheet():
             consent_raw = fb_spread.add_worksheet(title=CONSENT_SHEET_TITLE, rows=1000, cols=10)
             consent_raw.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
 
-        # 包裝成 SafeWS，底下所有呼叫維持原 API
         worksheet = SafeWS(worksheet_raw, TOILET_SPREADSHEET_ID, worksheet_raw.title)
         feedback_sheet = SafeWS(feedback_raw, FEEDBACK_SPREADSHEET_ID, feedback_raw.title)
         consent_ws = SafeWS(consent_raw, FEEDBACK_SPREADSHEET_ID, consent_raw.title)
 
-        logging.info("✅ Sheets 初始化完成（含 consent；啟用 SafeWS 快取/重試/併發控管）")
+        logging.info("✅ Sheets 初始化完成")
     except Exception as e:
-        logging.critical(f"❌ Sheets 初始化失敗: {e}")
-        raise
+        logging.critical(f"❌ Sheets 初始化失敗（改為延後再試）: {e}")
+        return
+
+def _ensure_sheets_ready():
+    if any(x is None for x in (worksheet, feedback_sheet, consent_ws)):
+        try:
+            init_gsheet()
+        except Exception:
+            # 保持靜默，呼叫端要自己容錯（例如回空結果 / 優雅降級）
+            pass
 
 init_gsheet()
 
@@ -544,6 +549,9 @@ TOILET_REQUIRED_HEADER = [
 ]
 
 def ensure_toilet_sheet_header(ws):
+    _ensure_sheets_ready()
+    if ws is None:
+        return TOILET_REQUIRED_HEADER[:]
     try:
         header = ws.row_values(1) or []
         if not header:
@@ -618,6 +626,22 @@ def safe_reply(event, messages):
         except Exception as ex:
             logging.error(f"push_message 也失敗：{ex}")
 
+def reply_only(event, messages):
+    try:
+        line_bot_api.reply_message(event.reply_token, messages)
+    except LineBotApiError as e:
+        msg_txt = ""
+        try:
+            msg_txt = getattr(getattr(e, "error", None), "message", "") or str(e)
+        except Exception:
+            msg_txt = str(e)
+        logging.warning(f"reply_message 失敗（不做 push）：{msg_txt}")
+    except Exception as ex:
+        logging.error(f"reply_only 執行錯誤：{ex}")
+
+# 讓舊程式呼叫 safe_reply 也會走 reply-only 的邏輯
+safe_reply = reply_only
+
 # === 同意工具 ===
 def _booly(v):
     s = str(v).strip().lower()
@@ -628,6 +652,9 @@ _consent_cache = {}   # user_id -> (ts, bool)
 _CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
 
 def has_consented(user_id: str) -> bool:
+    _ensure_sheets_ready()
+    if not user_id or consent_ws is None:
+        return False
     try:
         if not user_id or consent_ws is None:
             return False
@@ -661,6 +688,9 @@ def has_consented(user_id: str) -> bool:
         return False
 
 def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: str, ua: str, ts_iso: str):
+    _ensure_sheets_ready()
+    if consent_ws is None:
+        return False
     try:
         rows = consent_ws.get_all_values()
         if not rows:
@@ -729,6 +759,21 @@ def create_cache_db():
         conn.commit()
         conn.close()
 
+# === SQLite 參數強化（新增） ===
+def tune_sqlite_for_concurrency():
+    try:
+        conn = sqlite3.connect(CACHE_DB_PATH)
+        cur = conn.cursor()
+        # 啟用 WAL 提高多執行緒讀/寫並行能力
+        cur.execute("PRAGMA journal_mode=WAL;")
+        # 設定 busy timeout（毫秒），避免短暫鎖衝突直接拋錯
+        cur.execute("PRAGMA busy_timeout=3000;")
+        conn.commit()
+        conn.close()
+        logging.info("✅ SQLite tuned: WAL + busy_timeout")
+    except Exception as e:
+        logging.warning(f"SQLite tuning skipped: {e}")
+
 # 確認快取是否有效
 def get_cached_data(query_key, ttl_sec=60*5):
     conn = sqlite3.connect(CACHE_DB_PATH)
@@ -756,9 +801,13 @@ def save_cache(query_key, data):
 
 # 快取初始化
 create_cache_db()
+tune_sqlite_for_concurrency()
 
 # 查詢廁所資料
 def query_sheet_toilets(user_lat, user_lon, radius=200):
+    _ensure_sheets_ready()
+    if worksheet is None:
+        return [] 
     # 用 lat 和 lon 組成唯一的查詢 key
     query_key = f"{user_lat},{user_lon},{radius}"
 
@@ -1155,6 +1204,9 @@ def _pred_from_row(r, idx):
 
 # === 即時預測 / 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return None   
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
@@ -1233,6 +1285,7 @@ def get_nowcast_by_coord(lat, lon):
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
+    _ensure_sheets_ready()
     try:
         data = request.form
         name = (data.get("name","") or "").strip()
@@ -1325,6 +1378,9 @@ def submit_feedback():
 
 # === 讀座標的回饋清單 ===
 def get_feedbacks_by_coord(lat, lon, tol=1e-6):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return []
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
@@ -1364,6 +1420,9 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
 
 # === 座標聚合統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return "尚無回饋資料"
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
@@ -1424,6 +1483,9 @@ _feedback_index_cache = {"ts": 0, "data": {}}
 _FEEDBACK_INDEX_TTL = 30
 
 def build_feedback_index():
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return {} 
     global _feedback_index_cache
     now = time.time()
     if now - _feedback_index_cache["ts"] < _FEEDBACK_INDEX_TTL and _feedback_index_cache["data"]:
@@ -1469,6 +1531,11 @@ def build_feedback_index():
 # === 舊路由保留===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
+    _ensure_sheets_ready()
+    if worksheet is None or feedback_sheet is None:
+        return render_template("toilet_feedback.html", toilet_name=toilet_name,
+                               summary="（暫時無法連到雲端資料）",
+                               feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="")
     try:
         address = "未知地址"
         rows = worksheet.get_all_values()
@@ -1538,6 +1605,13 @@ def toilet_feedback(toilet_name):
 # === 新路由 ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return render_template("toilet_feedback.html",
+                               toilet_name=f"廁所（{lat}, {lon}）",
+                               summary="（暫時無法連到雲端資料）",
+                               feedbacks=[], address=f"{lat},{lon}",
+                               avg_pred_score="未預測", lat=lat, lon=lon)
     try:
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
@@ -1578,6 +1652,9 @@ def toilet_feedback_by_coord(lat, lon):
 # === 清潔度趨勢 API ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return {"success": True, "data": []}, 200 
     try:
         rows = feedback_sheet.get_all_values()
         if not rows or len(rows) < 2:
@@ -1796,6 +1873,9 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
 
 # === 列出 我的貢獻 & 刪除 ===
 def get_user_contributions(uid):
+    _ensure_sheets_ready()
+    if worksheet is None:
+        return []
     items = []
     try:
         rows = worksheet.get_all_values()
@@ -1881,37 +1961,15 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 
-# 修改這段代碼，在worker啟動時，檢查佇列大小
-def _do_nearby_toilets_and_push(uid, lat, lon):
-    try:
-        # 只有當佇列訊息數量不多時才查詢 Sheets
-        if TASK_Q.qsize() <= 2:  # 設定此值來控制佇列長度
-            # 查詢 Google Sheets
-            quick = _merge_and_dedupe_lists(
-                query_public_csv_toilets(lat, lon) or [],
-                query_sheet_toilets(lat, lon) or [],
-            )
-            sort_toilets(quick)
-            if quick:
-                msg = create_toilet_flex_messages(quick, show_delete=False, uid=uid)
-                line_bot_api.push_message(uid, FlexSendMessage("附近廁所（先給你這幾間）", msg))
 
-        # 再跑 OSM（有 8 秒上限）
-        osm = query_overpass_toilets(lat, lon, radius=200) or []
-        all_pts = _merge_and_dedupe_lists(quick, osm)
-        sort_toilets(all_pts)
-
-        if len(all_pts) > len(quick):  # 有新增結果才補推，避免洗頻
-            msg2 = create_toilet_flex_messages(all_pts, show_delete=False, uid=uid)
-            line_bot_api.push_message(uid, FlexSendMessage("附近廁所（更新）", msg2))
-        elif not quick and not all_pts:
-            line_bot_api.push_message(uid, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
-    except Exception as e:
-        logging.error(f"bg nearby error: {e}", exc_info=True)
-        try:
-            line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
-        except Exception:
-            pass
+def build_nearby_toilets(uid, lat, lon):
+    # 僅用快來源，確保能在 reply 時限內完成
+    quick = _merge_and_dedupe_lists(
+        query_public_csv_toilets(lat, lon) or [],
+        query_sheet_toilets(lat, lon) or [],
+    )
+    sort_toilets(quick)
+    return quick
 
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
@@ -1923,7 +1981,6 @@ def handle_text(event):
     if is_duplicate_and_mark(f"text|{uid}|{text}"):
         return
 
-    
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -1935,6 +1992,7 @@ def handle_text(event):
         info = pending_delete_confirm[uid]
         if text == "確認刪除":
             if info.get("mode") == "sheet_row":
+                _ensure_sheets_ready()
                 ok = False
                 try:
                     worksheet.delete_rows(int(info["row"]))
@@ -1954,18 +2012,13 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
     elif text == "附近廁所":
-        loc = user_locations.pop(uid, None)
-        if not loc:
-            safe_reply(event, TextSendMessage(text="請先傳送位置"))
-        else:
-            la, lo = loc
-            try:
-                TASK_Q.put_nowait(lambda uid=uid, la=la, lo=lo: _do_nearby_toilets_and_push(uid, la, lo))
-            except Full:
-                line_bot_api.push_message(uid, TextSendMessage(text="系統忙線中，請稍候再試 🙏"))
-            except Exception as e:
-                logging.error(f"enqueue error: {e}", exc_info=True)
-                line_bot_api.push_message(uid, TextSendMessage(text="排程失敗，請再傳一次位置 🙏"))
+        try:
+            reply_only(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
+        except Exception as e:
+            logging.error(f"附近廁所 quick reply 失敗: {e}")
+            reply_only(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+        return  # ← 加這行
+
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
@@ -2001,9 +2054,15 @@ def handle_text(event):
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
+    elif text == "合作信箱":
+        email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
+        reply_messages.append(TextSendMessage(
+            text=f"📬 回饋信箱：{email}\n\n點這裡寫信：mailto:{email}"
+        ))
+
+    
     if reply_messages:
         safe_reply(event, reply_messages)
-
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
@@ -2013,15 +2072,24 @@ def handle_location(event):
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        safe_reply(event, gate_msg)
-        return
+        reply_only(event, gate_msg); return
 
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
     if is_duplicate_and_mark(key):
         return
 
     user_locations[uid] = (lat, lon)
-    safe_reply(event, TextSendMessage(text="✅ 位置已更新"))
+
+    try:
+        toilets = build_nearby_toilets(uid, lat, lon)
+        if toilets:
+            msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
+            reply_only(event, FlexSendMessage("附近廁所", msg))
+        else:
+            reply_only(event, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
+    except Exception as e:
+        logging.error(f"nearby error: {e}", exc_info=True)
+        reply_only(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
 
 # === Postback ===
 @handler.add(PostbackEvent)
@@ -2034,10 +2102,13 @@ def handle_postback(event):
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        safe_reply(event, gate_msg)
-        return
+        safe_reply(event, gate_msg); return
 
     try:
+        if data == "ask_location":
+            safe_reply(event, make_location_quick_reply("📍 請點『傳送我的位置』，我立刻幫你找廁所"))
+            return
+        
         if data.startswith("add:"):
             _, qname, lat, lon = data.split(":", 3)
             name = unquote(qname)
@@ -2127,6 +2198,9 @@ def render_add_page():
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
+    _ensure_sheets_ready()                    # ← 新增
+    if worksheet is None:                    # ← 新增
+        return {"success": False, "message": "雲端表格暫時無法連線，請稍後再試"}, 503
     try:
         data = request.get_json(force=True, silent=False) or {}
         logging.info(f"📥 收到表單資料: {data}")
