@@ -17,6 +17,7 @@ from linebot.models import (
     FlexSendMessage, PostbackEvent, TextSendMessage, LocationAction
 )
 from linebot.models import QuickReply, QuickReplyButton
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -33,6 +34,26 @@ try:
     import pandas as pd
 except Exception:
     pd = None
+
+# === 全域設定 ===
+LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "8"))     # 同時最多幾個使用者在跑附近查詢
+LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "2.2"))  # 各資料源逾時（秒）
+LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "5"))             # 最多回幾個
+SHOW_SEARCHING_BUBBLE = os.getenv("SHOW_SEARCHING_BUBBLE", "1") == "1"
+SEARCHING_TEXT = os.getenv("SEARCHING_TEXT", "… 搜尋中")
+_LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
+
+def _try_acquire_loc_slot() -> bool:
+    try:
+        return _LOC_SEM.acquire(blocking=False)
+    except Exception:
+        return False
+
+def _release_loc_slot():
+    try:
+        _LOC_SEM.release()
+    except Exception:
+        pass
 
 # === reply_token 使用記錄（新增） ===
 _USED_REPLY_TOKENS = set()
@@ -109,7 +130,6 @@ def retry_request(func, *args, **kwargs):
                 raise e
 
 class SafeWS:
-    """包裝 gspread worksheet：讀取加 TTL 快取；所有操作加退避與併發閥。"""
     def __init__(self, ws, sheet_id: str, name: str):
         self._ws = ws
         self._sheet_id = sheet_id
@@ -178,6 +198,14 @@ _start_consent_worker()
 def make_location_quick_reply(prompt_text="📍 請分享你的位置"):
     return TextSendMessage(
         text=prompt_text,
+        quick_reply=QuickReply(items=[
+            QuickReplyButton(action=LocationAction(label="傳送我的位置"))
+        ])
+    )
+
+def make_retry_location_text(text="現在查詢人數有點多，我排一下隊；你可再傳一次位置或稍候幾秒～"):
+    return TextSendMessage(
+        text=text,
         quick_reply=QuickReply(items=[
             QuickReplyButton(action=LocationAction(label="傳送我的位置"))
         ])
@@ -621,14 +649,19 @@ def is_redelivery(event) -> bool:
     except Exception:
         return False
 
+LINE_REPLY_MAX = 5
+
 def safe_reply(event, messages):
     try:
         tok = event.reply_token
-
-        # 同一 reply_token 只能用一次
         if _is_token_used(tok):
             logging.warning("[safe_reply] duplicate reply_token detected; skip sending.")
             return
+
+        # ✅ 最多 5 則，多的砍掉（或自行改成合併文字）
+        if isinstance(messages, list) and len(messages) > LINE_REPLY_MAX:
+            logging.warning(f"[safe_reply] messages too many ({len(messages)}), truncating to {LINE_REPLY_MAX}.")
+            messages = messages[:LINE_REPLY_MAX]
 
         line_bot_api.reply_message(tok, messages)
         _mark_token_used(tok)
@@ -782,7 +815,7 @@ CACHE_DB_PATH = "cache.db"
 # 建立 SQLite 連線
 def create_cache_db():
     if not os.path.exists(CACHE_DB_PATH):
-        conn = sqlite3.connect(CACHE_DB_PATH)
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS sheets_cache (
@@ -1998,13 +2031,33 @@ pending_delete_confirm = {}
 
 
 def build_nearby_toilets(uid, lat, lon):
-    # 僅用快來源，確保能在 reply 時限內完成
-    quick = _merge_and_dedupe_lists(
-        query_public_csv_toilets(lat, lon) or [],
-        query_sheet_toilets(lat, lon) or [],
-    )
+    def _q_csv():
+        return query_public_csv_toilets(lat, lon) or []
+
+    def _q_sheet():
+        return query_sheet_toilets(lat, lon) or []
+
+    csv_res, sheet_res = [], []
+    try:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_csv = ex.submit(_q_csv)
+            f_sht = ex.submit(_q_sheet)
+            try:
+                csv_res = f_csv.result(timeout=LOC_QUERY_TIMEOUT_SEC)
+            except FuturesTimeoutError:
+                logging.warning("public_csv 查詢逾時")
+            try:
+                sheet_res = f_sht.result(timeout=LOC_QUERY_TIMEOUT_SEC)
+            except FuturesTimeoutError:
+                logging.warning("sheet 查詢逾時")
+    except Exception as e:
+        logging.warning(f"並行查詢失敗：{e}")
+
+    quick = _merge_and_dedupe_lists(csv_res, sheet_res)
     sort_toilets(quick)
-    return quick
+    # 負載下限縮清單，避免 Flex 太大與 reply 卡頓
+    return quick[:LOC_MAX_RESULTS]
+
 
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
@@ -2110,29 +2163,45 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
-    # 同意門檻：也用 safe_reply
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
         return
 
-    # 去重：同一地點短時間重送就忽略
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
     if is_duplicate_and_mark(key):
         return
 
     user_locations[uid] = (lat, lon)
 
+    # === 併發閥門（原本就有）
+    if not _try_acquire_loc_slot():
+        safe_reply(event, make_retry_location_text())
+        return
+
     try:
+        # ✅ 這裡先組一個 messages，第一則是「搜尋中…」
+        messages = []
+        if SHOW_SEARCHING_BUBBLE:
+            messages.append(TextSendMessage(text=SEARCHING_TEXT))
+
         toilets = build_nearby_toilets(uid, lat, lon)
+
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-            safe_reply(event, FlexSendMessage("附近廁所", msg))
+            messages.append(FlexSendMessage("附近廁所", msg))
+            messages.append(make_location_quick_reply("想換個地點再找嗎？"))
         else:
-            safe_reply(event, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
+            messages.append(make_retry_location_text("附近沒有廁所，換個點或再試一次看看？"))
+
+        # ✅ 一次 reply 多則訊息 → 不用 push、不吃群發額度
+        safe_reply(event, messages)
+
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
         safe_reply(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+    finally:
+        _release_loc_slot()
 
 # === Postback ===
 @handler.add(PostbackEvent)
