@@ -2087,7 +2087,7 @@ def handle_text(event):
             url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
         reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
 
-    elif text == "回饋":
+    elif text == "意見回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
