@@ -610,21 +610,25 @@ def safe_reply(event, messages):
     try:
         line_bot_api.reply_message(event.reply_token, messages)
     except LineBotApiError as e:
-        msg_txt = ""
+        # 解析錯誤訊息
         try:
             msg_txt = getattr(getattr(e, "error", None), "message", "") or str(e)
         except Exception:
             msg_txt = str(e)
+
+        # 常見：重送事件 / token 用過或過期
         if is_redelivery(event) or ("Invalid reply token" in msg_txt):
-            logging.warning(f"reply_message 失敗但不 push（避免重複）：{msg_txt}")
+            logging.warning(f"reply_message 失敗，改用 push（單人，不群發）：{msg_txt}")
+            try:
+                uid = getattr(event.source, "user_id", None)
+                if uid:
+                    line_bot_api.push_message(uid, messages)   # 單人推播，不是群發
+            except Exception as ex:
+                logging.error(f"push_message 也失敗：{ex}")
             return
-        logging.warning(f"reply_message 失敗，改用 push：{msg_txt}")
-        try:
-            uid = getattr(event.source, "user_id", None)
-            if uid:
-                line_bot_api.push_message(uid, messages)
-        except Exception as ex:
-            logging.error(f"push_message 也失敗：{ex}")
+
+        # 其他錯誤就只記錄
+        logging.warning(f"reply_message 失敗（未改用 push）：{msg_txt}")
 
 def reply_only(event, messages):
     try:
@@ -2010,12 +2014,11 @@ def handle_text(event):
 
     elif text == "附近廁所":
         try:
-            reply_only(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
+            safe_reply(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
         except Exception as e:
             logging.error(f"附近廁所 quick reply 失敗: {e}")
-            reply_only(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
-        return  # ← 加這行
-
+            safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+        return  # 確保這個事件處理完畢，不會往下執行其他回覆
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
@@ -2067,10 +2070,13 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
+    # 同意門檻：也用 safe_reply
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        reply_only(event, gate_msg); return
+        safe_reply(event, gate_msg)
+        return
 
+    # 去重：同一地點短時間重送就忽略
     key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
     if is_duplicate_and_mark(key):
         return
@@ -2081,12 +2087,12 @@ def handle_location(event):
         toilets = build_nearby_toilets(uid, lat, lon)
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-            reply_only(event, FlexSendMessage("附近廁所", msg))
+            safe_reply(event, FlexSendMessage("附近廁所", msg))
         else:
-            reply_only(event, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
+            safe_reply(event, TextSendMessage(text="附近沒有廁所，可能要原地解放了 💦"))
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
-        reply_only(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+        safe_reply(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
 
 # === Postback ===
 @handler.add(PostbackEvent)
