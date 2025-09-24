@@ -34,6 +34,21 @@ try:
 except Exception:
     pd = None
 
+# === reply_token 使用記錄（新增） ===
+_USED_REPLY_TOKENS = set()
+_MAX_USED_TOKENS = 10000  # 防止集合無限成長
+
+def _mark_token_used(tok: str):
+    try:
+        _USED_REPLY_TOKENS.add(tok)
+        if len(_USED_REPLY_TOKENS) > _MAX_USED_TOKENS:
+            _USED_REPLY_TOKENS.clear()  # 簡單清理
+    except Exception:
+        pass
+
+def _is_token_used(tok: str) -> bool:
+    return tok in _USED_REPLY_TOKENS
+
 # ======================== Sheets 安全外掛層（新增，不動原功能） ========================
 SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
 SHEETS_RETRY_MAX = int(os.getenv("SHEETS_RETRY_MAX", "6"))
@@ -608,7 +623,16 @@ def is_redelivery(event) -> bool:
 
 def safe_reply(event, messages):
     try:
-        line_bot_api.reply_message(event.reply_token, messages)
+        tok = event.reply_token
+
+        # 同一 reply_token 只能用一次
+        if _is_token_used(tok):
+            logging.warning("[safe_reply] duplicate reply_token detected; skip sending.")
+            return
+
+        line_bot_api.reply_message(tok, messages)
+        _mark_token_used(tok)
+
     except LineBotApiError as e:
         # 解析錯誤訊息
         try:
@@ -616,19 +640,29 @@ def safe_reply(event, messages):
         except Exception:
             msg_txt = str(e)
 
-        # 常見：重送事件 / token 用過或過期
-        if is_redelivery(event) or ("Invalid reply token" in msg_txt):
-            logging.warning(f"reply_message 失敗，改用 push（單人，不群發）：{msg_txt}")
-            try:
-                uid = getattr(event.source, "user_id", None)
-                if uid:
-                    line_bot_api.push_message(uid, messages)   # 單人推播，不是群發
-            except Exception as ex:
-                logging.error(f"push_message 也失敗：{ex}")
+        # 重送（redelivery）一律不回覆（避免重複）
+        if is_redelivery(event):
+            logging.warning(f"[safe_reply] redelivery detected; skip. err={msg_txt}")
             return
 
-        # 其他錯誤就只記錄
-        logging.warning(f"reply_message 失敗（未改用 push）：{msg_txt}")
+        # reply_token 無效或已過期 → 不再 fallback 到 push（避免狂刷）
+        if "Invalid reply token" in msg_txt:
+            logging.warning(f"[safe_reply] invalid reply token; skip. err={msg_txt}")
+            return
+
+        # 其他錯誤只記錄
+        logging.warning(f"[safe_reply] reply_message failed (no push). err={msg_txt}")
+
+def _too_old_to_reply(event, limit_seconds=55):
+    """LINE reply_token 約 1 分鐘失效；太舊事件直接略過避免 Invalid reply token。"""
+    try:
+        evt_ms = int(getattr(event, "timestamp", 0))  # 毫秒
+        if evt_ms <= 0:
+            return False
+        now_ms = int(time.time() * 1000)
+        return (now_ms - evt_ms) > (limit_seconds * 1000)
+    except Exception:
+        return False
 
 def reply_only(event, messages):
     try:
@@ -1975,6 +2009,9 @@ def build_nearby_toilets(uid, lat, lon):
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
+    if _too_old_to_reply(event):
+        logging.warning("[handle_text] event too old; skip reply.")
+        return
     uid = event.source.user_id
     text_raw = event.message.text or ""
     text = text_raw.strip().lower()
@@ -2066,6 +2103,9 @@ def handle_text(event):
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
+    if _too_old_to_reply(event):
+        logging.warning("[handle_location] event too old; skip reply.")
+        return
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
