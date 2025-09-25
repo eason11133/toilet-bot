@@ -1726,6 +1726,50 @@ def toilet_feedback_by_coord(lat, lon):
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
+# === 清潔度趨勢（名稱版別名） ===
+@app.route("/get_clean_trend/<path:toilet_name>")
+def get_clean_trend_by_name(toilet_name):
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return {"success": True, "data": []}, 200
+
+    try:
+        rows = feedback_sheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return {"success": True, "data": []}, 200
+
+        header = rows[0]
+        idx = _feedback_indices(header)
+        data = rows[1:]
+
+        name_idx = idx.get("name")
+        lat_idx = idx.get("lat")
+        lon_idx = idx.get("lon")
+        created_idx = idx.get("created")
+
+        if name_idx is None or lat_idx is None or lon_idx is None:
+            # 表頭缺少必要欄位
+            return {"success": True, "data": []}, 200
+
+        # 找出同名的所有紀錄，取出座標
+        matched = [r for r in data if len(r) > name_idx and (r[name_idx] or "").strip() == toilet_name.strip()]
+        if not matched:
+            return {"success": True, "data": []}, 200
+
+        # 以最新一筆的座標為主
+        if created_idx is not None:
+            matched.sort(key=lambda x: (x[created_idx] if len(x) > created_idx else ""), reverse=True)
+        ref = matched[0]
+        lat = ref[lat_idx] if len(ref) > lat_idx else ""
+        lon = ref[lon_idx] if len(ref) > lon_idx else ""
+
+        # 轉呼叫座標版（邏輯一致）
+        return get_clean_trend_by_coord(lat, lon)
+
+    except Exception as e:
+        logging.error(f"❌ 趨勢 API（名稱版）錯誤: {e}")
+        return {"success": False, "data": []}, 500
+
 # === 清潔度趨勢 API ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
@@ -1744,7 +1788,8 @@ def get_clean_trend_by_coord(lat, lon):
         if idx["lat"] is None or idx["lon"] is None:
             return {"success": False, "data": []}, 200
 
-        def close(a, b, tol=1e-6):
+        # ✅ 放寬比對精度到 1e-4
+        def close(a, b, tol=1e-4):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
 
@@ -1765,12 +1810,14 @@ def get_clean_trend_by_coord(lat, lon):
             if sc is None:
                 sc = _simple_score(rr, pp, aa)
             if isinstance(sc, (int, float)):
-                recomputed.append((created, float(sc)))
+                # ✅ 順便把時間也回出去，前端畫圖更穩
+                recomputed.append({"t": created, "score": round(float(sc), 2)})
 
         if not recomputed:
             return {"success": True, "data": []}, 200
 
-        vals = [p for _, p in recomputed]
+        # 如果全部分數完全一樣，再嘗試用簡化版分數
+        vals = [p["score"] for p in recomputed]
         if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
             forced = []
             for r in matched_rows:
@@ -1778,13 +1825,13 @@ def get_clean_trend_by_coord(lat, lon):
                 _, rr, pp, aa = _pred_from_row(r, idx)
                 sc2 = _simple_score(rr, pp, aa)
                 if sc2 is not None:
-                    forced.append((created, float(sc2)))
+                    forced.append({"t": created, "score": round(float(sc2), 2)})
             if forced:
                 recomputed = forced
 
-        recomputed.sort(key=lambda t: t[0])
-        out = [{"score": round(p, 2)} for _, p in recomputed]
-        return {"success": True, "data": out}, 200
+        # ✅ 確保時間排序
+        recomputed.sort(key=lambda d: d["t"])
+        return {"success": True, "data": recomputed}, 200
 
     except Exception as e:
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
