@@ -37,7 +37,7 @@ except Exception:
 
 # === 全域設定 ===
 LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "8"))     # 同時最多幾個使用者在跑附近查詢
-LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "1.8"))  # 各資料源逾時（秒）
+LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "2.0"))  # 各資料源逾時（秒）
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "5"))             # 最多回幾個
 SHOW_SEARCHING_BUBBLE = False
 _LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
