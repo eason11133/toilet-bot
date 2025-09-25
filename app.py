@@ -231,27 +231,39 @@ def add_security_headers(resp):
         resp.headers.setdefault("Cache-Control", "no-store")
         resp.headers.setdefault("Pragma", "no-cache")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("X-Frame-Options", "DENY")  # LIFF 是頂層開啟，不用被嵌入
         resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
 
         path = (request.path or "").lower()
 
-        # ✅ 對 LIFF 同意頁/接口放寬 CSP（允許載入 LIFF SDK 與對 LINE 服務連線）
+        # 👉 對 LIFF 同意頁/接口 放寬 CSP（允許載入 LIFF SDK、登入頁、與 LINE API 連線）
         if path.startswith("/consent") or path.startswith("/api/consent"):
             resp.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
+                # 圖片/字型
                 "img-src 'self' data: https:; "
-                "script-src 'self' 'unsafe-inline' https://static.line-scdn.net; "
+                "font-src 'self' data: https:; "
+                # 腳本：允許 LIFF SDK
+                "script-src 'self' 'unsafe-inline' https://static.line-scdn.net https://d.line-scdn.net; "
+                # 樣式
                 "style-src 'self' 'unsafe-inline'; "
-                "connect-src 'self' https://liff.line.me https://access.line.me https://api.line.me https://static.line-scdn.net; "
+                # XHR / fetch 目的地：LIFF、登入、API、SDK 網域
+                "connect-src 'self' https://liff.line.me https://access.line.me https://api.line.me https://static.line-scdn.net https://d.line-scdn.net; "
+                # 登入彈窗或 iframe（某些環境登入會用到）
+                "frame-src 'self' https://access.line.me https://liff.line.me; "
+                "child-src 'self' https://access.line.me https://liff.line.me; "
+                # Service Worker / Worker（保守開啟）
+                "worker-src 'self' blob:; "
+                # 禁止被外站嵌入
                 "frame-ancestors 'none';"
             )
         else:
-            # 其他頁維持較嚴格（和你原本一致）
+            # 其他頁維持較嚴格
             resp.headers.setdefault(
                 "Content-Security-Policy",
                 "default-src 'self'; "
                 "img-src 'self' data: https:; "
+                "font-src 'self' data: https:; "
                 "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "frame-ancestors 'none';"
