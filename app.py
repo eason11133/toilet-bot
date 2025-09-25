@@ -227,19 +227,35 @@ class _NoHealthzFilter(logging.Filter):
 @app.after_request
 def add_security_headers(resp):
     try:
-        # 避免敏感回應被中繼快取
+        # 通用安全與快取政策
         resp.headers.setdefault("Cache-Control", "no-store")
         resp.headers.setdefault("Pragma", "no-cache")
-
-        # 基本安全標頭
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        # 簡易 CSP（若之後要載入更多第三方，可再放寬）
-        resp.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';"
-        )
+
+        path = (request.path or "").lower()
+
+        # ✅ 對 LIFF 同意頁/接口放寬 CSP（允許載入 LIFF SDK 與對 LINE 服務連線）
+        if path.startswith("/consent") or path.startswith("/api/consent"):
+            resp.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "img-src 'self' data: https:; "
+                "script-src 'self' 'unsafe-inline' https://static.line-scdn.net; "
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self' https://liff.line.me https://access.line.me https://api.line.me https://static.line-scdn.net; "
+                "frame-ancestors 'none';"
+            )
+        else:
+            # 其他頁維持較嚴格（和你原本一致）
+            resp.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "img-src 'self' data: https:; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "frame-ancestors 'none';"
+            )
     except Exception as e:
         logging.debug(f"add_security_headers skipped: {e}")
     return resp
@@ -1804,6 +1820,7 @@ def api_consent():
         ts = payload.get("ts") or datetime.utcnow().isoformat()
 
         if not user_id:
+            logging.warning(f"/api/consent missing userId. payload={payload}")
             return {"ok": False, "message": "缺少 userId"}, 400
 
         now = time.time()
