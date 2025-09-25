@@ -37,10 +37,9 @@ except Exception:
 
 # === 全域設定 ===
 LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "8"))     # 同時最多幾個使用者在跑附近查詢
-LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "2.2"))  # 各資料源逾時（秒）
+LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "1.8"))  # 各資料源逾時（秒）
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "5"))             # 最多回幾個
-SHOW_SEARCHING_BUBBLE = os.getenv("SHOW_SEARCHING_BUBBLE", "1") == "1"
-SEARCHING_TEXT = os.getenv("SEARCHING_TEXT", "… 搜尋中")
+SHOW_SEARCHING_BUBBLE = False
 _LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
 
 def _try_acquire_loc_slot() -> bool:
@@ -57,7 +56,7 @@ def _release_loc_slot():
 
 # === reply_token 使用記錄（新增） ===
 _USED_REPLY_TOKENS = set()
-_MAX_USED_TOKENS = 10000  # 防止集合無限成長
+_MAX_USED_TOKENS = 50000  # 防止集合無限成長
 
 def _mark_token_used(tok: str):
     try:
@@ -482,7 +481,7 @@ def _floor_from_name(name: str):
 _ENRICH_CACHE = {}
 _ENRICH_TTL = 120
 
-def enrich_nearby_places(lat, lon, radius=200):
+def enrich_nearby_places(lat, lon, radius=500):
     key = f"{round(lat,4)},{round(lon,4)}:{radius}"
     now = time.time()
     cached = _ENRICH_CACHE.get(key)
@@ -872,7 +871,7 @@ create_cache_db()
 tune_sqlite_for_concurrency()
 
 # 查詢廁所資料
-def query_sheet_toilets(user_lat, user_lon, radius=200):
+def query_sheet_toilets(user_lat, user_lon, radius=500):
     _ensure_sheets_ready()
     if worksheet is None:
         return [] 
@@ -1009,7 +1008,6 @@ def query_overpass_toilets(lat, lon, radius=500):
 
 # === 讀取 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
-    delay_request()
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
         return pts
@@ -1548,7 +1546,7 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
 # === 指示燈索引 ===
 _feedback_index_cache = {"ts": 0, "data": {}}
-_FEEDBACK_INDEX_TTL = 30
+_FEEDBACK_INDEX_TTL = 60
 
 def build_feedback_index():
     _ensure_sheets_ready()
@@ -2025,39 +2023,50 @@ def callback():
 def home():
     return "Toilet bot is running!", 200
 
-# === 使用者位置資料 ===
+# === 共用狀態 ===
 user_locations = {}
 pending_delete_confirm = {}
 
+# 建議：高併發時避免競態
+_dict_lock = threading.Lock()
+def set_user_location(uid, latlon):
+    with _dict_lock:
+        user_locations[uid] = latlon
 
-def build_nearby_toilets(uid, lat, lon):
-    def _q_csv():
-        return query_public_csv_toilets(lat, lon) or []
+def get_user_location(uid):
+    with _dict_lock:
+        return user_locations.get(uid)
 
-    def _q_sheet():
-        return query_sheet_toilets(lat, lon) or []
+# === 共用執行緒池（避免每次臨時建立） ===
+_pool = ThreadPoolExecutor(max_workers=2)
 
-    csv_res, sheet_res = [], []
+def build_nearby_toilets(uid, lat, lon, radius=500):
+    futures = []
+    csv_res, sheet_res, osm_res = [], [], []
+
     try:
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_csv = ex.submit(_q_csv)
-            f_sht = ex.submit(_q_sheet)
-            try:
-                csv_res = f_csv.result(timeout=LOC_QUERY_TIMEOUT_SEC)
-            except FuturesTimeoutError:
-                logging.warning("public_csv 查詢逾時")
-            try:
-                sheet_res = f_sht.result(timeout=LOC_QUERY_TIMEOUT_SEC)
-            except FuturesTimeoutError:
-                logging.warning("sheet 查詢逾時")
-    except Exception as e:
-        logging.warning(f"並行查詢失敗：{e}")
+        futures.append(("csv",  _pool.submit(query_public_csv_toilets, lat, lon, radius)))
+        futures.append(("sheet", _pool.submit(query_sheet_toilets,      lat, lon, radius)))
+        futures.append(("osm",  _pool.submit(query_overpass_toilets,    lat, lon, radius)))
 
-    quick = _merge_and_dedupe_lists(csv_res, sheet_res)
+        for name, fut in futures:
+            try:
+                res = fut.result(timeout=LOC_QUERY_TIMEOUT_SEC)
+                if   name == "csv":  csv_res  = res or []
+                elif name == "sheet": sheet_res = res or []
+                else:                 osm_res  = res or []
+            except FuturesTimeoutError:
+                logging.warning(f"{name} 查詢逾時")
+            except Exception as e:
+                logging.warning(f"{name} 查詢失敗: {e}")
+    finally:
+        for _, fut in futures:
+            if not fut.done():
+                fut.cancel()
+
+    quick = _merge_and_dedupe_lists(csv_res, sheet_res, osm_res)
     sort_toilets(quick)
-    # 負載下限縮清單，避免 Flex 太大與 reply 卡頓
     return quick[:LOC_MAX_RESULTS]
-
 
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
@@ -2115,7 +2124,7 @@ def handle_text(event):
         if not favs:
             reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
         else:
-            loc = user_locations.get(uid)
+            loc = get_user_location(uid)
             if loc:
                 lat, lon = loc
                 for f in favs:
@@ -2132,7 +2141,7 @@ def handle_text(event):
 
     elif text == "新增廁所":
         base = "https://school-i9co.onrender.com/add"
-        loc = user_locations.get(uid)
+        loc = get_user_location(uid)
         if loc:
             la, lo = loc
             url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
@@ -2147,7 +2156,7 @@ def handle_text(event):
     elif text == "合作信箱":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
         reply_messages.append(TextSendMessage(
-            text=f"📬 回饋信箱：{email}\n\n點這裡寫信：mailto:{email}"
+            text=f"📬 回饋信箱：{email}"
         ))
 
     
@@ -2172,7 +2181,7 @@ def handle_location(event):
     if is_duplicate_and_mark(key):
         return
 
-    user_locations[uid] = (lat, lon)
+    set_user_location(uid, (lat, lon))
 
     # === 併發閥門（原本就有）
     if not _try_acquire_loc_slot():
@@ -2180,22 +2189,17 @@ def handle_location(event):
         return
 
     try:
-        # ✅ 這裡先組一個 messages，第一則是「搜尋中…」
-        messages = []
-        if SHOW_SEARCHING_BUBBLE:
-            messages.append(TextSendMessage(text=SEARCHING_TEXT))
-
         toilets = build_nearby_toilets(uid, lat, lon)
 
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-            messages.append(FlexSendMessage("附近廁所", msg))
-            messages.append(make_location_quick_reply("想換個地點再找嗎？"))
+            # 一次 reply 多則 OK，但避免先送「搜尋中」
+            safe_reply(event, [
+                FlexSendMessage("附近廁所", msg),
+                make_location_quick_reply("想換個地點再找嗎？")
+            ])
         else:
-            messages.append(make_retry_location_text("附近沒有廁所，換個點或再試一次看看？"))
-
-        # ✅ 一次 reply 多則訊息 → 不用 push、不吃群發額度
-        safe_reply(event, messages)
+            safe_reply(event, make_retry_location_text("附近沒有廁所，換個點或再試一次看看？"))
 
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
