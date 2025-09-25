@@ -37,7 +37,7 @@ except Exception:
 
 # === 全域設定 ===
 LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "8"))     # 同時最多幾個使用者在跑附近查詢
-LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "2.0"))  # 各資料源逾時（秒）
+LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))  # 各資料源逾時（秒）
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "5"))             # 最多回幾個
 SHOW_SEARCHING_BUBBLE = False
 _LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
@@ -242,15 +242,18 @@ def add_security_headers(resp):
                 "default-src * data: blob: filesystem: about: 'unsafe-inline' 'unsafe-eval';"
             )
         else:
-            # 其他頁還是保持嚴格
-            resp.headers.setdefault(
-                "Content-Security-Policy",
-                "default-src 'self'; "
-                "img-src 'self' data: https:; "
-                "script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; "
-                "frame-ancestors 'none';"
-            )
+            # ✅ 其他頁面：允許常見 CDN 載入 Chart.js；並加上 connect-src 以便 fetch
+            csp = [
+                "default-src 'self'",
+                "img-src 'self' data: https:",
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com",
+                "style-src 'self' 'unsafe-inline'",
+                "connect-src 'self' https:",
+                "font-src 'self' data: https:",
+                "frame-ancestors 'none'",
+            ]
+            # 用「直接指定」取代 setdefault，確保覆蓋舊值
+            resp.headers["Content-Security-Policy"] = "; ".join(csp) + ";"
     except Exception as e:
         logging.debug(f"add_security_headers skipped: {e}")
     return resp
