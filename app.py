@@ -14,7 +14,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
-    FlexSendMessage, PostbackEvent, TextSendMessage, LocationAction
+    FlexSendMessage, PostbackEvent, TextSendMessage, LocationAction, MessageAction
 )
 from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -207,6 +207,21 @@ def make_retry_location_text(text="現在查詢人數有點多，我排一下隊
         text=text,
         quick_reply=QuickReply(items=[
             QuickReplyButton(action=LocationAction(label="傳送我的位置"))
+        ])
+    )
+def make_no_toilet_quick_reply(uid, lat=None, lon=None,
+                               text="附近沒有廁所 😥 要不要補上一間？"):
+    base = "https://school-i9co.onrender.com/add"
+    if lat is not None and lon is not None:
+        add_url = f"{base}?uid={quote(uid)}&lat={lat}&lon={lon}#openExternalBrowser=1"
+    else:
+        add_url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
+
+    return TextSendMessage(
+        text=text,
+        quick_reply=QuickReply(items=[
+            QuickReplyButton(action=LocationAction(label="傳送我的位置")),
+            QuickReplyButton(action=MessageAction(label="新增廁所", text="新增廁所"))
         ])
     )
 
@@ -2261,7 +2276,11 @@ def handle_location(event):
                 make_location_quick_reply("想換個地點再找嗎？")
             ])
         else:
-            safe_reply(event, make_retry_location_text("附近沒有廁所，換個點或再試一次看看？"))
+            # ✅ 沒有結果 → 顯示「傳送我的位置」＋「新增廁所」兩顆泡泡
+            safe_reply(event, make_no_toilet_quick_reply(
+                uid, lat, lon,
+                text="附近沒有廁所 😥 要不要補上一間，或換個點再試？"
+            ))
 
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
