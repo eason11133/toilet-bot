@@ -903,11 +903,9 @@ tune_sqlite_for_concurrency()
 def query_sheet_toilets(user_lat, user_lon, radius=500):
     _ensure_sheets_ready()
     if worksheet is None:
-        return [] 
-    # 用 lat 和 lon 組成唯一的查詢 key
-    query_key = f"{user_lat},{user_lon},{radius}"
+        return []
 
-    # 嘗試從快取中獲取結果
+    query_key = f"{user_lat},{user_lon},{radius}"
     cached_data = get_cached_data(query_key)
     if cached_data:
         return cached_data
@@ -915,36 +913,61 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
     toilets = []
     try:
         rows = worksheet.get_all_values()
+        header = rows[0] if rows else []
         data = rows[1:]
+
+        idx = _toilet_sheet_indices(header)
+
         for row in data:
             if len(row) < 5:
                 continue
-            name = (row[1] if len(row) > 1 else "").strip() or "無名稱"
-            address = (row[2] if len(row) > 2 else "").strip()
+
+            name = (row[idx["name"]] if idx["name"] is not None and len(row) > idx["name"] else "").strip() or "無名稱"
+            address = (row[idx["address"]] if idx["address"] is not None and len(row) > idx["address"] else "").strip()
+
             try:
-                t_lat = float(row[3])
-                t_lon = float(row[4])
+                t_lat = float(row[idx["lat"]]) if idx["lat"] is not None and len(row) > idx["lat"] else None
+                t_lon = float(row[idx["lon"]]) if idx["lon"] is not None and len(row) > idx["lon"] else None
             except:
+                t_lat = t_lon = None
+
+            if t_lat is None or t_lon is None:
                 continue
+
             dist = haversine(user_lat, user_lon, t_lat, t_lon)
-            if dist <= radius:
-                floor_hint = _floor_from_name(name)
-                toilets.append({
-                    "name": name,
-                    "lat": float(norm_coord(t_lat)),
-                    "lon": float(norm_coord(t_lon)),
-                    "address": address,
-                    "distance": dist,
-                    "type": "sheet",
-                    "floor_hint": floor_hint
-                })
+            if dist > radius:
+                continue
+
+            # 🔽 讀出可選欄位（若沒有就給空字串）
+            level         = (row[idx["level"]] if idx["level"] is not None and len(row) > idx["level"] else "").strip()
+            floor_hint_ws = (row[idx["floor_hint"]] if idx["floor_hint"] is not None and len(row) > idx["floor_hint"] else "").strip()
+            entrance_hint = (row[idx["entrance_hint"]] if idx["entrance_hint"] is not None and len(row) > idx["entrance_hint"] else "").strip()
+            access_note   = (row[idx["access_note"]] if idx["access_note"] is not None and len(row) > idx["access_note"] else "").strip()
+            open_hours    = (row[idx["open_hours"]] if idx["open_hours"] is not None and len(row) > idx["open_hours"] else "").strip()
+
+            # 既有：若沒提供樓層提示，用名字自動推斷
+            auto_floor = _floor_from_name(name)
+            floor_hint = floor_hint_ws or level or auto_floor
+
+            toilets.append({
+                "name": name,
+                "lat": float(norm_coord(t_lat)),
+                "lon": float(norm_coord(t_lon)),
+                "address": address,
+                "distance": dist,
+                "type": "sheet",
+
+                # 🔽 把使用者填的資訊一起塞進物件，後面 Flex 會用到
+                "level": level,
+                "floor_hint": floor_hint,
+                "entrance_hint": entrance_hint,
+                "access_note": access_note,
+                "open_hours": open_hours,
+            })
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
 
-    # 儲存查詢結果到快取
     save_cache(query_key, toilets)
-
-    # 返回排序後的廁所資料
     return sorted(toilets, key=lambda x: x["distance"])
 
 # === OSM Overpass ===
@@ -1231,6 +1254,11 @@ def _toilet_sheet_indices(header):
         "lat": _find_idx(header, ["lat", "緯度"]),
         "lon": _find_idx(header, ["lon", "經度", "lng", "long"]),
         "created": _find_idx(header, ["timestamp", "created_at", "建立時間"]),
+        "level": _find_idx(header, ["level", "樓層"]),
+        "floor_hint": _find_idx(header, ["floor_hint", "位置樓層", "樓層說明"]),
+        "entrance_hint": _find_idx(header, ["entrance_hint", "入口指引", "怎麼走"]),
+        "access_note": _find_idx(header, ["access_note", "備註", "補充說明"]),
+        "open_hours": _find_idx(header, ["open_hours", "開放時間", "營業時間"]),
     }
 
 # === 清潔度預測 ===
@@ -1927,6 +1955,13 @@ def _debug_predict():
         logging.error(e)
         return {"ok": False}, 500
 
+def _short_txt(s, n=60):
+    try:
+        s = (s or "").strip()
+        return s if len(s) <= n else (s[:n-1] + "…")
+    except Exception:
+        return s
+
 # === 建立 Flex ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     indicators = build_feedback_index()
@@ -1943,14 +1978,58 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             ph = toilet.get("place_hint")
             title = f"{ph}（附近）廁所" if ph else "（未命名）廁所"
 
+        # 原本的樓層行（相容）
         floor_hint = toilet.get("floor_hint")
         floor_text = f"🧭 位置：{floor_hint}" if floor_hint else "🧭 位置：樓層未知"
 
-        ind = indicators.get((lat_s, lon_s), {"paper":"?","access":"?","avg":None})
-        star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
-        paper_text = "🧻有" if ind.get("paper")=="有" else ("🧻無" if ind.get("paper")=="沒有" else "🧻—")
-        access_text = "♿有" if ind.get("access")=="有" else ("♿無" if ind.get("access")=="沒有" else "♿—")
+        # 讀出使用者在表單填的欄位（可能為空）
+        lvl   = toilet.get("level") or ""
+        route = toilet.get("entrance_hint") or ""
+        hours = toilet.get("open_hours") or ""
+        note  = toilet.get("access_note") or ""
 
+        # 額外顯示行（自動截斷，避免卡片過長）
+        extra_lines = []
+        if floor_hint or lvl:
+            extra_lines.append({
+                "type": "text",
+                "text": _short_txt(f"🧭 位置：{floor_hint or lvl}"),
+                "size": "sm",
+                "color": "#666666",
+                "wrap": True
+            })
+        if hours:
+            extra_lines.append({
+                "type": "text",
+                "text": _short_txt(f"🕒 開放：{hours}"),
+                "size": "sm",
+                "color": "#666666",
+                "wrap": True
+            })
+        if route:
+            extra_lines.append({
+                "type": "text",
+                "text": _short_txt(f"➡️ 路線：{route}"),
+                "size": "sm",
+                "color": "#666666",
+                "wrap": True
+            })
+        if note:
+            extra_lines.append({
+                "type": "text",
+                "text": _short_txt(f"ℹ️ 備註：{note}"),
+                "size": "sm",
+                "color": "#666666",
+                "wrap": True
+            })
+
+        # 指示燈文字
+        ind = indicators.get((lat_s, lon_s), {"paper": "?", "access": "?", "avg": None})
+        star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
+        paper_text = "🧻有" if ind.get("paper") == "有" else ("🧻無" if ind.get("paper") == "沒有" else "🧻—")
+        access_text = "♿有" if ind.get("access") == "有" else ("♿無" if ind.get("access") == "沒有" else "♿—")
+
+        # 按鈕
         actions.append({
             "type": "uri",
             "label": "導航",
@@ -1986,18 +2065,22 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"add:{quote(title)}:{lat_s}:{lon_s}"
             })
 
+        # 主體內容：原有 4 行 + 追加 extra_lines + 距離
+        body_contents = [
+            {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
+            {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
+            {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
+            {"type": "text", "text": floor_text, "size": "sm", "color": "#666666", "wrap": True},
+        ] + extra_lines + [
+            {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"}
+        ]
+
         bubble = {
             "type": "bubble",
             "body": {
                 "type": "box",
                 "layout": "vertical",
-                "contents": [
-                    {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
-                    {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
-                    {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
-                    {"type": "text", "text": floor_text, "size": "sm", "color": "#666666", "wrap": True},
-                    {"type": "text", "text": f"{int(toilet.get('distance',0))} 公尺", "size": "sm", "color": "#999999"}
-                ]
+                "contents": body_contents
             },
             "footer": {
                 "type": "box",
@@ -2012,6 +2095,7 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             }
         }
         bubbles.append(bubble)
+
     return {"type": "carousel", "contents": bubbles}
 
 # === 列出 我的貢獻 & 刪除 ===
@@ -2233,7 +2317,7 @@ def handle_text(event):
     elif text == "合作信箱":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
         reply_messages.append(TextSendMessage(
-            text=f"📬 回饋信箱：{email}"
+            text=f"📬 合作信箱：{email}"
         ))
 
     
