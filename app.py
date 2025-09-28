@@ -919,6 +919,7 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
         idx = _toilet_sheet_indices(header)
 
         for row in data:
+            # 基本欄位不齊就跳過
             if len(row) < 5:
                 continue
 
@@ -928,9 +929,8 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             try:
                 t_lat = float(row[idx["lat"]]) if idx["lat"] is not None and len(row) > idx["lat"] else None
                 t_lon = float(row[idx["lon"]]) if idx["lon"] is not None and len(row) > idx["lon"] else None
-            except:
+            except Exception:
                 t_lat = t_lon = None
-
             if t_lat is None or t_lon is None:
                 continue
 
@@ -938,14 +938,12 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             if dist > radius:
                 continue
 
-            # 🔽 讀出可選欄位（若沒有就給空字串）
+            # 只讀你要的三個欄位（若無給空字串）
             level         = (row[idx["level"]] if idx["level"] is not None and len(row) > idx["level"] else "").strip()
             floor_hint_ws = (row[idx["floor_hint"]] if idx["floor_hint"] is not None and len(row) > idx["floor_hint"] else "").strip()
-            entrance_hint = (row[idx["entrance_hint"]] if idx["entrance_hint"] is not None and len(row) > idx["entrance_hint"] else "").strip()
-            access_note   = (row[idx["access_note"]] if idx["access_note"] is not None and len(row) > idx["access_note"] else "").strip()
             open_hours    = (row[idx["open_hours"]] if idx["open_hours"] is not None and len(row) > idx["open_hours"] else "").strip()
 
-            # 既有：若沒提供樓層提示，用名字自動推斷
+            # 若沒樓層提示就用名稱推斷
             auto_floor = _floor_from_name(name)
             floor_hint = floor_hint_ws or level or auto_floor
 
@@ -956,23 +954,25 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 "address": address,
                 "distance": dist,
                 "type": "sheet",
-
-                # 🔽 把使用者填的資訊一起塞進物件，後面 Flex 會用到
                 "level": level,
                 "floor_hint": floor_hint,
-                "entrance_hint": entrance_hint,
-                "access_note": access_note,
                 "open_hours": open_hours,
             })
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
+
+    # 可選：釋放大列表幫助記憶體回收
+    try:
+        del rows
+    except Exception:
+        pass
 
     save_cache(query_key, toilets)
     return sorted(toilets, key=lambda x: x["distance"])
 
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
-    overall_deadline = time.time() + 8.0  # 最多 8 秒
+    overall_deadline = time.time() + 8.0
     def _left():
         return max(1.0, overall_deadline - time.time())
 
@@ -1025,6 +1025,11 @@ def query_overpass_toilets(lat, lon, radius=500):
                     address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
                     floor_hint = _floor_from_tags(tags) or _floor_from_name(name)
 
+                    # ✅ 新增：把 OSM 的欄位帶進物件
+                    level_val   = tags.get("level") or tags.get("addr:floor") or ""
+                    open_hours  = tags.get("opening_hours") or ""
+                    entranceval = tags.get("entrance") or ""
+
                     toilets.append({
                         "name": name,
                         "lat": float(norm_coord(t_lat)),
@@ -1032,7 +1037,12 @@ def query_overpass_toilets(lat, lon, radius=500):
                         "address": address,
                         "distance": haversine(lat, lon, t_lat, t_lon),
                         "type": "osm",
-                        "floor_hint": floor_hint
+                        "floor_hint": floor_hint,
+
+                        # 新增欄位，供 Flex 顯示
+                        "level": level_val,
+                        "open_hours": open_hours,
+                        "entrance_hint": entranceval,
                     })
 
                 # 只有在拿到資料時才做 enrich（避免多餘請求）
@@ -1256,8 +1266,6 @@ def _toilet_sheet_indices(header):
         "created": _find_idx(header, ["timestamp", "created_at", "建立時間"]),
         "level": _find_idx(header, ["level", "樓層"]),
         "floor_hint": _find_idx(header, ["floor_hint", "位置樓層", "樓層說明"]),
-        "entrance_hint": _find_idx(header, ["entrance_hint", "入口指引", "怎麼走"]),
-        "access_note": _find_idx(header, ["access_note", "備註", "補充說明"]),
         "open_hours": _find_idx(header, ["open_hours", "開放時間", "營業時間"]),
     }
 
@@ -1978,49 +1986,38 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             ph = toilet.get("place_hint")
             title = f"{ph}（附近）廁所" if ph else "（未命名）廁所"
 
-        # 原本的樓層行（相容）
-        floor_hint = toilet.get("floor_hint")
-        floor_text = f"🧭 位置：{floor_hint}" if floor_hint else "🧭 位置：樓層未知"
+        # 只讀三個欄位（可能為空）
+        lvl   = (toilet.get("level") or "").strip()
+        pos   = (toilet.get("floor_hint") or "").strip()
+        hours = (toilet.get("open_hours") or "").strip()
 
-        # 讀出使用者在表單填的欄位（可能為空）
-        lvl   = toilet.get("level") or ""
-        route = toilet.get("entrance_hint") or ""
-        hours = toilet.get("open_hours") or ""
-        note  = toilet.get("access_note") or ""
-
-        # 額外顯示行（自動截斷，避免卡片過長）
+        # 額外顯示行（避免重覆；自動截斷需有 _short_txt）
         extra_lines = []
-        if floor_hint or lvl:
-            extra_lines.append({
-                "type": "text",
-                "text": _short_txt(f"🧭 位置：{floor_hint or lvl}"),
-                "size": "sm",
-                "color": "#666666",
-                "wrap": True
-            })
+        if lvl or pos:
+            # 兩者都有且不同 → 顯示「樓層」與「位置」兩行；否則合併成一行
+            if lvl and pos and (lvl.strip().lower() != pos.strip().lower()):
+                extra_lines.append({
+                    "type": "text",
+                    "text": _short_txt(f"🏷 樓層：{lvl}"),
+                    "size": "sm", "color": "#666666", "wrap": True
+                })
+                extra_lines.append({
+                    "type": "text",
+                    "text": _short_txt(f"🧭 位置：{pos}"),
+                    "size": "sm", "color": "#666666", "wrap": True
+                })
+            else:
+                val = pos or lvl
+                extra_lines.append({
+                    "type": "text",
+                    "text": _short_txt(f"🧭 位置/樓層：{val}"),
+                    "size": "sm", "color": "#666666", "wrap": True
+                })
         if hours:
             extra_lines.append({
                 "type": "text",
                 "text": _short_txt(f"🕒 開放：{hours}"),
-                "size": "sm",
-                "color": "#666666",
-                "wrap": True
-            })
-        if route:
-            extra_lines.append({
-                "type": "text",
-                "text": _short_txt(f"➡️ 路線：{route}"),
-                "size": "sm",
-                "color": "#666666",
-                "wrap": True
-            })
-        if note:
-            extra_lines.append({
-                "type": "text",
-                "text": _short_txt(f"ℹ️ 備註：{note}"),
-                "size": "sm",
-                "color": "#666666",
-                "wrap": True
+                "size": "sm", "color": "#666666", "wrap": True
             })
 
         # 指示燈文字
@@ -2065,12 +2062,11 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 "data": f"add:{quote(title)}:{lat_s}:{lon_s}"
             })
 
-        # 主體內容：原有 4 行 + 追加 extra_lines + 距離
+        # 主體內容：原本前三行 + extra_lines + 距離
         body_contents = [
             {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
             {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
             {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
-            {"type": "text", "text": floor_text, "size": "sm", "color": "#666666", "wrap": True},
         ] + extra_lines + [
             {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"}
         ]
@@ -2316,8 +2312,9 @@ def handle_text(event):
 
     elif text == "合作信箱":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
+        ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
         reply_messages.append(TextSendMessage(
-            text=f"📬 合作信箱：{email}"
+            text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
 
     
