@@ -2379,14 +2379,6 @@ def get_user_location(uid):
     with _dict_lock:
         return user_locations.get(uid)
 
-def _status_liff_url(lat, lon):
-    try:
-        host = request.host
-    except Exception:
-        host = os.getenv("PUBLIC_URL","").replace("https://","").replace("http://","").strip("/")
-    la, lo = norm_coord(lat), norm_coord(lon)
-    return f"https://{host}/status_liff?lat={la}&lon={lo}"
-
 # === 共用執行緒池（避免每次臨時建立） ===
 _pool = ThreadPoolExecutor(max_workers=2)
 
