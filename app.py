@@ -435,6 +435,7 @@ PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
 LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
 
 def _status_liff_url(lat=None, lon=None):
+    """回傳狀態回報 LIFF 頁面網址。若沒帶座標，讓 LIFF 自己取定位。"""
     if not PUBLIC_URL:
         return None
     base = f"{PUBLIC_URL}/status_liff"
@@ -2509,14 +2510,9 @@ def handle_text(event):
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
     elif text == "狀態":
-        url = _status_liff_url()  
-        if url:
-            safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
-        else:
-            safe_reply(event, TextSendMessage(text="⚠️ 尚未設定 PUBLIC_URL，無法開啟狀態回報頁面"))
-        return
+        url = _status_liff_url()  # 不帶參數
+        safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
    
-    
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===
