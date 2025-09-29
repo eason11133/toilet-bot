@@ -16,14 +16,11 @@
 </head>
 <body>
   <h3>回報附近廁所狀態</h3>
-  <div id="loading">取得位置中…</div>
+  <div id="loading">初始化中…</div>
   <div id="list"></div>
 
   <script>
     const LIFF_ID = "{{ liff_id }}";
-    const qs = new URLSearchParams(location.search);
-    const qsLat = parseFloat(qs.get("lat")||"");
-    const qsLon = parseFloat(qs.get("lon")||"");
 
     function el(tag, attrs={}, children=[]) {
       const e = document.createElement(tag);
@@ -33,14 +30,13 @@
     }
 
     async function getPos() {
-      if (!isNaN(qsLat) && !isNaN(qsLon)) return {lat: qsLat, lon: qsLon};
-      return new Promise((res,rej)=>{
-        if(!navigator.geolocation) return rej(new Error("無法取得定位"));
-        navigator.geolocation.getCurrentPosition(
-          p=>res({lat:p.coords.latitude, lon:p.coords.longitude}),
-          e=>rej(e), {enableHighAccuracy:true, timeout:8000}
-        );
-      });
+      // ✅ 改用 LINE LIFF API 抓位置
+      try {
+        const pos = await liff.getCurrentPosition();
+        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      } catch (e) {
+        throw new Error("無法取得定位，請回 LINE 允許定位");
+      }
     }
 
     async function fetchCandidates(lat, lon){
@@ -49,8 +45,7 @@
     }
 
     async function reportStatus(lat, lon, status, btns){
-      // 避免連點
-      btns.forEach(b=>b.disabled = true);
+      btns.forEach(b=>b.disabled = true); // 避免連點
       let user = { userId:"", displayName:"" };
       try { user = await liff.getProfile(); } catch(e) {}
       try {
@@ -83,16 +78,12 @@
         const dist  = el("div",{class:"muted"},[ Math.round(item.distance) + " 公尺" ]);
         const row   = el("div",{class:"row"});
 
-        const btns = [
-          el("button",{},["🟡 有人排隊"]),
-          el("button",{},["🧻 缺衛生紙"]),
-          el("button",{},["⛔ 暫停使用"]),
-          el("button",{},["✅ 恢復正常"]),
-        ];
         const labels = ["有人排隊","缺衛生紙","暫停使用","恢復正常"];
-        btns.forEach((b,i)=>{
-          b.addEventListener("click", ()=>reportStatus(item.lat,item.lon,labels[i],btns));
+        const btns = labels.map(text=>{
+          const b = el("button",{},[text]);
           row.appendChild(b);
+          b.addEventListener("click", ()=>reportStatus(item.lat,item.lon,text,btns));
+          return b;
         });
 
         card.appendChild(title);
@@ -105,13 +96,14 @@
 
     async function main(){
       document.getElementById("loading").innerText = "初始化 LIFF…";
-      try { await liff.init({ liffId: LIFF_ID }); } catch(e) { /* 失敗也可用 web 版 */ }
+      try { await liff.init({ liffId: LIFF_ID }); } 
+      catch(e) { document.getElementById("loading").innerText = "LIFF 初始化失敗"; return; }
 
       document.getElementById("loading").innerText = "定位中…";
       let pos;
       try { pos = await getPos(); }
       catch(e){
-        document.getElementById("loading").innerText = "定位失敗，請回 LINE 允許定位後重試";
+        document.getElementById("loading").innerText = e.message;
         return;
       }
 
