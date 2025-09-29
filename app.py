@@ -2071,8 +2071,7 @@ def render_privacy_page():
 # 狀態 LIFF 頁面
 @app.route("/status_liff")
 def status_liff_page():
-    liff_id = os.getenv("LIFF_ID_STATUS", "")
-    return render_template("status_liff.html", liff_id=liff_id)
+    return render_template("status_liff.html", liff_id=os.getenv("LIFF_STATUS_ID"))
 
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
 _last_consent_ts = {}
@@ -2538,22 +2537,11 @@ def handle_location(event):
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
 
-            # 👇 把要回的訊息組在同一個 list 裡（一次回覆）
+            # ✅ 一次回覆「附近廁所」+「換地點再找」
             messages = [
                 FlexSendMessage("附近廁所", msg),
                 make_location_quick_reply("想換個地點再找嗎？"),
             ]
-
-            # LIFF 狀態回報連結（同一次 reply，一起送出）
-            try:
-                url = _status_liff_url(lat, lon)   # 會用 PUBLIC_URL + /status_liff
-                if url:
-                    messages.append(TextSendMessage(text=f"⚡ 也可以直接回報狀態：\n{url}"))
-                else:
-                    logging.warning("⚠️ _status_liff_url() 回 None，檢查 PUBLIC_URL / LIFF_STATUS_ID")
-            except Exception as e:
-                logging.warning(f"_status_liff_url error: {e}")
-
             safe_reply(event, messages)
 
         else:
