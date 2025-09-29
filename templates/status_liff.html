@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>狀態回報</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:14px;}
+    .card{border:1px solid #e5e5e5;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .title{font-weight:700}
+    .muted{color:#666;font-size:14px}
+    .row{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+    button{padding:8px 10px;border:0;border-radius:10px;cursor:pointer}
+  </style>
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
+</head>
+<body>
+  <h3>回報附近廁所狀態</h3>
+  <div id="loading">取得位置中…</div>
+  <div id="list"></div>
+
+  <script>
+    const LIFF_ID = "{{ liff_id }}";
+    const qs = new URLSearchParams(location.search);
+    const qsLat = parseFloat(qs.get("lat")||"");
+    const qsLon = parseFloat(qs.get("lon")||"");
+
+    function el(tag, attrs={}, children=[]) {
+      const e = document.createElement(tag);
+      for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v);
+      for (const c of children) e.appendChild(typeof c==="string" ? document.createTextNode(c) : c);
+      return e;
+    }
+
+    async function getPos() {
+      if (!isNaN(qsLat) && !isNaN(qsLon)) return {lat: qsLat, lon: qsLon};
+      return new Promise((res,rej)=>{
+        if(!navigator.geolocation) return rej(new Error("無法取得定位"));
+        navigator.geolocation.getCurrentPosition(
+          p=>res({lat:p.coords.latitude, lon:p.coords.longitude}),
+          e=>rej(e), {enableHighAccuracy:true, timeout:8000}
+        );
+      });
+    }
+
+    async function fetchCandidates(lat, lon){
+      const r = await fetch(`/api/status_candidates?lat=${lat}&lon=${lon}`);
+      return await r.json();
+    }
+
+    async function reportStatus(lat, lon, status, btns){
+      // 避免連點
+      btns.forEach(b=>b.disabled = true);
+      let user = { userId:"", displayName:"" };
+      try { user = await liff.getProfile(); } catch(e) {}
+      try {
+        const body = { lat, lon, status, user_id: user.userId||"", display_name: user.displayName||"", note: "" };
+        const r = await fetch("/api/status_report", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if(j.ok){
+          alert("已回報：" + status);
+          if (liff.isInClient()) liff.closeWindow();
+        } else {
+          alert("回報失敗，稍後再試");
+        }
+      } catch (e) {
+        alert("網路錯誤，稍後再試");
+      } finally {
+        btns.forEach(b=>b.disabled = false);
+      }
+    }
+
+    function render(list){
+      const root = document.getElementById("list");
+      root.innerHTML = "";
+      list.forEach(item=>{
+        const card = el("div",{class:"card"});
+        const title = el("div",{class:"title"},[ item.title ]);
+        const addr  = el("div",{class:"muted"},[ item.address || (item.lat+","+item.lon) ]);
+        const dist  = el("div",{class:"muted"},[ Math.round(item.distance) + " 公尺" ]);
+        const row   = el("div",{class:"row"});
+
+        const btns = [
+          el("button",{},["🟡 有人排隊"]),
+          el("button",{},["🧻 缺衛生紙"]),
+          el("button",{},["⛔ 暫停使用"]),
+          el("button",{},["✅ 恢復正常"]),
+        ];
+        const labels = ["有人排隊","缺衛生紙","暫停使用","恢復正常"];
+        btns.forEach((b,i)=>{
+          b.addEventListener("click", ()=>reportStatus(item.lat,item.lon,labels[i],btns));
+          row.appendChild(b);
+        });
+
+        card.appendChild(title);
+        card.appendChild(addr);
+        card.appendChild(dist);
+        card.appendChild(row);
+        root.appendChild(card);
+      });
+    }
+
+    async function main(){
+      document.getElementById("loading").innerText = "初始化 LIFF…";
+      try { await liff.init({ liffId: LIFF_ID }); } catch(e) { /* 失敗也可用 web 版 */ }
+
+      document.getElementById("loading").innerText = "定位中…";
+      let pos;
+      try { pos = await getPos(); }
+      catch(e){
+        document.getElementById("loading").innerText = "定位失敗，請回 LINE 允許定位後重試";
+        return;
+      }
+
+      document.getElementById("loading").innerText = "載入附近廁所…";
+      const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
+      if(!ok || !candidates || !candidates.length){
+        document.getElementById("loading").innerText = "附近找不到廁所";
+        return;
+      }
+      document.getElementById("loading").remove();
+      render(candidates);
+    }
+    main();
+  </script>
+</body>
+</html>

@@ -372,6 +372,16 @@ CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL", "https://school-i9co.onrender.c
 
 gc = worksheet = feedback_sheet = consent_ws = None
 
+# === 狀態回報設定 ===
+STATUS_SHEET_TITLE = "status"
+status_ws = None
+
+# 近點/快取/有效期
+_STATUS_NEAR_M = 35
+_STATUS_TTL_HOURS = 6
+_status_index_cache = {"ts": 0, "data": {}}
+_STATUS_INDEX_TTL = 60
+
 # === 載入模型 ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -574,7 +584,7 @@ def sort_toilets(toilets):
 
 # === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
-    global gc, worksheet, feedback_sheet, consent_ws
+    global gc, worksheet, feedback_sheet, consent_ws, status_ws
     try:
         if not GSHEET_CREDENTIALS_JSON:
             logging.critical("❌ 缺少 GSHEET_CREDENTIALS_JSON")
@@ -596,6 +606,14 @@ def init_gsheet():
         worksheet = SafeWS(worksheet_raw, TOILET_SPREADSHEET_ID, worksheet_raw.title)
         feedback_sheet = SafeWS(feedback_raw, FEEDBACK_SPREADSHEET_ID, feedback_raw.title)
         consent_ws = SafeWS(consent_raw, FEEDBACK_SPREADSHEET_ID, consent_raw.title)
+        
+        try:
+            status_raw = fb_spread.worksheet(STATUS_SHEET_TITLE)
+        except gspread.exceptions.WorksheetNotFound:
+            status_raw = fb_spread.add_worksheet(title=STATUS_SHEET_TITLE, rows=1000, cols=10)
+            status_raw.update("A1:G1", [["lat","lon","status","user_id","display_name","note","timestamp"]])
+
+        status_ws = SafeWS(status_raw, FEEDBACK_SPREADSHEET_ID, status_raw.title)
 
         logging.info("✅ Sheets 初始化完成")
     except Exception as e:
@@ -715,7 +733,6 @@ def safe_reply(event, messages):
         logging.warning(f"[safe_reply] reply_message failed (no push). err={msg_txt}")
 
 def _too_old_to_reply(event, limit_seconds=55):
-    """LINE reply_token 約 1 分鐘失效；太舊事件直接略過避免 Invalid reply token。"""
     try:
         evt_ms = int(getattr(event, "timestamp", 0))  # 毫秒
         if evt_ms <= 0:
@@ -1412,6 +1429,45 @@ def get_nowcast_by_coord(lat, lon):
     except Exception as e:
         logging.error(f"❌ Nowcast API 錯誤: {e}")
         return {"success": False}, 500
+    
+# === 回報 API ===
+@app.route("/api/status_candidates")
+def api_status_candidates():
+    try:
+        lat = float(request.args.get("lat"))
+        lon = float(request.args.get("lon"))
+    except:
+        return {"ok": False, "message": "缺少或錯誤的座標"}, 400
+
+    items = build_nearby_toilets("status", lat, lon, radius=700)
+    out = []
+    for t in items[:3]:
+        out.append({
+            "title": t.get("name") or t.get("place_hint") or "（未命名）廁所",
+            "address": t.get("address") or "",
+            "lat": norm_coord(t["lat"]),
+            "lon": norm_coord(t["lon"]),
+            "distance": int(t.get("distance", 0))
+        })
+    return {"ok": True, "candidates": out}
+
+@app.route("/api/status_report", methods=["POST"])
+def api_status_report():
+    try:
+        payload = request.get_json(force=True)
+        lat = float(payload["lat"]); lon = float(payload["lon"])
+        status_text = (payload["status"] or "").strip()
+        user_id = (payload.get("user_id") or "")
+        display_name = payload.get("display_name") or ""
+        note = payload.get("note") or ""
+    except Exception:
+        return {"ok": False, "message": "參數錯誤"}, 400
+
+    if status_text not in ["有人排隊","缺衛生紙","暫停使用","恢復正常"]:
+        return {"ok": False, "message": "不支援的狀態"}, 400
+
+    ok = submit_status_update(lat, lon, status_text, user_id, display_name, note)
+    return {"ok": ok}
 
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
@@ -1659,6 +1715,90 @@ def build_feedback_index():
         logging.warning(f"建立指示燈索引失敗：{e}")
         return {}
 
+def submit_status_update(lat, lon, status_text, user_id="", display_name="", note=""):
+    _ensure_sheets_ready()
+    if status_ws is None:
+        return False
+    try:
+        row = [
+            norm_coord(lat), norm_coord(lon),
+            status_text.strip(), user_id or "", display_name or "",
+            (note or "").strip(),
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        status_ws.append_row(row, value_input_option="USER_ENTERED")
+        _status_index_cache["ts"] = 0  # 立刻失效快取
+        return True
+    except Exception as e:
+        logging.error(f"寫入狀態失敗: {e}")
+        return False
+
+def _is_close_m(lat1, lon1, lat2, lon2, th=_STATUS_NEAR_M):
+    try:
+        return haversine(float(lat1), float(lon1), float(lat2), float(lon2)) <= th
+    except:
+        return False
+
+def build_status_index():
+    """回傳 {(lat_s,lon_s): {'status': '有人排隊', 'ts': '...'}}，只保留最近一筆且在有效期內"""
+    _ensure_sheets_ready()
+    if status_ws is None:
+        return {}
+
+    now = time.time()
+    if now - _status_index_cache["ts"] < _STATUS_INDEX_TTL and _status_index_cache["data"]:
+        return _status_index_cache["data"]
+
+    out = {}
+    try:
+        rows = status_ws.get_all_values()
+        if not rows or len(rows) < 2:
+            _status_index_cache.update(ts=now, data={})
+            return {}
+        header = rows[0]; data = rows[1:]
+        idx = {h:i for i,h in enumerate(header)}
+        i_lat = idx.get("lat"); i_lon = idx.get("lon")
+        i_status = idx.get("status"); i_ts = idx.get("timestamp")
+        if None in (i_lat, i_lon, i_status):
+            _status_index_cache.update(ts=now, data={})
+            return {}
+
+        def fresh(ts_s):
+            if not ts_s: return False
+            try:
+                dt = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
+                return (datetime.utcnow() - dt).total_seconds() <= _STATUS_TTL_HOURS*3600
+            except:
+                return False
+
+        merged = []
+        for r in data:
+            if max(i_lat, i_lon, i_status) >= len(r): continue
+            lat_s, lon_s = norm_coord(r[i_lat]), norm_coord(r[i_lon])
+            st = (r[i_status] or "").strip()
+            ts = (r[i_ts] if i_ts is not None and len(r) > i_ts else "")
+            if not fresh(ts):
+                continue
+
+            placed = False
+            for m in merged:
+                if _is_close_m(lat_s, lon_s, m["lat"], m["lon"]):
+                    if ts > m["ts"]:
+                        m.update(lat=lat_s, lon=lon_s, status=st, ts=ts)
+                    placed = True
+                    break
+            if not placed:
+                merged.append({"lat": lat_s, "lon": lon_s, "status": st, "ts": ts})
+
+        for m in merged:
+            out[(m["lat"], m["lon"])] = {"status": m["status"], "ts": m["ts"]}
+
+        _status_index_cache.update(ts=now, data=out)
+        return out
+    except Exception as e:
+        logging.warning(f"建立狀態索引失敗：{e}")
+        return {}
+
 # === 舊路由保留===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
@@ -1900,6 +2040,97 @@ def render_consent_page():
 def render_privacy_page():
     return render_template("privacy_policy.html")
 
+def _get_status_ws():
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return None
+    try:
+        # 用 feedback 試算表開一張 status 分頁
+        fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
+        try:
+            raw = fb_spread.worksheet(STATUS_SHEET_TITLE)
+        except gspread.exceptions.WorksheetNotFound:
+            raw = fb_spread.add_worksheet(title=STATUS_SHEET_TITLE, rows=1000, cols=20)
+            raw.update("A1:F1", [["lat","lon","status","user_id","display_name","timestamp"]])
+        return SafeWS(raw, FEEDBACK_SPREADSHEET_ID, STATUS_SHEET_TITLE)
+    except Exception as e:
+        logging.error(f"取得 status 分頁失敗: {e}")
+        return None
+
+def _nearby_candidates(lat, lon, k=3, radius=500):
+    csv_toilets  = query_public_csv_toilets(lat, lon, radius) or []
+    sheet_toilets= query_sheet_toilets(lat, lon, radius) or []
+    osm_toilets  = query_overpass_toilets(lat, lon, radius) or []
+    all_toilets = _merge_and_dedupe_lists(csv_toilets, sheet_toilets, osm_toilets)
+    sort_toilets(all_toilets)
+    out = []
+    for t in all_toilets[:k]:
+        out.append({
+            "title": (t.get("name") or "無名稱"),
+            "address": t.get("address") or "",
+            "lat": float(t["lat"]), "lon": float(t["lon"]),
+            "distance": int(t.get("distance", 0))
+        })
+    return out
+
+# ==== 狀態候選（給 LIFF 列最近三間） ====
+@app.route("/api/status_candidates")
+def api_status_candidates():
+    try:
+        lat = float(request.args.get("lat"))
+        lon = float(request.args.get("lon"))
+    except Exception:
+        return {"ok": False, "error": "bad lat/lon"}, 400
+
+    try:
+        cands = _nearby_candidates(lat, lon, k=3, radius=500)
+        return {"ok": True, "candidates": cands}, 200
+    except Exception as e:
+        logging.error(f"/api/status_candidates 失敗: {e}")
+        return {"ok": False}, 500
+
+
+# ==== 回報狀態（寫進 Google Sheet 的 status 分頁） ====
+@app.route("/api/status_report", methods=["POST"])
+def api_status_report():
+    try:
+        payload = request.get_json(force=True)
+        lat = float(payload.get("lat"))
+        lon = float(payload.get("lon"))
+        status = (payload.get("status") or "").strip()
+        user_id = (payload.get("user_id") or "").strip()
+        display_name = (payload.get("display_name") or "").strip()
+        note = (payload.get("note") or "").strip()
+    except Exception:
+        return {"ok": False, "error": "bad request"}, 400
+
+    try:
+        ws = _get_status_ws()
+        if ws is None:
+            return {"ok": False, "error": "sheet not ready"}, 503
+
+        # 追加欄位：lat, lon, status, user_id, display_name, timestamp, note
+        ws.append_row([
+            f"{lat:.6f}",
+            f"{lon:.6f}",
+            status,
+            user_id,
+            display_name,
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            note
+        ], value_input_option="USER_ENTERED")
+
+        return {"ok": True}, 200
+    except Exception as e:
+        logging.error(f"/api/status_report 寫入失敗: {e}")
+        return {"ok": False}, 500
+
+# 狀態 LIFF 頁面
+@app.route("/status_liff")
+def status_liff_page():
+    liff_id = os.getenv("LIFF_ID_STATUS", "")
+    return render_template("status_liff.html", liff_id=liff_id)
+
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
 _last_consent_ts = {}
 CONSENT_MIN_INTERVAL = float(os.getenv("CONSENT_MIN_INTERVAL", "1.0"))
@@ -1973,6 +2204,7 @@ def _short_txt(s, n=60):
 # === 建立 Flex ===
 def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
     indicators = build_feedback_index()
+    status_map = build_status_index()
     bubbles = []
     for toilet in toilets[:5]:
         actions = []
@@ -1993,6 +2225,16 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
 
         # 額外顯示行（避免重覆；自動截斷需有 _short_txt）
         extra_lines = []
+        st_obj = status_map.get((lat_s, lon_s))
+        if st_obj and st_obj.get("status"):
+            st = st_obj["status"]
+            emoji = "🟡" if st == "有人排隊" else ("🧻" if st == "缺衛生紙" else ("⛔" if st == "暫停使用" else "✅"))
+            extra_lines.append({
+                "type": "text",
+                "text": _short_txt(f"{emoji} 狀態：{st}"),
+                "size": "sm", "color": "#666666", "wrap": True
+            })
+
         if lvl or pos:
             # 兩者都有且不同 → 顯示「樓層」與「位置」兩行；否則合併成一行
             if lvl and pos and (lvl.strip().lower() != pos.strip().lower()):
@@ -2194,6 +2436,14 @@ def get_user_location(uid):
     with _dict_lock:
         return user_locations.get(uid)
 
+def _status_liff_url(lat, lon):
+    try:
+        host = request.host
+    except Exception:
+        host = os.getenv("PUBLIC_URL","").replace("https://","").replace("http://","").strip("/")
+    la, lo = norm_coord(lat), norm_coord(lon)
+    return f"https://{host}/status_liff?lat={la}&lon={lo}"
+
 # === 共用執行緒池（避免每次臨時建立） ===
 _pool = ThreadPoolExecutor(max_workers=2)
 
@@ -2316,7 +2566,15 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
-
+    elif text == "狀態":
+        loc = get_user_location(uid)
+        if not loc:
+            safe_reply(event, make_location_quick_reply("📍 請先傳送你的位置，我會開啟回報頁面"))
+        else:
+            la, lo = loc
+            url = f"https://{request.host}/status_liff?lat={norm_coord(la)}&lon={norm_coord(lo)}#openExternalBrowser=1"
+            safe_reply(event, TextSendMessage(text=f"請點此回報附近廁所狀態：\n{url}"))
+   
     
     if reply_messages:
         safe_reply(event, reply_messages)
@@ -2356,6 +2614,12 @@ def handle_location(event):
                 FlexSendMessage("附近廁所", msg),
                 make_location_quick_reply("想換個地點再找嗎？")
             ])
+        try:
+            url = _status_liff_url(lat, lon)
+            safe_reply(event, TextSendMessage(text=f"⚡ 也可以直接回報狀態：\n{url}"))
+        except Exception:
+            pass
+
         else:
             # ✅ 沒有結果 → 顯示「傳送我的位置」＋「新增廁所」兩顆泡泡
             safe_reply(event, make_no_toilet_quick_reply(
