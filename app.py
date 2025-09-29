@@ -2529,7 +2529,6 @@ def handle_location(event):
 
     set_user_location(uid, (lat, lon))
 
-    # === 併發閥門（原本就有）
     if not _try_acquire_loc_slot():
         safe_reply(event, make_retry_location_text())
         return
@@ -2539,19 +2538,26 @@ def handle_location(event):
 
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
-            # 一次 reply 多則 OK，但避免先送「搜尋中」
-            safe_reply(event, [
+
+            # 👇 把要回的訊息組在同一個 list 裡（一次回覆）
+            messages = [
                 FlexSendMessage("附近廁所", msg),
-                make_location_quick_reply("想換個地點再找嗎？")
-            ])
-        try:
-            url = _status_liff_url(lat, lon)
-            safe_reply(event, TextSendMessage(text=f"⚡ 也可以直接回報狀態：\n{url}"))
-        except Exception:
-            pass
+                make_location_quick_reply("想換個地點再找嗎？"),
+            ]
+
+            # LIFF 狀態回報連結（同一次 reply，一起送出）
+            try:
+                url = _status_liff_url(lat, lon)   # 會用 PUBLIC_URL + /status_liff
+                if url:
+                    messages.append(TextSendMessage(text=f"⚡ 也可以直接回報狀態：\n{url}"))
+                else:
+                    logging.warning("⚠️ _status_liff_url() 回 None，檢查 PUBLIC_URL / LIFF_STATUS_ID")
+            except Exception as e:
+                logging.warning(f"_status_liff_url error: {e}")
+
+            safe_reply(event, messages)
 
         else:
-            # ✅ 沒有結果 → 顯示「傳送我的位置」＋「新增廁所」兩顆泡泡
             safe_reply(event, make_no_toilet_quick_reply(
                 uid, lat, lon,
                 text="附近沒有廁所 😥 要不要補上一間，或換個點再試？"
