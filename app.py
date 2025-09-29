@@ -376,10 +376,6 @@ gc = worksheet = feedback_sheet = consent_ws = None
 STATUS_SHEET_TITLE = "status"
 status_ws = None
 
-# === LIFF 設定 ===
-PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
-LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
-
 # 近點/快取/有效期
 _STATUS_NEAR_M = 35
 _STATUS_TTL_HOURS = 6
@@ -433,6 +429,10 @@ def _parse_lat_lon(lat_s, lon_s):
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None, None
     return lat, lon
+
+# === LIFF 設定 ===
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
 
 def _status_liff_url(lat=None, lon=None):
     if not PUBLIC_URL:
