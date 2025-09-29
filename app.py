@@ -376,6 +376,10 @@ gc = worksheet = feedback_sheet = consent_ws = None
 STATUS_SHEET_TITLE = "status"
 status_ws = None
 
+# === LIFF 設定 ===
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
+
 # 近點/快取/有效期
 _STATUS_NEAR_M = 35
 _STATUS_TTL_HOURS = 6
@@ -429,6 +433,14 @@ def _parse_lat_lon(lat_s, lon_s):
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None, None
     return lat, lon
+
+def _status_liff_url(lat=None, lon=None):
+    if not PUBLIC_URL:
+        return None
+    base = f"{PUBLIC_URL}/status_liff"
+    if lat is None or lon is None:
+        return base
+    return f"{base}?lat={norm_coord(lat)}&lon={norm_coord(lon)}"
 
 # === 樓層推斷 ===
 def _floor_from_tags(tags: dict):
@@ -2497,13 +2509,12 @@ def handle_text(event):
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
     elif text == "狀態":
-        loc = get_user_location(uid)
-        if not loc:
-            safe_reply(event, make_location_quick_reply("📍 請先傳送你的位置，我會開啟回報頁面"))
+        url = _status_liff_url()  
+        if url:
+            safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
         else:
-            la, lo = loc
-            url = f"https://{request.host}/status_liff?lat={norm_coord(la)}&lon={norm_coord(lo)}#openExternalBrowser=1"
-            safe_reply(event, TextSendMessage(text=f"請點此回報附近廁所狀態：\n{url}"))
+            safe_reply(event, TextSendMessage(text="⚠️ 尚未設定 PUBLIC_URL，無法開啟狀態回報頁面"))
+        return
    
     
     if reply_messages:
