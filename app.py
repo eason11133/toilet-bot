@@ -1429,45 +1429,60 @@ def get_nowcast_by_coord(lat, lon):
     except Exception as e:
         logging.error(f"❌ Nowcast API 錯誤: {e}")
         return {"success": False}, 500
-    
-# === 回報 API ===
+
+# ==== 狀態：候選三間（靠 build_nearby_toilets）====
 @app.route("/api/status_candidates")
 def api_status_candidates():
     try:
         lat = float(request.args.get("lat"))
         lon = float(request.args.get("lon"))
-    except:
+    except Exception:
         return {"ok": False, "message": "缺少或錯誤的座標"}, 400
 
-    items = build_nearby_toilets("status", lat, lon, radius=700)
-    out = []
-    for t in items[:3]:
-        out.append({
-            "title": t.get("name") or t.get("place_hint") or "（未命名）廁所",
-            "address": t.get("address") or "",
-            "lat": norm_coord(t["lat"]),
-            "lon": norm_coord(t["lon"]),
-            "distance": int(t.get("distance", 0))
-        })
-    return {"ok": True, "candidates": out}
+    try:
+        # 半徑放寬一點，提高命中率；已內建快取/去重/排序
+        items = build_nearby_toilets("status", lat, lon, radius=700) or []
+        out = []
+        for t in items[:3]:
+            out.append({
+                "title": t.get("name") or t.get("place_hint") or "（未命名）廁所",
+                "address": t.get("address") or "",
+                # 用 norm_coord（字串）讓之後比對試算表座標更穩定
+                "lat": norm_coord(t["lat"]),
+                "lon": norm_coord(t["lon"]),
+                "distance": int(t.get("distance", 0))
+            })
+        return {"ok": True, "candidates": out}, 200
+    except Exception as e:
+        logging.error(f"/api/status_candidates 失敗: {e}")
+        return {"ok": False, "message": "server error"}, 500
 
+
+# ==== 狀態：回報（靠 submit_status_update 寫入 status 分頁）====
 @app.route("/api/status_report", methods=["POST"])
 def api_status_report():
     try:
         payload = request.get_json(force=True)
-        lat = float(payload["lat"]); lon = float(payload["lon"])
-        status_text = (payload["status"] or "").strip()
-        user_id = (payload.get("user_id") or "")
-        display_name = payload.get("display_name") or ""
-        note = payload.get("note") or ""
+        lat = float(payload["lat"])
+        lon = float(payload["lon"])
+        status_text = (payload.get("status") or "").strip()
+        user_id = (payload.get("user_id") or "").strip()
+        display_name = (payload.get("display_name") or "").strip()
+        note = (payload.get("note") or "").strip()
     except Exception:
         return {"ok": False, "message": "參數錯誤"}, 400
 
-    if status_text not in ["有人排隊","缺衛生紙","暫停使用","恢復正常"]:
+    # 白名單檢查，避免髒資料
+    allowed = {"有人排隊", "缺衛生紙", "暫停使用", "恢復正常"}
+    if status_text not in allowed:
         return {"ok": False, "message": "不支援的狀態"}, 400
 
-    ok = submit_status_update(lat, lon, status_text, user_id, display_name, note)
-    return {"ok": ok}
+    try:
+        ok = submit_status_update(lat, lon, status_text, user_id, display_name, note)
+        return ({"ok": True}, 200) if ok else ({"ok": False, "message": "寫入失敗"}, 500)
+    except Exception as e:
+        logging.error(f"/api/status_report 寫入失敗: {e}")
+        return {"ok": False, "message": "server error"}, 500
 
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
@@ -2039,91 +2054,6 @@ def render_consent_page():
 @app.route("/privacy", methods=["GET"])
 def render_privacy_page():
     return render_template("privacy_policy.html")
-
-def _get_status_ws():
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
-        return None
-    try:
-        # 用 feedback 試算表開一張 status 分頁
-        fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
-        try:
-            raw = fb_spread.worksheet(STATUS_SHEET_TITLE)
-        except gspread.exceptions.WorksheetNotFound:
-            raw = fb_spread.add_worksheet(title=STATUS_SHEET_TITLE, rows=1000, cols=20)
-            raw.update("A1:F1", [["lat","lon","status","user_id","display_name","timestamp"]])
-        return SafeWS(raw, FEEDBACK_SPREADSHEET_ID, STATUS_SHEET_TITLE)
-    except Exception as e:
-        logging.error(f"取得 status 分頁失敗: {e}")
-        return None
-
-def _nearby_candidates(lat, lon, k=3, radius=500):
-    csv_toilets  = query_public_csv_toilets(lat, lon, radius) or []
-    sheet_toilets= query_sheet_toilets(lat, lon, radius) or []
-    osm_toilets  = query_overpass_toilets(lat, lon, radius) or []
-    all_toilets = _merge_and_dedupe_lists(csv_toilets, sheet_toilets, osm_toilets)
-    sort_toilets(all_toilets)
-    out = []
-    for t in all_toilets[:k]:
-        out.append({
-            "title": (t.get("name") or "無名稱"),
-            "address": t.get("address") or "",
-            "lat": float(t["lat"]), "lon": float(t["lon"]),
-            "distance": int(t.get("distance", 0))
-        })
-    return out
-
-# ==== 狀態候選（給 LIFF 列最近三間） ====
-@app.route("/api/status_candidates")
-def api_status_candidates():
-    try:
-        lat = float(request.args.get("lat"))
-        lon = float(request.args.get("lon"))
-    except Exception:
-        return {"ok": False, "error": "bad lat/lon"}, 400
-
-    try:
-        cands = _nearby_candidates(lat, lon, k=3, radius=500)
-        return {"ok": True, "candidates": cands}, 200
-    except Exception as e:
-        logging.error(f"/api/status_candidates 失敗: {e}")
-        return {"ok": False}, 500
-
-
-# ==== 回報狀態（寫進 Google Sheet 的 status 分頁） ====
-@app.route("/api/status_report", methods=["POST"])
-def api_status_report():
-    try:
-        payload = request.get_json(force=True)
-        lat = float(payload.get("lat"))
-        lon = float(payload.get("lon"))
-        status = (payload.get("status") or "").strip()
-        user_id = (payload.get("user_id") or "").strip()
-        display_name = (payload.get("display_name") or "").strip()
-        note = (payload.get("note") or "").strip()
-    except Exception:
-        return {"ok": False, "error": "bad request"}, 400
-
-    try:
-        ws = _get_status_ws()
-        if ws is None:
-            return {"ok": False, "error": "sheet not ready"}, 503
-
-        # 追加欄位：lat, lon, status, user_id, display_name, timestamp, note
-        ws.append_row([
-            f"{lat:.6f}",
-            f"{lon:.6f}",
-            status,
-            user_id,
-            display_name,
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            note
-        ], value_input_option="USER_ENTERED")
-
-        return {"ok": True}, 200
-    except Exception as e:
-        logging.error(f"/api/status_report 寫入失敗: {e}")
-        return {"ok": False}, 500
 
 # 狀態 LIFF 頁面
 @app.route("/status_liff")
