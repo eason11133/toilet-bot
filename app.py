@@ -2070,8 +2070,13 @@ def render_privacy_page():
 
 # 狀態 LIFF 頁面
 @app.route("/status_liff")
-def status_liff_page():
-    return render_template("status_liff.html", liff_id=os.getenv("LIFF_STATUS_ID"))
+def status_liff():
+    liff_id = os.getenv("LIFF_STATUS_ID", "")
+    public_url = os.getenv("PUBLIC_URL", "")
+    assert liff_id, "LIFF_STATUS_ID not set"
+    assert public_url, "PUBLIC_URL not set"
+    return render_template("status_liff.html", liff_id=liff_id, public_url=public_url)
+
 
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
 _last_consent_ts = {}

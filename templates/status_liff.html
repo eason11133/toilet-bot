@@ -3,40 +3,62 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>狀態回報</title>
+  <title>回報附近廁所狀態</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:14px;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:14px;line-height:1.6}
     .card{border:1px solid #e5e5e5;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
     .title{font-weight:700}
     .muted{color:#666;font-size:14px}
     .row{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
     button{padding:8px 10px;border:0;border-radius:10px;cursor:pointer}
+    .debug{background:#fff8dc;border:1px dashed #f0ad4e;padding:8px;border-radius:8px;margin:8px 0}
+    .error{color:#c00;white-space:pre-wrap}
   </style>
   <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
   <h3>回報附近廁所狀態</h3>
+
+  <div class="debug" id="debug">
+    <div>LIFF_ID: <code id="dbg-liff"></code></div>
+    <div>PUBLIC_URL: <code id="dbg-url"></code></div>
+    <div>Query: <code id="dbg-q"></code></div>
+  </div>
+
   <div id="loading">初始化中…</div>
+  <div id="error" class="error"></div>
   <div id="list"></div>
 
   <script>
+    // 後端注入的變數
     const LIFF_ID = "{{ liff_id }}";
+    const PUBLIC_URL = "{{ public_url }}";
 
-    function el(tag, attrs={}, children=[]) {
-      const e = document.createElement(tag);
-      for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v);
-      for (const c of children) e.appendChild(typeof c==="string" ? document.createTextNode(c) : c);
+    // 顯示注入值，先確認有沒有成功注入
+    document.getElementById("dbg-liff").textContent = LIFF_ID;
+    document.getElementById("dbg-url").textContent = PUBLIC_URL;
+    document.getElementById("dbg-q").textContent = location.search || "(none)";
+
+    const qs = new URLSearchParams(location.search);
+    const qsLat = parseFloat(qs.get("lat")||"");
+    const qsLon = parseFloat(qs.get("lon")||"");
+
+    function el(tag, attrs={}, children=[]){
+      const e=document.createElement(tag);
+      for(const [k,v] of Object.entries(attrs)) e.setAttribute(k,v);
+      for(const c of children) e.appendChild(typeof c==="string"?document.createTextNode(c):c);
       return e;
     }
 
-    async function getPos() {
-      // ✅ 改用 LINE LIFF API 抓位置
-      try {
-        const pos = await liff.getCurrentPosition();
-        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
-      } catch (e) {
-        throw new Error("無法取得定位，請回 LINE 允許定位");
-      }
+    async function getPos(){
+      if(!isNaN(qsLat) && !isNaN(qsLon)) return {lat:qsLat, lon:qsLon};
+      return new Promise((res, rej)=>{
+        if(!navigator.geolocation) return rej(new Error("瀏覽器不支援定位"));
+        navigator.geolocation.getCurrentPosition(
+          p=>res({lat:p.coords.latitude, lon:p.coords.longitude}),
+          e=>rej(e), {enableHighAccuracy:true, timeout:10000}
+        );
+      });
     }
 
     async function fetchCandidates(lat, lon){
@@ -45,23 +67,23 @@
     }
 
     async function reportStatus(lat, lon, status, btns){
-      btns.forEach(b=>b.disabled = true); // 避免連點
+      btns.forEach(b=>b.disabled = true);
       let user = { userId:"", displayName:"" };
       try { user = await liff.getProfile(); } catch(e) {}
       try {
-        const body = { lat, lon, status, user_id: user.userId||"", display_name: user.displayName||"", note: "" };
+        const body = { lat, lon, status, user_id:user.userId||"", display_name:user.displayName||"", note:"" };
         const r = await fetch("/api/status_report", {
-          method:"POST", headers:{"Content-Type":"application/json"},
+          method:"POST", headers:{ "Content-Type":"application/json" },
           body: JSON.stringify(body)
         });
         const j = await r.json();
         if(j.ok){
           alert("已回報：" + status);
           if (liff.isInClient()) liff.closeWindow();
-        } else {
+        }else{
           alert("回報失敗，稍後再試");
         }
-      } catch (e) {
+      } catch(e){
         alert("網路錯誤，稍後再試");
       } finally {
         btns.forEach(b=>b.disabled = false);
@@ -69,52 +91,76 @@
     }
 
     function render(list){
-      const root = document.getElementById("list");
-      root.innerHTML = "";
+      const root=document.getElementById("list");
+      root.innerHTML="";
       list.forEach(item=>{
-        const card = el("div",{class:"card"});
-        const title = el("div",{class:"title"},[ item.title ]);
-        const addr  = el("div",{class:"muted"},[ item.address || (item.lat+","+item.lon) ]);
-        const dist  = el("div",{class:"muted"},[ Math.round(item.distance) + " 公尺" ]);
-        const row   = el("div",{class:"row"});
-
-        const labels = ["有人排隊","缺衛生紙","暫停使用","恢復正常"];
-        const btns = labels.map(text=>{
-          const b = el("button",{},[text]);
+        const card=el("div",{class:"card"});
+        const title=el("div",{class:"title"},[item.title]);
+        const addr=el("div",{class:"muted"},[item.address || (item.lat+","+item.lon)]);
+        const dist=el("div",{class:"muted"},[Math.round(item.distance)+" 公尺"]);
+        const row=el("div",{class:"row"});
+        const btns=[
+          el("button",{},["🟡 有人排隊"]),
+          el("button",{},["🧻 缺衛生紙"]),
+          el("button",{},["⛔ 暫停使用"]),
+          el("button",{},["✅ 恢復正常"]),
+        ];
+        const labels=["有人排隊","缺衛生紙","暫停使用","恢復正常"];
+        btns.forEach((b,i)=>{
+          b.addEventListener("click",()=>reportStatus(item.lat,item.lon,labels[i],btns));
           row.appendChild(b);
-          b.addEventListener("click", ()=>reportStatus(item.lat,item.lon,text,btns));
-          return b;
         });
-
-        card.appendChild(title);
-        card.appendChild(addr);
-        card.appendChild(dist);
-        card.appendChild(row);
+        card.appendChild(title); card.appendChild(addr); card.appendChild(dist); card.appendChild(row);
         root.appendChild(card);
       });
     }
 
+    function showErr(prefix, err){
+      const box=document.getElementById("error");
+      const msg = (err && err.message) ? err.message : (err? String(err): "");
+      const code = (err && err.code) ? `\ncode: ${err.code}` : "";
+      box.textContent = `${prefix}${msg}${code}`;
+    }
+
     async function main(){
-      document.getElementById("loading").innerText = "初始化 LIFF…";
-      try { await liff.init({ liffId: LIFF_ID }); } 
-      catch(e) { document.getElementById("loading").innerText = "LIFF 初始化失敗"; return; }
+      const loading=document.getElementById("loading");
+      loading.textContent="初始化 LIFF…";
 
-      document.getElementById("loading").innerText = "定位中…";
+      // 重要：就算 LIFF 失敗也不要中止流程
+      try{
+        if (LIFF_ID && LIFF_ID !== "{{ liff_id }}") {
+          await liff.init({ liffId: LIFF_ID });
+        } else {
+          showErr("LIFF_ID 未正確注入：", new Error(LIFF_ID));
+        }
+      }catch(e){
+        showErr("LIFF 初始化失敗：", e);
+        // 繼續往下用瀏覽器定位
+      }
+
+      loading.textContent="定位中…";
       let pos;
-      try { pos = await getPos(); }
-      catch(e){
-        document.getElementById("loading").innerText = e.message;
+      try{
+        pos = await getPos();
+      }catch(e){
+        showErr("定位失敗：", e);
+        loading.textContent = "定位失敗，請回 LINE 允許定位後重試";
         return;
       }
 
-      document.getElementById("loading").innerText = "載入附近廁所…";
-      const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
-      if(!ok || !candidates || !candidates.length){
-        document.getElementById("loading").innerText = "附近找不到廁所";
-        return;
+      loading.textContent="載入附近廁所…";
+      try{
+        const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
+        if(!ok || !candidates || !candidates.length){
+          loading.textContent = "附近找不到廁所";
+          return;
+        }
+        loading.remove();
+        render(candidates);
+      }catch(e){
+        showErr("載入候選失敗：", e);
+        loading.textContent = "伺服器忙線中，稍後再試";
       }
-      document.getElementById("loading").remove();
-      render(candidates);
     }
     main();
   </script>
