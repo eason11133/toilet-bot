@@ -1827,6 +1827,113 @@ def build_status_index():
         logging.warning(f"建立狀態索引失敗：{e}")
         return {}
 
+# ==== 環境變數 ====
+LIFF_ID_STATUS = os.getenv("LIFF_ID_STATUS") or os.getenv("LIFF_ID") or ""
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
+
+# ==== 頁面 routes ====
+@app.route("/achievements_liff")
+def achievements_liff_page():
+    return render_template("achievements_liff.html",
+                           liff_id=LIFF_ID_STATUS,
+                           public_url=PUBLIC_URL)
+
+@app.route("/badges_liff")
+def badges_liff_page():
+    return render_template("badges_liff.html",
+                           liff_id=LIFF_ID_STATUS,
+                           public_url=PUBLIC_URL)
+
+# ==== 小工具：讀取狀態表並彙總 ====
+def _read_status_rows():
+    """讀取你存回報的那張 Google Sheet，回傳 list[dict]。欄位: lat,lon,status,user_id,display_name,timestamp"""
+    try:
+        ws = _get_status_ws()  # 你前面已經有這個；若沒有，改用你的函式
+        if not ws:
+            return []
+        rows = ws.get_all_values() or []
+        if not rows:
+            return []
+        header = rows[0]
+        data = rows[1:]
+        out = []
+        ix = {h: i for i, h in enumerate(header)}
+        for r in data:
+            def g(k):
+                i = ix.get(k); 
+                return (r[i].strip() if (i is not None and i < len(r)) else "")
+            out.append({
+                "lat": g("lat"), "lon": g("lon"),
+                "status": g("status"),
+                "user_id": g("user_id"),
+                "display_name": g("display_name"),
+                "timestamp": g("timestamp"),
+            })
+        return out
+    except Exception as e:
+        logging.error(f"_read_status_rows error: {e}")
+        return []
+
+def _stats_for_user(uid: str):
+    """彙總某 user 的狀態回報統計"""
+    rows = _read_status_rows()
+    total = 0
+    by_status = {}
+    last_ts = None
+    for r in rows:
+        if uid and r.get("user_id") != uid:
+            continue
+        total += 1
+        s = r.get("status") or ""
+        by_status[s] = by_status.get(s, 0) + 1
+        last_ts = r.get("timestamp") or last_ts
+    return {"total": total, "by_status": by_status, "last_ts": last_ts}
+
+# ==== 成就 API ====
+@app.route("/api/achievements")
+def api_achievements():
+    uid = request.args.get("user_id", "").strip()
+    stats = _stats_for_user(uid)
+    t = stats["total"]
+    by = stats["by_status"]
+
+    # 成就規則（你可自行擴充）
+    defs = [
+        {"key":"first","title":"新手上路","desc":"首次完成回報","goal":1},
+        {"key":"helper10","title":"勤勞小幫手","desc":"回報 10 次","goal":10},
+        {"key":"helper50","title":"超級幫手","desc":"回報 50 次","goal":50},
+        {"key":"tissue3","title":"紙巾守護者","desc":"回報『缺衛生紙』滿 3 次","goal":3, "counter": by.get("缺衛生紙", 0)},
+        {"key":"queue3","title":"排隊情報員","desc":"回報『有人排隊』滿 3 次","goal":3, "counter": by.get("有人排隊", 0)},
+    ]
+    out = []
+    for d in defs:
+        progress = d.get("counter", t)  # 有指定 counter 的用 counter，否則用總次數
+        out.append({
+            "key": d["key"],
+            "title": d["title"],
+            "desc": d["desc"],
+            "goal": d["goal"],
+            "progress": progress,
+            "unlocked": progress >= d["goal"],
+        })
+    return {"ok": True, "achievements": out}
+
+# ==== 徽章 API ====
+@app.route("/api/badges")
+def api_badges():
+    uid = request.args.get("user_id", "").strip()
+    s = _stats_for_user(uid)
+    by = s["by_status"]; total = s["total"]
+
+    # 你可以把 icon 放在 /static/badges/*.png
+    BADGES = [
+        {"key":"first","name":"新手報到","icon":"/static/badges/first.png", "unlocked": total >= 1},
+        {"key":"tissue_guard","name":"紙巾守護者","icon":"/static/badges/tissue.png", "unlocked": by.get("缺衛生紙",0) >= 3},
+        {"key":"queue_scout","name":"排隊偵查員","icon":"/static/badges/queue.png", "unlocked": by.get("有人排隊",0) >= 3},
+        {"key":"pro_reporter","name":"資深回報員","icon":"/static/badges/pro.png", "unlocked": total >= 20},
+    ]
+    return {"ok": True, "badges": BADGES}
+
 # === 舊路由保留===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
@@ -2504,10 +2611,19 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
+    
     elif text == "狀態回報":
         url = _status_liff_url()  # 不帶參數
         safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
-   
+    
+    elif text == "成就":
+        reply_url = f"{PUBLIC_URL}/achievements_liff"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看成就 👉 {reply_url}"))
+    
+    elif text == "徽章":
+        reply_url = f"{PUBLIC_URL}/badges_liff"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看徽章 👉 {reply_url}"))
+
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===

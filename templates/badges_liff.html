@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>我的徽章</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:16px;line-height:1.6}
+    h2{margin:8px 0 12px}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .badge{display:flex;flex-direction:column;align-items:center;border:1px solid #e6e6e6;border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .badge img{width:64px;height:64px;border-radius:12px;object-fit:contain;filter:drop-shadow(0 1px 1px rgba(0,0,0,.08))}
+    .name{font-size:13px;margin-top:8px;text-align:center}
+    .lock{opacity:.38;filter:grayscale(1)}
+    .error{color:#c00;white-space:pre-wrap}
+  </style>
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
+</head>
+<body>
+  <h2>我的徽章</h2>
+  <div id="loading">初始化中…</div>
+  <div id="error" class="error"></div>
+  <div class="grid" id="grid"></div>
+
+<script>
+const LIFF_ID = "{{ liff_id }}";
+async function main(){
+  document.getElementById("loading").textContent="初始化 LIFF…";
+  let userId="";
+  try{
+    if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
+    const p = await liff.getProfile(); userId=p.userId || "";
+  }catch(e){}
+
+  document.getElementById("loading").textContent="讀取徽章…";
+  try{
+    const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+    const r = await fetch(`/api/badges${qs}`); const j = await r.json();
+    if(!j.ok) throw new Error(j.message || "讀取失敗");
+    document.getElementById("loading").remove();
+    const grid=document.getElementById("grid");
+    j.badges.forEach(b=>{
+      const div=document.createElement("div"); div.className="badge"+(b.unlocked?"":" lock");
+      const img=document.createElement("img"); img.src=b.icon || "/static/badges/default.png"; img.alt=b.name || "";
+      const name=document.createElement("div"); name.className="name"; name.textContent=b.name || "";
+      div.append(img, name); grid.appendChild(div);
+    });
+  }catch(e){
+    document.getElementById("error").textContent="讀取徽章失敗：" + e.message;
+  }
+}
+main();
+</script>
+</body>
+</html>

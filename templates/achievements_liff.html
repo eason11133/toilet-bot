@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>我的成就</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:16px;line-height:1.6}
+    h2{margin:8px 0 12px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .card{border:1px solid #e6e6e6;border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .title{font-weight:700}
+    .muted{color:#666;font-size:13px}
+    .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+    .ok{background:#e8f7ef;color:#1b8f4b}
+    .lock{background:#f3f4f6;color:#666}
+    .debug{background:#fff8dc;border:1px dashed #f0ad4e;padding:8px;border-radius:8px;margin:8px 0;font-size:12px}
+    .error{color:#c00;white-space:pre-wrap}
+    .bar{height:8px;background:#f1f1f1;border-radius:8px;overflow:hidden;margin-top:6px}
+    .bar>span{display:block;height:100%;background:#4f9ef8}
+  </style>
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
+</head>
+<body>
+  <h2>我的成就</h2>
+  <div class="debug" id="dbg" style="display:none"></div>
+  <div id="loading">初始化中…</div>
+  <div id="error" class="error"></div>
+  <div class="grid" id="grid"></div>
+
+<script>
+const LIFF_ID = "{{ liff_id }}";      // 後端注入（可用與狀態同一組）
+const PUBLIC_URL = "{{ public_url }}";
+
+function card(a){
+  const wrap=document.createElement("div"); wrap.className="card";
+  const t=document.createElement("div"); t.className="title"; t.textContent=a.title;
+  const d=document.createElement("div"); d.className="muted"; d.textContent=a.desc || "";
+  const tag=document.createElement("span"); tag.className="tag " + (a.unlocked?"ok":"lock");
+  tag.textContent = a.unlocked ? "已解鎖" : "尚未解鎖";
+  const bar=document.createElement("div"); bar.className="bar";
+  if(a.progress!==undefined && a.goal){
+    const span=document.createElement("span");
+    span.style.width = Math.min(100, Math.round(a.progress*100/a.goal))+"%";
+    bar.appendChild(span);
+  }
+  wrap.append(t, d, tag);
+  if(a.goal){ wrap.appendChild(bar); }
+  return wrap;
+}
+
+function showErr(msg){document.getElementById("error").textContent=msg;}
+
+async function main(){
+  document.getElementById("loading").textContent="初始化 LIFF…";
+  let userId="";
+  try{
+    if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
+    const p = await liff.getProfile();
+    userId = p.userId || "";
+  }catch(e){ /* 若在外部瀏覽器也可用，userId 可能取不到 */ }
+
+  document.getElementById("loading").textContent="讀取成就…";
+  try{
+    const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+    const r = await fetch(`/api/achievements${qs}`);
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.message || "讀取失敗");
+    document.getElementById("loading").remove();
+    const grid=document.getElementById("grid");
+    j.achievements.forEach(a=>grid.appendChild(card(a)));
+  }catch(e){
+    showErr("讀取成就失敗：" + e.message);
+  }
+}
+main();
+</script>
+</body>
+</html>
