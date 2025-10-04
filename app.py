@@ -2077,7 +2077,6 @@ def status_liff():
     assert public_url, "PUBLIC_URL not set"
     return render_template("status_liff.html", liff_id=liff_id, public_url=public_url)
 
-
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
 _last_consent_ts = {}
 CONSENT_MIN_INTERVAL = float(os.getenv("CONSENT_MIN_INTERVAL", "1.0"))
@@ -2505,7 +2504,7 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
-    elif text == "狀態":
+    elif text == "狀態回報":
         url = _status_liff_url()  # 不帶參數
         safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
    
