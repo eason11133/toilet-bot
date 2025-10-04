@@ -12,7 +12,11 @@
     .row{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
     button{padding:8px 10px;border:0;border-radius:10px;cursor:pointer}
     .debug{background:#fff8dc;border:1px dashed #f0ad4e;padding:8px;border-radius:8px;margin:8px 0}
-    .error{color:#c00;white-space:pre-wrap}
+    .error{color:#c00;white-space:pre-wrap;margin-top:6px}
+    .hint{font-size:14px;color:#555;background:#f6f7fb;border:1px solid #e5e6f0;border-radius:10px;padding:10px;margin-top:8px}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .btn{padding:8px 12px;border-radius:10px;border:1px solid #d0d0d0;background:#fff;cursor:pointer}
+    .btn-primary{background:#3b82f6;color:#fff;border-color:#3b82f6}
   </style>
   <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
@@ -27,14 +31,16 @@
 
   <div id="loading">初始化中…</div>
   <div id="error" class="error"></div>
+  <div id="assist" class="hint" style="display:none"></div>
+  <div id="actions" class="btns" style="display:none"></div>
   <div id="list"></div>
 
   <script>
-    // 後端注入的變數
+    // 後端注入
     const LIFF_ID = "{{ liff_id }}";
     const PUBLIC_URL = "{{ public_url }}";
 
-    // 顯示注入值，先確認有沒有成功注入
+    // Debug 顯示
     document.getElementById("dbg-liff").textContent = LIFF_ID;
     document.getElementById("dbg-url").textContent = PUBLIC_URL;
     document.getElementById("dbg-q").textContent = location.search || "(none)";
@@ -50,6 +56,35 @@
       return e;
     }
 
+    // --- UI helpers ---
+    function setError(text){
+      const box=document.getElementById("error");
+      box.textContent = text || "";
+    }
+    function setAssist(html){
+      const a = document.getElementById("assist");
+      if (html) {
+        a.innerHTML = html;
+        a.style.display = "";
+      } else {
+        a.style.display = "none";
+      }
+    }
+    function setActions(btnDefs){
+      const wrap = document.getElementById("actions");
+      wrap.innerHTML = "";
+      if (!btnDefs || !btnDefs.length) { wrap.style.display="none"; return; }
+      btnDefs.forEach(def=>{
+        const b = document.createElement("button");
+        b.className = "btn " + (def.primary ? "btn-primary" : "");
+        b.textContent = def.text;
+        b.onclick = def.onClick;
+        wrap.appendChild(b);
+      });
+      wrap.style.display="";
+    }
+
+    // --- 定位 ---
     async function getPos(){
       if(!isNaN(qsLat) && !isNaN(qsLon)) return {lat:qsLat, lon:qsLon};
       return new Promise((res, rej)=>{
@@ -61,6 +96,7 @@
       });
     }
 
+    // --- API ---
     async function fetchCandidates(lat, lon){
       const r = await fetch(`/api/status_candidates?lat=${lat}&lon=${lon}`);
       return await r.json();
@@ -115,41 +151,24 @@
       });
     }
 
-    function showErr(prefix, err){
-      const box=document.getElementById("error");
-      const msg = (err && err.message) ? err.message : (err? String(err): "");
-      const code = (err && err.code) ? `\ncode: ${err.code}` : "";
-      box.textContent = `${prefix}${msg}${code}`;
+    function explainPermission(os){
+      if (os === "ios") {
+        return "iPhone：到「設定 → LINE → 位置」改為「使用 App 期間」後返回此頁再試。";
+      } else if (os === "android") {
+        return "Android：長按 LINE App 圖示 → App 資訊 → 權限 → 位置 → 允許，回到此頁再試。";
+      }
+      return "請到手機的 LINE App 權限設定，允許「位置」後回到此頁再試。";
     }
 
-    async function main(){
+    async function startFlow(){
       const loading=document.getElementById("loading");
-      loading.textContent="初始化 LIFF…";
-
-      // 重要：就算 LIFF 失敗也不要中止流程
-      try{
-        if (LIFF_ID && LIFF_ID !== "{{ liff_id }}") {
-          await liff.init({ liffId: LIFF_ID });
-        } else {
-          showErr("LIFF_ID 未正確注入：", new Error(LIFF_ID));
-        }
-      }catch(e){
-        showErr("LIFF 初始化失敗：", e);
-        // 繼續往下用瀏覽器定位
-      }
+      setError(""); setAssist(""); setActions([]);
 
       loading.textContent="定位中…";
-      let pos;
       try{
-        pos = await getPos();
-      }catch(e){
-        showErr("定位失敗：", e);
-        loading.textContent = "定位失敗，請回 LINE 允許定位後重試";
-        return;
-      }
+        const pos = await getPos();
 
-      loading.textContent="載入附近廁所…";
-      try{
+        loading.textContent="載入附近廁所…";
         const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
         if(!ok || !candidates || !candidates.length){
           loading.textContent = "附近找不到廁所";
@@ -158,9 +177,46 @@
         loading.remove();
         render(candidates);
       }catch(e){
-        showErr("載入候選失敗：", e);
-        loading.textContent = "伺服器忙線中，稍後再試";
+        // 針對權限被拒絕（code=1）做友善提示
+        const os = (window.liff && liff.getOS) ? liff.getOS() : "";
+        if (e && (e.code === 1 || String(e).toLowerCase().includes("denied"))) {
+          setError("定位失敗：使用者拒絕提供定位（code: 1）");
+          setAssist(`
+            ${explainPermission(os)}<br>
+            或者：你也可以在傳送位置給機器人後，再回來點這個頁面（會自動帶入你剛剛傳的位置）。
+          `);
+          setActions([
+            { text:"重新嘗試定位", primary:true, onClick: ()=>startFlow() }
+          ]);
+          loading.textContent = "請允許定位後再試";
+        } else {
+          setError("定位失敗：" + (e?.message || e));
+          setAssist("你可以點「重新嘗試定位」，或在聊天室傳送位置後再開此頁。");
+          setActions([
+            { text:"重新嘗試定位", primary:true, onClick: ()=>startFlow() }
+          ]);
+          loading.textContent = "定位失敗";
+        }
       }
+    }
+
+    async function main(){
+      const loading=document.getElementById("loading");
+      loading.textContent="初始化 LIFF…";
+
+      try{
+        if (LIFF_ID && LIFF_ID !== "{{ liff_id }}") {
+          await liff.init({ liffId: LIFF_ID });
+        } else {
+          setError("LIFF_ID 未正確注入");
+        }
+      }catch(e){
+        // LIFF 失敗也允許繼續（用瀏覽器定位）
+        setError("LIFF 初始化失敗：" + (e?.message || e));
+      }
+
+      // 啟動主流程（會自動處理帶參數或裝置定位）
+      startFlow();
     }
     main();
   </script>
