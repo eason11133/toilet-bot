@@ -85,11 +85,41 @@ class SimpleLRU(OrderedDict):
         while len(self) > self.maxsize:
             self.popitem(last=False)
 
-# 將原本的 dict 換成 LRU
-_ENRICH_CACHE = SimpleLRU(maxsize=int(os.getenv("ENRICH_LRU_SIZE", "500")))
-_CACHE = SimpleLRU(maxsize=int(os.getenv("NEARBY_LRU_SIZE", "500")))
+# ------ 統一設定（可用環境變數覆寫；若你已在別處定義，請以這裡為準）------
+LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "4"))   # 由 8 降 4（更省 RAM）
+LOC_MAX_RESULTS     = int(os.getenv("LOC_MAX_RESULTS", "4"))
 
-# ======================== Sheets 安全外掛層（新增，不動原功能） ========================
+ENRICH_MAX_ITEMS    = int(os.getenv("ENRICH_MAX_ITEMS", "120"))
+OVERPASS_MAX_ITEMS  = int(os.getenv("OVERPASS_MAX_ITEMS", "120"))
+ENRICH_LRU_SIZE     = int(os.getenv("ENRICH_LRU_SIZE", "500"))
+NEARBY_LRU_SIZE     = int(os.getenv("NEARBY_LRU_SIZE", "500"))
+
+FEEDBACK_INDEX_TTL  = int(os.getenv("FEEDBACK_INDEX_TTL", "180"))  # 由 60 → 180
+STATUS_INDEX_TTL    = int(os.getenv("STATUS_INDEX_TTL", "180"))    # 由 60 → 180
+MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "5000"))     # 只讀尾端 N 列
+
+# ------ 將原本的 dict 換成 LRU（⚠️ 別在檔案其他地方再賦值覆蓋它們）------
+_ENRICH_CACHE = SimpleLRU(maxsize=ENRICH_LRU_SIZE)
+_CACHE        = SimpleLRU(maxsize=NEARBY_LRU_SIZE)
+
+# ------ 讀 Google Sheet 只拿尾端 N 列，降低記憶體峰值 ------
+def _get_header_and_tail(ws, max_rows=MAX_SHEET_ROWS):
+    rows = ws.get_all_values() or []
+    if not rows:
+        return [], []
+    header = rows[0]
+    data = rows[1:]
+    if max_rows and len(data) > max_rows:
+        data = data[-max_rows:]  # 只保留尾端
+    return header, data
+
+# （可選）啟動時印出快取型別，方便檢查沒有被覆蓋回 dict
+try:
+    logging.info(f"🔍 ENRICH_CACHE={_ENRICH_CACHE.__class__.__name__} NEARBY_CACHE={_CACHE.__class__.__name__}")
+except Exception:
+    pass
+
+# ======================== Sheets 安全外掛層（沿用你現有的設定即可） ========================
 SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
 SHEETS_RETRY_MAX = int(os.getenv("SHEETS_RETRY_MAX", "6"))
 SHEETS_READ_TTL_SEC = int(os.getenv("SHEETS_READ_TTL_SEC", "30"))
@@ -577,9 +607,6 @@ def enrich_nearby_places(lat, lon, radius=500):
     ]
     headers = {"User-Agent": f"ToiletBot/1.0 (+{os.getenv('CONTACT_EMAIL','you@example.com')})"}
 
-    # ✅ 新增：控制回傳上限，避免一次存太多資料進快取
-    max_items = int(os.getenv("ENRICH_MAX_ITEMS", "120"))
-
     for url in endpoints:
         try:
             resp = requests.post(url, data=q, headers=headers, timeout=30)
@@ -594,30 +621,21 @@ def enrich_nearby_places(lat, lon, radius=500):
                         clat, clon = c.get("lat"), c.get("lon")
                     if clat is None or clon is None:
                         continue
-                    t = e.get("tags", {}) or {}
-                    nm = t.get("name")
+                    nm = (e.get("tags", {}) or {}).get("name")
                     if nm:
-                        # ✅ 加入距離，稍後排序後再丟棄，保留最近的幾筆即可
                         try:
                             d = haversine(float(lat), float(lon), float(clat), float(clon))
                         except Exception:
                             d = 9e9
                         out.append({"name": nm, "lat": float(clat), "lon": float(clon), "_d": d})
-
-                # ✅ 依距離排序並截斷，避免過多元素佔用記憶體
                 if out:
                     out.sort(key=lambda x: x["_d"])
-                    out = out[:max_items]
-                    for o in out:
-                        o.pop("_d", None)
-
-                # ✅ 用 LRU 的 set() 寫入，避免無上限增長
+                    out = out[:ENRICH_MAX_ITEMS]
+                    for o in out: o.pop("_d", None)
                 _ENRICH_CACHE.set(key, (now, out))
                 return out
         except Exception:
             continue
-
-    # ✅ 失敗也寫入空結果到快取，避免同一熱點連續打爆
     _ENRICH_CACHE.set(key, (now, []))
     return []
 
@@ -979,20 +997,14 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
 
     toilets = []
     try:
-        rows = worksheet.get_all_values()
-        header = rows[0] if rows else []
-        data = rows[1:]
-
+        header, data = _get_header_and_tail(worksheet, MAX_SHEET_ROWS)
         idx = _toilet_sheet_indices(header)
 
         for row in data:
-            # 基本欄位不齊就跳過
             if len(row) < 5:
                 continue
-
             name = (row[idx["name"]] if idx["name"] is not None and len(row) > idx["name"] else "").strip() or "無名稱"
             address = (row[idx["address"]] if idx["address"] is not None and len(row) > idx["address"] else "").strip()
-
             try:
                 t_lat = float(row[idx["lat"]]) if idx["lat"] is not None and len(row) > idx["lat"] else None
                 t_lon = float(row[idx["lon"]]) if idx["lon"] is not None and len(row) > idx["lon"] else None
@@ -1005,12 +1017,10 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             if dist > radius:
                 continue
 
-            # 只讀你要的三個欄位（若無給空字串）
             level         = (row[idx["level"]] if idx["level"] is not None and len(row) > idx["level"] else "").strip()
             floor_hint_ws = (row[idx["floor_hint"]] if idx["floor_hint"] is not None and len(row) > idx["floor_hint"] else "").strip()
             open_hours    = (row[idx["open_hours"]] if idx["open_hours"] is not None and len(row) > idx["open_hours"] else "").strip()
 
-            # 若沒樓層提示就用名稱推斷
             auto_floor = _floor_from_name(name)
             floor_hint = floor_hint_ws or level or auto_floor
 
@@ -1027,12 +1037,6 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             })
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
-
-    # 可選：釋放大列表幫助記憶體回收
-    try:
-        del rows
-    except Exception:
-        pass
 
     save_cache(query_key, toilets)
     return sorted(toilets, key=lambda x: x["distance"])
@@ -1128,7 +1132,8 @@ def query_overpass_toilets(lat, lon, radius=500):
                 except Exception:
                     pass
 
-                return sorted(toilets, key=lambda x: x["distance"])
+                toilets = sorted(toilets, key=lambda x: x["distance"])
+                return toilets[:OVERPASS_MAX_ITEMS]
             except Exception as e:
                 last_err = e
                 logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
@@ -1404,24 +1409,18 @@ def _pred_from_row(r, idx):
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     _ensure_sheets_ready()
     if feedback_sheet is None:
-        return None   
+        return None
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not data:
             return None
-
-        header = rows[0]
         idx = _feedback_indices(header)
-        data = rows[1:]
-
         if idx["lat"] is None or idx["lon"] is None:
             return None
 
         def close(a, b):
-            try:
-                return abs(float(a) - float(b)) <= tol
-            except:
-                return False
+            try: return abs(float(a) - float(b)) <= tol
+            except: return False
 
         same = [r for r in data
                 if len(r) > max(idx["lat"], idx["lon"])
@@ -1737,19 +1736,14 @@ _FEEDBACK_INDEX_TTL = 60
 def build_feedback_index():
     _ensure_sheets_ready()
     if feedback_sheet is None:
-        return {} 
+        return {}
     global _feedback_index_cache
     now = time.time()
-    if now - _feedback_index_cache["ts"] < _FEEDBACK_INDEX_TTL and _feedback_index_cache["data"]:
+    if now - _feedback_index_cache["ts"] < FEEDBACK_INDEX_TTL and _feedback_index_cache["data"]:
         return _feedback_index_cache["data"]
 
-    result = {}
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
-            _feedback_index_cache = {"ts": now, "data": {}}
-            return result
-        header = rows[0]; data = rows[1:]
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         idx = _feedback_indices(header)
 
         bucket = {}
@@ -1805,22 +1799,17 @@ def _is_close_m(lat1, lon1, lat2, lon2, th=_STATUS_NEAR_M):
         return False
 
 def build_status_index():
-    """回傳 {(lat_s,lon_s): {'status': '有人排隊', 'ts': '...'}}，只保留最近一筆且在有效期內"""
     _ensure_sheets_ready()
     if status_ws is None:
         return {}
 
     now = time.time()
-    if now - _status_index_cache["ts"] < _STATUS_INDEX_TTL and _status_index_cache["data"]:
+    if now - _status_index_cache["ts"] < STATUS_INDEX_TTL and _status_index_cache["data"]:
         return _status_index_cache["data"]
 
     out = {}
     try:
-        rows = status_ws.get_all_values()
-        if not rows or len(rows) < 2:
-            _status_index_cache.update(ts=now, data={})
-            return {}
-        header = rows[0]; data = rows[1:]
+        header, data = _get_header_and_tail(status_ws, MAX_SHEET_ROWS)
         idx = {h:i for i,h in enumerate(header)}
         i_lat = idx.get("lat"); i_lon = idx.get("lon")
         i_status = idx.get("status"); i_ts = idx.get("timestamp")
@@ -1844,7 +1833,6 @@ def build_status_index():
             ts = (r[i_ts] if i_ts is not None and len(r) > i_ts else "")
             if not fresh(ts):
                 continue
-
             placed = False
             for m in merged:
                 if _is_close_m(lat_s, lon_s, m["lat"], m["lon"]):
@@ -1884,16 +1872,19 @@ def badges_liff_page():
 # ==== 小工具：讀取狀態表並彙總 ====
 def _read_status_rows():
     try:
-        ws = _get_status_ws()  
+        _ensure_sheets_ready()
+        ws = status_ws
         if not ws:
             return []
-        rows = ws.get_all_values() or []
-        if not rows:
-            return []
-        header = rows[0]
-        data = rows[1:]
-        out = []
+        try:
+            header, data = _get_header_and_tail(ws)
+        except Exception:
+            rows = ws.get_all_values() or []
+            if not rows:
+                return []
+            header = rows[0]; data = rows[1:]
         ix = {h: i for i, h in enumerate(header)}
+        out = []
         for r in data:
             def g(k):
                 i = ix.get(k); 
@@ -2816,11 +2807,89 @@ def render_add_page():
         preset_lon=lon
     )
 
+# === Sheets 寫入保護：超過 1e7 cells 就 fallback 到本機儲存 ===
+_toilet_sheet_over_quota = False
+_toilet_sheet_over_quota_ts = 0
+
+def _fallback_store_toilet_row_locally(row_values):
+    # 1) 附加到 public_toilets.csv
+    try:
+        if not os.path.exists(TOILETS_FILE_PATH):
+            with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(PUBLIC_HEADERS)
+        header = ensure_toilet_sheet_header(worksheet)
+        idx = {h:i for i,h in enumerate(header)}
+        def v(col): 
+            try: return row_values[idx[col]]
+            except Exception: return ""
+        name = v("name"); addr = v("address")
+        lat_s = v("lat");  lon_s = v("lon")
+        with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "00000","0000000","未知里","USERADD", name, addr, "使用者補充",
+                lat_s, lon_s,
+                "普通級","公共場所","未知","使用者","0"
+            ])
+    except Exception as e:
+        logging.warning(f"備份至本地 CSV 失敗：{e}")
+
+    # 2) 寫入 SQLite（cache.db）
+    try:
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_toilets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT, name TEXT, address TEXT,
+            lat TEXT, lon TEXT,
+            level TEXT, floor_hint TEXT, entrance_hint TEXT, access_note TEXT, open_hours TEXT,
+            timestamp TEXT
+        )
+        """)
+        header = ensure_toilet_sheet_header(worksheet)
+        idx = {h:i for i,h in enumerate(header)}
+        def v(col): 
+            try: return row_values[idx[col]]
+            except Exception: return ""
+        cur.execute("""
+            INSERT INTO user_toilets (user_id, name, address, lat, lon, level, floor_hint, entrance_hint, access_note, open_hours, timestamp)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            v("user_id"), v("name"), v("address"),
+            v("lat"), v("lon"),
+            v("level"), v("floor_hint"), v("entrance_hint"), v("access_note"), v("open_hours"),
+            v("timestamp")
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"備份至 SQLite 失敗：{e}")
+
+def _append_toilet_row_safely(ws, row_values):
+    global _toilet_sheet_over_quota, _toilet_sheet_over_quota_ts
+    if _toilet_sheet_over_quota:
+        _fallback_store_toilet_row_locally(row_values)
+        return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
+    try:
+        ws.append_row(row_values, value_input_option="USER_ENTERED")
+        return ("ok", "已寫入 Google 試算表")
+    except Exception as e:
+        s = str(e)
+        if "10000000" in s or "above the limit" in s:
+            logging.error("🧱 Google 試算表達到 1e7 cells 上限，啟用本機暫存。")
+            _toilet_sheet_over_quota = True
+            _toilet_sheet_over_quota_ts = time.time()
+            _fallback_store_toilet_row_locally(row_values)
+            return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
+        raise
+
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
-    _ensure_sheets_ready()                    # ← 新增
-    if worksheet is None:                    # ← 新增
+    _ensure_sheets_ready()
+    if worksheet is None:
         return {"success": False, "message": "雲端表格暫時無法連線，請稍後再試"}, 503
     try:
         data = request.get_json(force=True, silent=False) or {}
@@ -2839,29 +2908,32 @@ def submit_toilet():
         lat_in = (data.get("lat") or "").strip()
         lon_in = (data.get("lon") or "").strip()
 
+        # 必填檢查
         if not name or not addr:
             return {"success": False, "message": "請提供『廁所名稱』與『地址』"}, 400
 
+        # 位置描述基本檢查
         if floor_hint and len(floor_hint) < 4:
             return {"success": False, "message": "『位置描述』太短，請至少 4 個字"}, 400
 
+        # 未提供位置描述則嘗試由名稱推斷
         if not floor_hint:
             inferred = _floor_from_name(name)
             if inferred:
                 floor_hint = inferred
 
+        # 座標解析與地理編碼
         lat_f, lon_f = (None, None)
         if lat_in and lon_in:
             lat_f, lon_f = _parse_lat_lon(lat_in, lon_in)
-
         if lat_f is None or lon_f is None:
             lat_f, lon_f = geocode_address(addr)
-
         if lat_f is None or lon_f is None:
             return {"success": False, "message": "地址轉換失敗，請修正地址或提供座標"}, 400
 
         lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
 
+        # 佈局表頭 & 寫入欄位
         header = ensure_toilet_sheet_header(worksheet)
         idx = {h: i for i, h in enumerate(header)}
 
@@ -2876,31 +2948,22 @@ def submit_toilet():
         put("lat", lat_s)
         put("lon", lon_s)
         put("level", level)
-        put("floor_hint", floor_hint)  
+        put("floor_hint", floor_hint)
         put("entrance_hint", entrance_hint)
         put("access_note", access_note)
         put("open_hours", open_hours)
         put("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
-        worksheet.append_row(row_values, value_input_option="USER_ENTERED")
-        logging.info(f"✅ 廁所資料已寫入 Google Sheets: {name}")
+        # ✅ 安全寫入（Sheets 滿格自動 fallback 到本機 CSV/SQLite）
+        status, note = _append_toilet_row_safely(worksheet, row_values)
+        logging.info(f"📝 submit_toilet 寫入狀態: {status} ({note}) name={name}")
 
-        try:
-            if not os.path.exists(TOILETS_FILE_PATH):
-                with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(PUBLIC_HEADERS)
-            with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "00000","0000000","未知里","USERADD", name, addr, "使用者補充",
-                    lat_s, lon_s,
-                    "普通級","公共場所","未知","使用者","0"
-                ])
-        except Exception as e:
-            logging.warning(f"備份至本地 CSV 失敗：{e}")
+        if status == "ok":
+            return {"success": True, "message": f"✅ 已新增廁所 {name}"}
+        else:
+            # fallback：資料已落地本機，之後可批次補寫到新試算表
+            return {"success": True, "message": f"✅ 已暫存 {name}（雲端表已滿，稍後可批次補寫）"}
 
-        return {"success": True, "message": f"✅ 已新增廁所 {name}"}
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
