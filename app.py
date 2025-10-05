@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import requests
 import traceback
+from collections import OrderedDict
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for, Response
@@ -68,6 +69,25 @@ def _mark_token_used(tok: str):
 
 def _is_token_used(tok: str) -> bool:
     return tok in _USED_REPLY_TOKENS
+
+class SimpleLRU(OrderedDict):
+    def __init__(self, maxsize=500):
+        super().__init__()
+        self.maxsize = maxsize
+    def get(self, key, default=None):
+        if key in self:
+            self.move_to_end(key)
+            return super().get(key)
+        return default
+    def set(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self.maxsize:
+            self.popitem(last=False)
+
+# 將原本的 dict 換成 LRU
+_ENRICH_CACHE = SimpleLRU(maxsize=int(os.getenv("ENRICH_LRU_SIZE", "500")))
+_CACHE = SimpleLRU(maxsize=int(os.getenv("NEARBY_LRU_SIZE", "500")))
 
 # ======================== Sheets 安全外掛層（新增，不動原功能） ========================
 SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
@@ -330,16 +350,15 @@ def _self_keepalive_background():
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-_CACHE = {}
+_CACHE = SimpleLRU(maxsize=500)
 
 def get_nearby_toilets(uid, lat, lon):
     key = f"{lat},{lon}"
-    if key in _CACHE:
-        return _CACHE[key]
-    
-    # 若快取中不存在該位置，則發送請求
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
     toilets = query_public_csv_toilets(lat, lon)
-    _CACHE[key] = toilets  # 快取結果
+    _CACHE.set(key, toilets)
     return toilets
 
 # === 檔案 ===
@@ -530,7 +549,6 @@ def _floor_from_name(name: str):
     return None
 
 # === 依附近場館命名 ===
-_ENRICH_CACHE = {}
 _ENRICH_TTL = 120
 
 def enrich_nearby_places(lat, lon, radius=500):
@@ -559,6 +577,9 @@ def enrich_nearby_places(lat, lon, radius=500):
     ]
     headers = {"User-Agent": f"ToiletBot/1.0 (+{os.getenv('CONTACT_EMAIL','you@example.com')})"}
 
+    # ✅ 新增：控制回傳上限，避免一次存太多資料進快取
+    max_items = int(os.getenv("ENRICH_MAX_ITEMS", "120"))
+
     for url in endpoints:
         try:
             resp = requests.post(url, data=q, headers=headers, timeout=30)
@@ -566,7 +587,7 @@ def enrich_nearby_places(lat, lon, radius=500):
                 els = resp.json().get("elements", [])
                 out = []
                 for e in els:
-                    if e["type"] == "node":
+                    if e.get("type") == "node":
                         clat, clon = e.get("lat"), e.get("lon")
                     else:
                         c = e.get("center") or {}
@@ -576,12 +597,28 @@ def enrich_nearby_places(lat, lon, radius=500):
                     t = e.get("tags", {}) or {}
                     nm = t.get("name")
                     if nm:
-                        out.append({"name": nm, "lat": float(clat), "lon": float(clon)})
-                _ENRICH_CACHE[key] = (now, out)
+                        # ✅ 加入距離，稍後排序後再丟棄，保留最近的幾筆即可
+                        try:
+                            d = haversine(float(lat), float(lon), float(clat), float(clon))
+                        except Exception:
+                            d = 9e9
+                        out.append({"name": nm, "lat": float(clat), "lon": float(clon), "_d": d})
+
+                # ✅ 依距離排序並截斷，避免過多元素佔用記憶體
+                if out:
+                    out.sort(key=lambda x: x["_d"])
+                    out = out[:max_items]
+                    for o in out:
+                        o.pop("_d", None)
+
+                # ✅ 用 LRU 的 set() 寫入，避免無上限增長
+                _ENRICH_CACHE.set(key, (now, out))
                 return out
         except Exception:
             continue
-    _ENRICH_CACHE[key] = (now, [])
+
+    # ✅ 失敗也寫入空結果到快取，避免同一熱點連續打爆
+    _ENRICH_CACHE.set(key, (now, []))
     return []
 
 # === 可找性分數 + 排序 ===
@@ -1846,9 +1883,8 @@ def badges_liff_page():
 
 # ==== 小工具：讀取狀態表並彙總 ====
 def _read_status_rows():
-    """讀取你存回報的那張 Google Sheet，回傳 list[dict]。欄位: lat,lon,status,user_id,display_name,timestamp"""
     try:
-        ws = _get_status_ws()  # 你前面已經有這個；若沒有，改用你的函式
+        ws = _get_status_ws()  
         if not ws:
             return []
         rows = ws.get_all_values() or []
