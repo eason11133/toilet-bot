@@ -37,12 +37,6 @@ except Exception:
     pd = None
 
 # === 全域設定 ===
-LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "8"))     # 同時最多幾個使用者在跑附近查詢
-LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))  # 各資料源逾時（秒）
-LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "5"))             # 最多回幾個
-SHOW_SEARCHING_BUBBLE = False
-_LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
-
 def _try_acquire_loc_slot() -> bool:
     try:
         return _LOC_SEM.acquire(blocking=False)
@@ -86,17 +80,20 @@ class SimpleLRU(OrderedDict):
             self.popitem(last=False)
 
 # ------ 統一設定（可用環境變數覆寫；若你已在別處定義，請以這裡為準）------
-LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "4"))   # 由 8 降 4（更省 RAM）
-LOC_MAX_RESULTS     = int(os.getenv("LOC_MAX_RESULTS", "4"))
 
-ENRICH_MAX_ITEMS    = int(os.getenv("ENRICH_MAX_ITEMS", "120"))
-OVERPASS_MAX_ITEMS  = int(os.getenv("OVERPASS_MAX_ITEMS", "120"))
-ENRICH_LRU_SIZE     = int(os.getenv("ENRICH_LRU_SIZE", "500"))
-NEARBY_LRU_SIZE     = int(os.getenv("NEARBY_LRU_SIZE", "500"))
+LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "3"))      # 同時最多幾個使用者在跑附近查詢
+LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))  # 各資料源逾時（秒）
+LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "4"))             # 最多回幾個
+SHOW_SEARCHING_BUBBLE = False
+_LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
+ENRICH_MAX_ITEMS    = int(os.getenv("ENRICH_MAX_ITEMS", "60"))
+OVERPASS_MAX_ITEMS  = int(os.getenv("OVERPASS_MAX_ITEMS", "60"))
+ENRICH_LRU_SIZE     = int(os.getenv("ENRICH_LRU_SIZE", "300"))
+NEARBY_LRU_SIZE     = int(os.getenv("NEARBY_LRU_SIZE", "300"))
 
 FEEDBACK_INDEX_TTL  = int(os.getenv("FEEDBACK_INDEX_TTL", "180"))  # 由 60 → 180
 STATUS_INDEX_TTL    = int(os.getenv("STATUS_INDEX_TTL", "180"))    # 由 60 → 180
-MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "5000"))     # 只讀尾端 N 列
+MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "4000"))     # 只讀尾端 N 列
 
 # ------ 將原本的 dict 換成 LRU（⚠️ 別在檔案其他地方再賦值覆蓋它們）------
 _ENRICH_CACHE = SimpleLRU(maxsize=ENRICH_LRU_SIZE)
@@ -122,7 +119,7 @@ except Exception:
 # ======================== Sheets 安全外掛層（沿用你現有的設定即可） ========================
 SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
 SHEETS_RETRY_MAX = int(os.getenv("SHEETS_RETRY_MAX", "6"))
-SHEETS_READ_TTL_SEC = int(os.getenv("SHEETS_READ_TTL_SEC", "30"))
+SHEETS_READ_TTL_SEC = int(os.getenv("SHEETS_READ_TTL_SEC", "45"))
 SHEETS_CACHE_MAX_ROWS = int(os.getenv("SHEETS_CACHE_MAX_ROWS", "20000"))
 
 _sheets_sem = threading.Semaphore(SHEETS_MAX_CONCURRENCY)
@@ -431,6 +428,35 @@ _STATUS_TTL_HOURS = 6
 _status_index_cache = {"ts": 0, "data": {}}
 _STATUS_INDEX_TTL = 60
 
+# ===== A1 欄名工具：把 1->A, 26->Z, 27->AA =====
+def _a1_col(n: int) -> str:
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+MAX_SHEET_ROWS = int(os.getenv("MAX_SHEET_ROWS", "4000")) 
+
+def _get_header_and_tail(ws, max_rows: int = MAX_SHEET_ROWS):
+    try:
+        header = ws.row_values(1) or []
+        if not header:
+            return [], []
+        col_a = ws.col_values(1) or []
+        last_row = len(col_a)  
+        if last_row < 2:
+            return header, []
+
+        start_row = max(2, last_row - max_rows + 1)
+        end_col = _a1_col(len(header))  
+        rng = f"A{start_row}:{end_col}{last_row}"
+        data = ws.get(rng) or []
+        return header, data
+    except Exception as e:
+        logging.warning(f"_get_header_and_tail failed: {e}")
+        return [], []
+
 # === 載入模型 ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -582,6 +608,16 @@ def _floor_from_name(name: str):
 _ENRICH_TTL = 120
 
 def enrich_nearby_places(lat, lon, radius=500):
+    # 🔌 總開關：預設關閉（ENV 可設 ENRICH_ENABLE=1 開啟）
+    enabled = globals().get("ENRICH_ENABLE", None)
+    if enabled is None:
+        try:
+            enabled = int(os.getenv("ENRICH_ENABLE", "0"))
+        except Exception:
+            enabled = 0
+    if not enabled:
+        return []
+
     key = f"{round(lat,4)},{round(lon,4)}:{radius}"
     now = time.time()
     cached = _ENRICH_CACHE.get(key)
@@ -628,14 +664,26 @@ def enrich_nearby_places(lat, lon, radius=500):
                         except Exception:
                             d = 9e9
                         out.append({"name": nm, "lat": float(clat), "lon": float(clon), "_d": d})
+
+                # 距離排序 + 截斷，避免記憶體暴衝
                 if out:
                     out.sort(key=lambda x: x["_d"])
-                    out = out[:ENRICH_MAX_ITEMS]
-                    for o in out: o.pop("_d", None)
+                    # 使用全域/ENV 的 ENRICH_MAX_ITEMS（若無則預設 60）
+                    max_items = globals().get("ENRICH_MAX_ITEMS", None)
+                    if max_items is None:
+                        try:
+                            max_items = int(os.getenv("ENRICH_MAX_ITEMS", "60"))
+                        except Exception:
+                            max_items = 60
+                    out = out[:max_items]
+                    for o in out:
+                        o.pop("_d", None)
+
                 _ENRICH_CACHE.set(key, (now, out))
                 return out
         except Exception:
             continue
+
     _ENRICH_CACHE.set(key, (now, []))
     return []
 
@@ -990,6 +1038,12 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
     if worksheet is None:
         return []
 
+    # 讀取可調上限：預設 120（可用 SHEET_MAX_ITEMS 環境變數覆寫）
+    try:
+        SHEET_MAX_ITEMS = int(os.getenv("SHEET_MAX_ITEMS", "120"))
+    except Exception:
+        SHEET_MAX_ITEMS = 120
+
     query_key = f"{user_lat},{user_lon},{radius}"
     cached_data = get_cached_data(query_key)
     if cached_data:
@@ -998,16 +1052,31 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
     toilets = []
     try:
         header, data = _get_header_and_tail(worksheet, MAX_SHEET_ROWS)
+        if not header or not data:
+            save_cache(query_key, toilets)
+            return toilets
+
         idx = _toilet_sheet_indices(header)
 
+        # 若必備欄位不存在，直接返回（避免 index 錯誤）
+        if idx.get("lat") is None or idx.get("lon") is None:
+            logging.warning("query_sheet_toilets: sheet header lacks lat/lon columns")
+            save_cache(query_key, toilets)
+            return toilets
+
         for row in data:
-            if len(row) < 5:
+            # 基本欄位檢查
+            if len(row) <= max(
+                v for k, v in idx.items() if v is not None and k in ("name", "address", "lat", "lon")
+            ):
                 continue
+
             name = (row[idx["name"]] if idx["name"] is not None and len(row) > idx["name"] else "").strip() or "無名稱"
             address = (row[idx["address"]] if idx["address"] is not None and len(row) > idx["address"] else "").strip()
+
             try:
-                t_lat = float(row[idx["lat"]]) if idx["lat"] is not None and len(row) > idx["lat"] else None
-                t_lon = float(row[idx["lon"]]) if idx["lon"] is not None and len(row) > idx["lon"] else None
+                t_lat = float(row[idx["lat"]]) if len(row) > idx["lat"] else None
+                t_lon = float(row[idx["lon"]]) if len(row) > idx["lon"] else None
             except Exception:
                 t_lat = t_lon = None
             if t_lat is None or t_lon is None:
@@ -1035,11 +1104,17 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 "floor_hint": floor_hint,
                 "open_hours": open_hours,
             })
+
+        # 距離排序 + 截斷（先截斷再寫快取，縮小快取體積）
+        toilets.sort(key=lambda x: x["distance"])
+        if len(toilets) > SHEET_MAX_ITEMS:
+            toilets = toilets[:SHEET_MAX_ITEMS]
+
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
 
     save_cache(query_key, toilets)
-    return sorted(toilets, key=lambda x: x["distance"])
+    return toilets
 
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
@@ -1055,6 +1130,17 @@ def query_overpass_toilets(lat, lon, radius=500):
         "https://overpass.openstreetmap.ru/api/interpreter",
     ]
 
+    # 讀取限制值（有預設，不設環境變數也能跑）
+    try:
+        max_items = int(os.getenv("OVERPASS_MAX_ITEMS", "80"))
+    except Exception:
+        max_items = 80
+    try:
+        enrich_on = int(os.getenv("ENRICH_ENABLE", "0")) == 1
+    except Exception:
+        enrich_on = False
+
+    # 先小半徑再原半徑，縮短時間 & 減少結果數
     for r in (300, radius):
         if time.time() >= overall_deadline:
             break
@@ -1082,58 +1168,81 @@ def query_overpass_toilets(lat, lon, radius=500):
 
                 data = resp.json()
                 elements = data.get("elements", [])
+
                 toilets = []
+                # 先對 elements 進行「快速距離近似」截斷：最多處理 4 * max_items 筆
+                # （way/relation 解析 center 前無法精算距離，先限定量）
+                hard_cap = max(40, max_items * 4)
+                processed = 0
+
                 for elem in elements:
+                    if processed >= hard_cap:
+                        break
+                    processed += 1
+
                     if "center" in elem:
-                        t_lat, t_lon = elem["center"]["lat"], elem["center"]["lon"]
+                        t_lat, t_lon = elem["center"].get("lat"), elem["center"].get("lon")
                     elif elem.get("type") == "node":
-                        t_lat, t_lon = elem["lat"], elem["lon"]
+                        t_lat, t_lon = elem.get("lat"), elem.get("lon")
                     else:
+                        continue
+                    if t_lat is None or t_lon is None:
                         continue
 
                     tags = elem.get("tags", {}) or {}
                     name = tags.get("name", "無名稱")
                     address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
+
+                    # 樓層/位置推斷
                     floor_hint = _floor_from_tags(tags) or _floor_from_name(name)
 
-                    # ✅ 新增：把 OSM 的欄位帶進物件
-                    level_val   = tags.get("level") or tags.get("addr:floor") or ""
-                    open_hours  = tags.get("opening_hours") or ""
-                    entranceval = tags.get("entrance") or ""
+                    # 一次計算距離，後續排序/截斷重用
+                    try:
+                        dist = haversine(float(lat), float(lon), float(t_lat), float(t_lon))
+                    except Exception:
+                        dist = 9e9
 
                     toilets.append({
                         "name": name,
                         "lat": float(norm_coord(t_lat)),
                         "lon": float(norm_coord(t_lon)),
                         "address": address,
-                        "distance": haversine(lat, lon, t_lat, t_lon),
+                        "distance": dist,
                         "type": "osm",
                         "floor_hint": floor_hint,
-
-                        # 新增欄位，供 Flex 顯示
-                        "level": level_val,
-                        "open_hours": open_hours,
-                        "entrance_hint": entranceval,
+                        # 附加欄位
+                        "level": tags.get("level") or tags.get("addr:floor") or "",
+                        "open_hours": tags.get("opening_hours") or "",
+                        "entrance_hint": tags.get("entrance") or "",
                     })
 
-                # 只有在拿到資料時才做 enrich（避免多餘請求）
-                try:
-                    nearby_named = enrich_nearby_places(lat, lon, radius=500)
-                    if nearby_named:
-                        for t in toilets:
-                            if (not t.get("name")) or t["name"] == "無名稱":
-                                best = None; best_d = 61
-                                for p in nearby_named:
-                                    d = haversine(t["lat"], t["lon"], p["lat"], p["lon"])
-                                    if d < best_d:
-                                        best_d = d; best = p
-                                if best:
-                                    t["place_hint"] = best["name"]
-                except Exception:
-                    pass
+                # 若無結果，換下個 endpoint/半徑
+                if not toilets:
+                    continue
 
-                toilets = sorted(toilets, key=lambda x: x["distance"])
-                return toilets[:OVERPASS_MAX_ITEMS]
+                # enrich 只在開啟時執行，而且只為「未命名」貼近的點補上 place_hint
+                if enrich_on:
+                    try:
+                        nearby_named = enrich_nearby_places(lat, lon, radius=500)
+                        if nearby_named:
+                            for t in toilets:
+                                if (not t.get("name")) or t["name"] == "無名稱":
+                                    best = None; best_d = 61.0
+                                    for p in nearby_named:
+                                        d = haversine(t["lat"], t["lon"], p["lat"], p["lon"])
+                                        if d < best_d:
+                                            best_d = d; best = p
+                                    if best:
+                                        t["place_hint"] = best["name"]
+                    except Exception:
+                        pass
+
+                # 距離排序 + 截斷（雙重保險，確保回傳上限）
+                toilets.sort(key=lambda x: x["distance"])
+                if len(toilets) > max_items:
+                    toilets = toilets[:max_items]
+                return toilets
+
             except Exception as e:
                 last_err = e
                 logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
@@ -1410,58 +1519,110 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return None
+
+    # k 上限，避免一次吃太多列
+    try:
+        NOWCAST_MAX_K = int(os.getenv("NOWCAST_MAX_K", "8"))
+    except Exception:
+        NOWCAST_MAX_K = 8
+    if k is None or not isinstance(k, int) or k <= 0:
+        k = LAST_N_HISTORY
+    k = min(k, NOWCAST_MAX_K)
+
+    # 目標座標轉為 float，用於比較
+    try:
+        target_lat = float(lat)
+        target_lon = float(lon)
+    except Exception:
+        return None
+
     try:
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not data:
+        if not header or not data:
             return None
+
         idx = _feedback_indices(header)
-        if idx["lat"] is None or idx["lon"] is None:
+        i_lat, i_lon = idx.get("lat"), idx.get("lon")
+        if i_lat is None or i_lon is None:
             return None
 
         def close(a, b):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
+            try:
+                return abs(float(a) - float(b)) <= tol
+            except Exception:
+                return False
 
-        same = [r for r in data
-                if len(r) > max(idx["lat"], idx["lon"])
-                and close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)]
-        if not same:
+        # 只保留同座標的最近 k 筆
+        same_rows = []
+        for r in data:
+            # 長度檢查
+            if max(i_lat, i_lon) >= len(r):
+                continue
+            if close(r[i_lat], target_lat) and close(r[i_lon], target_lon):
+                same_rows.append(r)
+                if len(same_rows) >= k * 3:
+                    # 多抓一點備用，稍後按時間取前 k
+                    break
+
+        if not same_rows:
             return None
 
-        if idx["created"] is not None:
-            same.sort(key=lambda x: x[idx["created"]], reverse=True)
-        recent = same[:k]
+        # 若有 created 欄位就按時間新到舊排，再取前 k 筆
+        i_created = idx.get("created")
+        if i_created is not None:
+            try:
+                same_rows.sort(key=lambda x: (x[i_created] if len(x) > i_created else ""), reverse=True)
+            except Exception:
+                pass
 
-        vals = []
+        recent = same_rows[:k]
+        if not recent:
+            return None
+
+        # 一次走訪，同時計算模型分數與備用簡化分數
+        vals_model = []
+        vals_simple = []
         for r in recent:
             sc, rr, pp, aa = _pred_from_row(r, idx)
             if isinstance(sc, (int, float)):
-                vals.append(float(sc))
+                try:
+                    vals_model.append(float(sc))
+                except Exception:
+                    pass
+            # 簡化分數隨手備著，避免之後再跑一次
+            s2 = _simple_score(rr, pp, aa)
+            if isinstance(s2, (int, float)):
+                vals_simple.append(float(s2))
+
+        # 沒有模型分數就用簡化分數
+        vals = vals_model[:] if vals_model else vals_simple[:]
         if not vals:
             return None
 
-        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
-            vals = []
-            for r in recent:
-                sc, rr, pp, aa = _pred_from_row(r, idx)
-                sc2 = _simple_score(rr, pp, aa)
-                if sc2 is not None:
-                    vals.append(sc2)
-            if not vals:
-                return None
+        # 若模型分數全相同（極常見於少量樣本），改用簡化分數以打開分佈
+        if vals_model and len(vals_model) >= 2:
+            try:
+                if max(vals_model) - min(vals_model) < 1e-6 and vals_simple:
+                    vals = vals_simple[:]
+            except Exception:
+                pass
 
-        mean = round(sum(vals) / len(vals), 2)
-        if len(vals) == 1:
+        n = len(vals)
+        mean = round(sum(vals) / n, 2)
+
+        if n == 1:
             return {"mean": mean, "lower": mean, "upper": mean, "n": 1}
 
         try:
             s = statistics.stdev(vals)
         except statistics.StatisticsError:
             s = 0.0
-        se = s / (len(vals) ** 0.5)
+
+        se = s / (n ** 0.5)
         lower = max(1.0, round(mean - 1.96 * se, 2))
         upper = min(5.0, round(mean + 1.96 * se, 2))
-        return {"mean": mean, "lower": lower, "upper": upper, "n": len(vals)}
+        return {"mean": mean, "lower": lower, "upper": upper, "n": n}
+
     except Exception as e:
         logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
         return None
@@ -1633,12 +1794,9 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
     if feedback_sheet is None:
         return []
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
             return []
-        header = rows[0]
-        idx = _feedback_indices(header)
-        data = rows[1:]
 
         def close(a, b):
             try: return abs(float(a) - float(b)) <= tol
@@ -1675,13 +1833,9 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
     if feedback_sheet is None:
         return "尚無回饋資料"
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
             return "尚無回饋資料"
-
-        header = rows[0]
-        idx = _feedback_indices(header)
-        data = rows[1:]
 
         if idx["lat"] is None or idx["lon"] is None:
             return "（表頭缺少 lat/lon 欄位）"
@@ -1737,39 +1891,90 @@ def build_feedback_index():
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return {}
+
     global _feedback_index_cache
+
     now = time.time()
-    if now - _feedback_index_cache["ts"] < FEEDBACK_INDEX_TTL and _feedback_index_cache["data"]:
+    # ⚠️ 注意這裡用的是「有底線」的 TTL 變數
+    if (now - _feedback_index_cache["ts"] < _FEEDBACK_INDEX_TTL) and _feedback_index_cache["data"]:
         return _feedback_index_cache["data"]
+
+    # 可調：最多聚合多少個座標點，避免 bucket 爆掉
+    try:
+        FEEDBACK_INDEX_MAX_KEYS = int(os.getenv("FEEDBACK_INDEX_MAX_KEYS", "800"))
+    except Exception:
+        FEEDBACK_INDEX_MAX_KEYS = 800
 
     try:
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        idx = _feedback_indices(header)
+        if not header or not data:
+            _feedback_index_cache = {"ts": now, "data": {}}
+            return {}
 
+        idx = _feedback_indices(header)
+        i_lat = idx.get("lat"); i_lon = idx.get("lon")
+        if i_lat is None or i_lon is None:
+            _feedback_index_cache = {"ts": now, "data": {}}
+            return {}
+        
         bucket = {}
         for r in data:
+            # 基本長度檢查
+            if max(i_lat, i_lon) >= len(r):
+                continue
             try:
-                if idx["lat"] is None or idx["lon"] is None:
-                    continue
-                lat_s = norm_coord(r[idx["lat"]])
-                lon_s = norm_coord(r[idx["lon"]])
+                lat_s = norm_coord(r[i_lat])
+                lon_s = norm_coord(r[i_lon])
             except Exception:
                 continue
-            rec = bucket.setdefault((lat_s, lon_s), {"paper": {"有":0,"沒有":0}, "access":{"有":0,"沒有":0}, "scores":[]})
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            if pp in rec["paper"]: rec["paper"][pp] += 1
-            if aa in rec["access"]: rec["access"][aa] += 1
-            if isinstance(sc, (int, float)): rec["scores"].append(float(sc))
+            if not lat_s or not lon_s:
+                continue
 
+            key = (lat_s, lon_s)
+
+            # 控制 key 數量上限：已有的可以累加，新 key 超過上限就跳過
+            if key not in bucket and len(bucket) >= FEEDBACK_INDEX_MAX_KEYS:
+                continue
+
+            rec = bucket.setdefault(
+                key,
+                {"paper_has": 0, "paper_no": 0, "acc_has": 0, "acc_no": 0, "sum": 0.0, "n": 0}
+            )
+
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+
+            # 紙巾／無障礙累計
+            if pp == "有":
+                rec["paper_has"] += 1
+            elif pp == "沒有":
+                rec["paper_no"] += 1
+
+            if aa == "有":
+                rec["acc_has"] += 1
+            elif aa == "沒有":
+                rec["acc_no"] += 1
+
+            # 分數累計
+            if isinstance(sc, (int, float)):
+                try:
+                    rec["sum"] += float(sc)
+                    rec["n"] += 1
+                except Exception:
+                    pass
+
+        # 輸出
         out = {}
         for key, v in bucket.items():
-            paper = "有" if v["paper"]["有"] >= v["paper"]["沒有"] and sum(v["paper"].values())>0 else ("沒有" if sum(v["paper"].values())>0 else "?")
-            access = "有" if v["access"]["有"] >= v["access"]["沒有"] and sum(v["access"].values())>0 else ("沒有" if sum(v["access"].values())>0 else "?")
-            avg = round(sum(v["scores"])/len(v["scores"]),2) if v["scores"] else None
+            paper_total = v["paper_has"] + v["paper_no"]
+            access_total = v["acc_has"] + v["acc_no"]
+            paper = "有" if (paper_total > 0 and v["paper_has"] >= v["paper_no"]) else ("沒有" if paper_total > 0 else "?")
+            access = "有" if (access_total > 0 and v["acc_has"] >= v["acc_no"]) else ("沒有" if access_total > 0 else "?")
+            avg = round(v["sum"] / v["n"], 2) if v["n"] > 0 else None
             out[key] = {"paper": paper, "access": access, "avg": avg}
 
         _feedback_index_cache = {"ts": now, "data": out}
         return out
+
     except Exception as e:
         logging.warning(f"建立指示燈索引失敗：{e}")
         return {}
@@ -1804,50 +2009,78 @@ def build_status_index():
         return {}
 
     now = time.time()
-    if now - _status_index_cache["ts"] < STATUS_INDEX_TTL and _status_index_cache["data"]:
+    # ✅ 修正：使用有底線的 TTL 變數（你前面定義的是 _STATUS_INDEX_TTL）
+    if (now - _status_index_cache["ts"] < _STATUS_INDEX_TTL) and _status_index_cache["data"]:
         return _status_index_cache["data"]
+
+    # 上限保護，避免大量新座標把記憶體撐爆（可用環境變數覆寫）
+    try:
+        STATUS_INDEX_MAX_KEYS = int(os.getenv("STATUS_INDEX_MAX_KEYS", "800"))
+    except Exception:
+        STATUS_INDEX_MAX_KEYS = 800
 
     out = {}
     try:
         header, data = _get_header_and_tail(status_ws, MAX_SHEET_ROWS)
-        idx = {h:i for i,h in enumerate(header)}
+        if not header or not data:
+            _status_index_cache.update(ts=now, data={})
+            return {}
+
+        idx = {h: i for i, h in enumerate(header)}
         i_lat = idx.get("lat"); i_lon = idx.get("lon")
         i_status = idx.get("status"); i_ts = idx.get("timestamp")
         if None in (i_lat, i_lon, i_status):
             _status_index_cache.update(ts=now, data={})
             return {}
 
-        def fresh(ts_s):
-            if not ts_s: return False
+        def fresh(ts_s: str) -> bool:
+            if not ts_s:
+                return False
             try:
                 dt = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
-                return (datetime.utcnow() - dt).total_seconds() <= _STATUS_TTL_HOURS*3600
-            except:
+                return (datetime.utcnow() - dt).total_seconds() <= _STATUS_TTL_HOURS * 3600
+            except Exception:
                 return False
 
+        # 以「已合併清單」維護代表點；每筆資料只與既有代表點比 35m（_STATUS_NEAR_M）內是否更新
         merged = []
         for r in data:
-            if max(i_lat, i_lon, i_status) >= len(r): continue
+            # 邊界保護
+            if max(i_lat, i_lon, i_status) >= len(r):
+                continue
+
             lat_s, lon_s = norm_coord(r[i_lat]), norm_coord(r[i_lon])
             st = (r[i_status] or "").strip()
-            ts = (r[i_ts] if i_ts is not None and len(r) > i_ts else "")
+            ts = (r[i_ts] if i_ts is not None and i_ts < len(r) else "")
+
             if not fresh(ts):
                 continue
+
             placed = False
+            # 嘗試合併到既有代表點（距離 <= _STATUS_NEAR_M）
             for m in merged:
                 if _is_close_m(lat_s, lon_s, m["lat"], m["lon"]):
+                    # 取較新的那筆
                     if ts > m["ts"]:
                         m.update(lat=lat_s, lon=lon_s, status=st, ts=ts)
                     placed = True
                     break
-            if not placed:
-                merged.append({"lat": lat_s, "lon": lon_s, "status": st, "ts": ts})
 
+            if not placed:
+                # 上限保護：超過上限不再加入新群組，但仍允許更新既有群組（見上面）
+                if len(merged) < STATUS_INDEX_MAX_KEYS:
+                    merged.append({"lat": lat_s, "lon": lon_s, "status": st, "ts": ts})
+                else:
+                    # 已滿就略過新位置，避免無上限成長
+                    continue
+
+        # 轉成輸出格式
         for m in merged:
             out[(m["lat"], m["lon"])] = {"status": m["status"], "ts": m["ts"]}
 
         _status_index_cache.update(ts=now, data=out)
         return out
+
     except Exception as e:
         logging.warning(f"建立狀態索引失敗：{e}")
         return {}
@@ -1879,10 +2112,10 @@ def _read_status_rows():
         try:
             header, data = _get_header_and_tail(ws)
         except Exception:
-            rows = ws.get_all_values() or []
-            if not rows:
+            header, data = _get_header_and_tail(ws, MAX_SHEET_ROWS)
+            if not header:
                 return []
-            header = rows[0]; data = rows[1:]
+
         ix = {h: i for i, h in enumerate(header)}
         out = []
         for r in data:
@@ -1902,7 +2135,6 @@ def _read_status_rows():
         return []
 
 def _stats_for_user(uid: str):
-    """彙總某 user 的狀態回報統計"""
     rows = _read_status_rows()
     total = 0
     by_status = {}
@@ -2050,8 +2282,12 @@ def toilet_feedback_by_coord(lat, lon):
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)
 
-        rows = feedback_sheet.get_all_values()
-        header = rows[0]; data = rows[1:]
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header:
+            header = []
+        if not data:
+            data = []
+
         idx = _feedback_indices(header)
 
         def close(a, b, tol=1e-6):
@@ -2090,13 +2326,10 @@ def get_clean_trend_by_name(toilet_name):
         return {"success": True, "data": []}, 200
 
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
             return {"success": True, "data": []}, 200
-
-        header = rows[0]
         idx = _feedback_indices(header)
-        data = rows[1:]
 
         name_idx = idx.get("name")
         lat_idx = idx.get("lat")
@@ -2133,13 +2366,9 @@ def get_clean_trend_by_coord(lat, lon):
     if feedback_sheet is None:
         return {"success": True, "data": []}, 200 
     try:
-        rows = feedback_sheet.get_all_values()
-        if not rows or len(rows) < 2:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
             return {"success": True, "data": []}, 200
-
-        header = rows[0]
-        idx = _feedback_indices(header)
-        data = rows[1:]
 
         if idx["lat"] is None or idx["lon"] is None:
             return {"success": False, "data": []}, 200
