@@ -99,17 +99,6 @@ MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "4000"))     # 只讀尾�
 _ENRICH_CACHE = SimpleLRU(maxsize=ENRICH_LRU_SIZE)
 _CACHE        = SimpleLRU(maxsize=NEARBY_LRU_SIZE)
 
-# ------ 讀 Google Sheet 只拿尾端 N 列，降低記憶體峰值 ------
-def _get_header_and_tail(ws, max_rows=MAX_SHEET_ROWS):
-    rows = ws.get_all_values() or []
-    if not rows:
-        return [], []
-    header = rows[0]
-    data = rows[1:]
-    if max_rows and len(data) > max_rows:
-        data = data[-max_rows:]  # 只保留尾端
-    return header, data
-
 # （可選）啟動時印出快取型別，方便檢查沒有被覆蓋回 dict
 try:
     logging.info(f"🔍 ENRICH_CACHE={_ENRICH_CACHE.__class__.__name__} NEARBY_CACHE={_CACHE.__class__.__name__}")
@@ -181,6 +170,7 @@ class SafeWS:
         self._sheet_id = sheet_id
         self._name = name
 
+    # ---------- 讀取（含快取） ----------
     def get_all_values(self):
         key = (self._sheet_id, self._name, "get_all_values")
         now = time.time()
@@ -188,14 +178,29 @@ class SafeWS:
             c = _read_cache.get(key)
             if c and now - c["ts"] < SHEETS_READ_TTL_SEC:
                 return c["val"]
+
         def _do():
             return self._ws.get_all_values()
+
         val = _with_retry(_do)
-        if len(val) <= SHEETS_CACHE_MAX_ROWS:
+        # 只快取合理大小，避免把整個超大表塞進記憶體
+        if isinstance(val, list) and len(val) <= SHEETS_CACHE_MAX_ROWS:
             with _cache_lock:
                 _read_cache[key] = {"ts": now, "val": val}
         return val
 
+    def row_values(self, i):
+        return _with_retry(self._ws.row_values, i)
+
+    # ✅ 新增：給 _get_header_and_tail / 輕量估算總列數用
+    def col_values(self, i):
+        return _with_retry(self._ws.col_values, i)
+
+    # ✅ 新增：給區段讀取（如 "A2:AZ100"）
+    def get(self, rng):
+        return _with_retry(self._ws.get, rng)
+
+    # ---------- 寫入（成功後失效快取） ----------
     def _invalidate(self):
         key = (self._sheet_id, self._name, "get_all_values")
         with _cache_lock:
@@ -204,27 +209,33 @@ class SafeWS:
     def update(self, rng, values):
         def _do():
             return self._ws.update(rng, values)
-        out = _with_retry(_do); self._invalidate(); return out
+        out = _with_retry(_do)
+        self._invalidate()
+        return out
 
     def append_row(self, values, value_input_option="RAW"):
         def _do():
             return self._ws.append_row(values, value_input_option=value_input_option)
-        out = _with_retry(_do); self._invalidate(); return out
+        out = _with_retry(_do)
+        self._invalidate()
+        return out
 
     def delete_rows(self, index):
         def _do():
             return self._ws.delete_rows(index)
-        out = _with_retry(_do); self._invalidate(); return out
+        out = _with_retry(_do)
+        self._invalidate()
+        return out
 
-    # 轉發
-    def row_values(self, i):           return _with_retry(self._ws.row_values, i)
-    def worksheet(self, title):        return self.__class__(self._ws.worksheet(title), self._sheet_id, title)
+    # ---------- 其他 ----------
+    def worksheet(self, title):
+        # 取得同試算表內的其他工作表，持續沿用 SafeWS 包裝
+        return self.__class__(self._ws.worksheet(title), self._sheet_id, title)
+
     @property
-    def title(self):                   return self._ws.title
+    def title(self):
+        return self._ws.title
 
-# consent 背景排隊（429 時不回 500）
-_consent_q = []
-_consent_lock = threading.Lock()
 def _start_consent_worker():
     def loop():
         while True:
@@ -438,24 +449,58 @@ def _a1_col(n: int) -> str:
 
 MAX_SHEET_ROWS = int(os.getenv("MAX_SHEET_ROWS", "4000")) 
 
+def _a1_col(n: int) -> str:
+    if n <= 0:
+        return "A"
+    out = []
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        out.append(chr(65 + r))
+    return "".join(reversed(out))
+
+
 def _get_header_and_tail(ws, max_rows: int = MAX_SHEET_ROWS):
+    try:
+        max_rows = int(max_rows)
+        if max_rows <= 0:
+            max_rows = 1
+    except Exception:
+        max_rows = 1000  
+
     try:
         header = ws.row_values(1) or []
         if not header:
             return [], []
+
         col_a = ws.col_values(1) or []
-        last_row = len(col_a)  
-        if last_row < 2:
+        last_row = len(col_a)
+        if last_row < 2:  
             return header, []
 
         start_row = max(2, last_row - max_rows + 1)
-        end_col = _a1_col(len(header))  
+
+        end_col = _a1_col(max(1, len(header)))
         rng = f"A{start_row}:{end_col}{last_row}"
+
         data = ws.get(rng) or []
         return header, data
+
     except Exception as e:
-        logging.warning(f"_get_header_and_tail failed: {e}")
-        return [], []
+        logging.warning(f"_get_header_and_tail primary path failed: {e}")
+
+        # === Fallback：一次抓，然後只保留尾端 max_rows，避免佔記憶體 ===
+        try:
+            rows = ws.get_all_values() or []
+            if not rows:
+                return [], []
+            header = rows[0]
+            data = rows[1:]
+            if len(data) > max_rows:
+                data = data[-max_rows:]
+            return header, data
+        except Exception as e2:
+            logging.warning(f"_get_header_and_tail fallback failed: {e2}")
+            return [], []
 
 # === 載入模型 ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
