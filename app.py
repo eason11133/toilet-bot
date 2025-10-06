@@ -236,20 +236,34 @@ class SafeWS:
     def title(self):
         return self._ws.title
 
+# === consent 背景排隊（429 時不回 500） ===
+_consent_q = []                    
+_consent_lock = threading.Lock()    
+
 def _start_consent_worker():
     def loop():
         while True:
             job = None
-            with _consent_lock:
-                if _consent_q:
-                    job = _consent_q.pop(0)
-            if not job:
-                time.sleep(0.2); continue
             try:
-                job()
+                # 取出一個工作
+                with _consent_lock:
+                    if _consent_q:
+                        job = _consent_q.pop(0)
+            except Exception as e:
+                logging.error(f"Consent worker dequeue error: {e}")
+
+            if not job:
+                time.sleep(0.2)
+                continue
+
+            try:
+                job()  # 執行補寫
             except Exception as e:
                 logging.error(f"Consent worker error: {e}")
-    threading.Thread(target=loop, daemon=True).start()
+
+    t = threading.Thread(target=loop, name="consent-worker", daemon=True)
+    t.start()
+
 _start_consent_worker()
 
 def make_location_quick_reply(prompt_text="📍 請分享你的位置"):
