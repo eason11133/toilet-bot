@@ -2223,20 +2223,51 @@ def api_achievements():
     return {"ok": True, "achievements": out}
 
 # ==== 徽章 API ====
+# --- 依使用者統計計算解鎖 ---
+def _badge_rules(uid: str):
+    s = _stats_for_user(uid)              # {"total":N, "by_status":{...}, "last_ts":...}
+    by, total = s.get("by_status", {}), int(s.get("total", 0))
+    return {
+        "first": total >= 1,                               # 第 1 次
+        "helper10": total >= 10,                           # 10 次
+        "pro_reporter": total >= 20,                       # 20 次
+        "helper50": total >= 50,                           # 50 次
+        "tissue_guard": by.get("缺衛生紙", 0) >= 3,         # 缺衛生紙 ×3
+        "tissue_master": by.get("缺衛生紙", 0) >= 10,       # 缺衛生紙 ×10
+        "queue_scout": by.get("有人排隊", 0) >= 3,          # 有人排隊 ×3
+        "queue_commander": by.get("有人排隊", 0) >= 10,     # 有人排隊 ×10
+        "maintenance_watcher": by.get("暫停使用", 0) >= 3,  # 暫停使用 ×3
+        "good_news": by.get("恢復正常", 0) >= 5,            # 恢復正常 ×5
+    }
+
+# --- 圖像/名稱設定（把 icon 檔放進 /static/badges/，檔名可依你實際素材調整）---
+BADGE_CONFIG = [
+    {"key":"first",               "name":"新手報到",     "icon":"/static/badges/first.png"},
+    {"key":"helper10",            "name":"勤勞小幫手",   "icon":"/static/badges/helper10.png"},
+    {"key":"pro_reporter",        "name":"資深回報員",   "icon":"/static/badges/pro_reporter.png"},
+    {"key":"helper50",            "name":"超級幫手",     "icon":"/static/badges/helper50.png"},
+    {"key":"tissue_guard",        "name":"紙巾守護者",   "icon":"/static/badges/tissue_guard.png"},
+    {"key":"tissue_master",       "name":"紙巾總管",     "icon":"/static/badges/tissue_master.png"},
+    {"key":"queue_scout",         "name":"排隊偵查員",   "icon":"/static/badges/queue_scout.png"},
+    {"key":"queue_commander",     "name":"排隊指揮官",   "icon":"/static/badges/queue_commander.png"},
+    {"key":"maintenance_watcher", "name":"維運守護者",   "icon":"/static/badges/maintenance_watcher.png"},
+    {"key":"good_news",           "name":"好消息分享員", "icon":"/static/badges/good_news.png"},
+]
+
+# --- 取代原本的 /api/badges 路由 ---
 @app.route("/api/badges")
 def api_badges():
     uid = request.args.get("user_id", "").strip()
-    s = _stats_for_user(uid)
-    by = s["by_status"]; total = s["total"]
-
-    # 你可以把 icon 放在 /static/badges/*.png
-    BADGES = [
-        {"key":"first","name":"新手報到","icon":"/static/badges/first.png", "unlocked": total >= 1},
-        {"key":"tissue_guard","name":"紙巾守護者","icon":"/static/badges/tissue.png", "unlocked": by.get("缺衛生紙",0) >= 3},
-        {"key":"queue_scout","name":"排隊偵查員","icon":"/static/badges/queue.png", "unlocked": by.get("有人排隊",0) >= 3},
-        {"key":"pro_reporter","name":"資深回報員","icon":"/static/badges/pro.png", "unlocked": total >= 20},
-    ]
-    return {"ok": True, "badges": BADGES}
+    unlocked_map = _badge_rules(uid)
+    items = []
+    for b in BADGE_CONFIG:
+        items.append({
+            "key": b["key"],
+            "name": b["name"],
+            "icon": b["icon"],
+            "unlocked": bool(unlocked_map.get(b["key"], False)),
+        })
+    return {"ok": True, "badges": items}, 200
 
 # === 舊路由保留===
 @app.route("/toilet_feedback/<toilet_name>")
@@ -3158,6 +3189,61 @@ def _append_toilet_row_safely(ws, row_values):
             _fallback_store_toilet_row_locally(row_values)
             return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
         raise
+
+def _get_db():
+    return sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+
+def _ensure_pending_table():
+    conn = _get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS pending_gsheet (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payload_json TEXT NOT NULL,
+        created_ts REAL
+    )
+    """)
+    conn.commit(); conn.close()
+
+_ensure_pending_table()
+
+def _queue_pending_row(row_values):
+    try:
+        conn = _get_db(); cur = conn.cursor()
+        cur.execute("INSERT INTO pending_gsheet (payload_json, created_ts) VALUES (?, ?)",
+                    (json.dumps(row_values, ensure_ascii=False), time.time()))
+        conn.commit(); conn.close()
+    except Exception as e:
+        logging.warning(f"queue pending failed: {e}")
+
+def _drain_pending(limit=200):
+    _ensure_sheets_ready()
+    if worksheet is None:
+        return 0, "worksheet not ready"
+
+    conn = _get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, payload_json FROM pending_gsheet ORDER BY id ASC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    if not rows:
+        conn.close(); return 0, "empty"
+
+    ok = 0
+    for row_id, payload in rows:
+        try:
+            vals = json.loads(payload)
+            worksheet.append_row(vals, value_input_option="USER_ENTERED")
+            cur.execute("DELETE FROM pending_gsheet WHERE id=?", (row_id,))
+            ok += 1
+        except Exception as e:
+            logging.warning(f"backfill append failed: {e}")
+            break
+    conn.commit(); conn.close()
+    return ok, "done"
+
+@app.route("/admin/backfill", methods=["POST","GET"])
+def admin_backfill():
+    n, note = _drain_pending(limit=500)
+    return {"ok": True, "written": n, "note": note}, 200
 
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
