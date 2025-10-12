@@ -907,6 +907,98 @@ def safe_reply(event, messages):
         # 其他錯誤只記錄
         logging.warning(f"[safe_reply] reply_message failed (no push). err={msg_txt}")
 
+# === 更精準的防重複（新） ===
+_DEDUPE_LOCK = threading.Lock()
+
+# 事件類型專屬時間窗（秒）— 可用環境變數調整
+TEXT_DEDUPE_WINDOW = int(os.getenv("TEXT_DEDUPE_WINDOW", "6"))
+LOC_DEDUPE_WINDOW  = int(os.getenv("LOC_DEDUPE_WINDOW",  "3"))
+PB_DEDUPE_WINDOW   = int(os.getenv("PB_DEDUPE_WINDOW",   "6"))
+
+# 定位事件短時間重複的距離閾值（公尺）
+LOC_DEDUPE_DISTANCE_M = float(os.getenv("LOC_DEDUPE_DISTANCE_M", "8"))
+
+# 最近處理事件時間索引
+_RECENT_EVENTS = getattr(globals(), "_RECENT_EVENTS", {})  # 若前面已有同名 dict，沿用
+
+def _now():
+    return time.time()
+
+def _purge_expired(now_ts: float):
+    """輕量清理：移除 10 秒前的舊記錄，避免 dict 無限成長"""
+    cutoff = now_ts - 10.0
+    for k, ts in list(_RECENT_EVENTS.items()):
+        if ts < cutoff:
+            _RECENT_EVENTS.pop(k, None)
+
+def _event_type_and_key(event):
+    """回傳 (etype, key, window_sec)，優先使用 LINE message.id（若有）"""
+    mid = None
+    try:
+        mid = getattr(getattr(event, "message", None), "id", None)
+    except Exception:
+        pass
+
+    if isinstance(getattr(event, "message", None), TextMessage):
+        etype = "text"
+        window = TEXT_DEDUPE_WINDOW
+        base = f"text|{event.source.user_id}|{(event.message.text or '').strip().lower()}"
+        key = f"mid:{mid}" if mid else base
+        return etype, key, window
+
+    if isinstance(getattr(event, "message", None), LocationMessage):
+        etype = "loc"
+        window = LOC_DEDUPE_WINDOW
+        lat = getattr(event.message, "latitude", None)
+        lon = getattr(event.message, "longitude", None)
+        base = f"loc|{event.source.user_id}|{norm_coord(lat)}:{norm_coord(lon)}"
+        key = f"mid:{mid}" if mid else base
+        return etype, key, window
+
+    # Postback（沒有 message）
+    etype = "pb"
+    window = PB_DEDUPE_WINDOW
+    data = getattr(getattr(event, "postback", None), "data", "")
+    key = f"pb|{event.source.user_id}|{data}"
+    return etype, key, window
+
+def is_duplicate_and_mark_event(event) -> bool:
+    now_ts = _now()
+    etype, key, window = _event_type_and_key(event)
+
+    # 為 Location 加上「距離 + 時間」規則
+    if etype == "loc":
+        try:
+            uid = event.source.user_id
+            lat = float(event.message.latitude)
+            lon = float(event.message.longitude)
+            last = get_user_location(uid)
+        except Exception:
+            last = None
+        else:
+            if last:
+                try:
+                    d = haversine(lat, lon, float(last[0]), float(last[1]))
+                except Exception:
+                    d = 1e9
+                with _DEDUPE_LOCK:
+                    last_ts = _RECENT_EVENTS.get(f"loc_ts|{uid}", 0.0)
+                    if (now_ts - last_ts) < LOC_DEDUPE_WINDOW and d <= LOC_DEDUPE_DISTANCE_M:
+                        logging.info(f"🔁 skip duplicate loc: uid={uid} d={int(d)}m Δt={round(now_ts-last_ts,2)}s")
+                        return True
+                    _RECENT_EVENTS[f"loc_ts|{uid}"] = now_ts  # 更新最後定位時間
+
+    # 一般路徑：key + window
+    with _DEDUPE_LOCK:
+        last_ts = _RECENT_EVENTS.get(key)
+        if last_ts is not None and (now_ts - last_ts) < window:
+            logging.info(f"🔁 skip duplicate {etype}: key={key}")
+            return True
+        _RECENT_EVENTS[key] = now_ts
+        _purge_expired(now_ts)
+
+    return False
+
 def _too_old_to_reply(event, limit_seconds=55):
     try:
         evt_ms = int(getattr(event, "timestamp", 0))  # 毫秒
@@ -2876,7 +2968,7 @@ def handle_text(event):
     text_raw = event.message.text or ""
     text = text_raw.strip().lower()
 
-    if is_duplicate_and_mark(f"text|{uid}|{text}"):
+    if is_duplicate_and_mark_event(event):
         return
 
     gate_msg = ensure_consent_or_prompt(uid)
@@ -2987,8 +3079,7 @@ def handle_location(event):
         safe_reply(event, gate_msg)
         return
 
-    key = f"loc|{uid}|{round(lat,5)},{round(lon,5)}"
-    if is_duplicate_and_mark(key):
+    if is_duplicate_and_mark_event(event):
         return
 
     set_user_location(uid, (lat, lon))
@@ -3028,7 +3119,7 @@ def handle_postback(event):
     uid = event.source.user_id
     data = event.postback.data or ""
 
-    if is_duplicate_and_mark(f"pb|{uid}|{data}"):
+    if is_duplicate_and_mark_event(event):
         return
 
     gate_msg = ensure_consent_or_prompt(uid)
