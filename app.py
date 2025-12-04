@@ -2328,7 +2328,76 @@ def api_achievements():
         })
     return {"ok": True, "achievements": out}
 
-# ==== 徽章 API ====
+def build_usage_review_text(uid: str) -> str:
+    stats = _stats_for_user(uid)  
+    total = int(stats.get("total", 0) or 0)
+    by = stats.get("by_status", {}) or {}
+    last_ts = stats.get("last_ts") or "尚無紀錄"
+
+    try:
+        contribs = get_user_contributions(uid) or []
+        num_contribs = len(contribs)
+    except Exception:
+        num_contribs = 0
+
+    try:
+        favs = get_user_favorites(uid) or []
+        num_favs = len(favs)
+    except Exception:
+        num_favs = 0
+
+    unlocked_badges = 0
+    try:
+        rules = _badge_rules(uid)
+        unlocked_badges = sum(1 for v in rules.values() if v)
+    except Exception:
+        pass
+
+    lines = []
+    lines.append("📊 使用回顧")
+    lines.append("")
+    # 狀態回報
+    if total > 0:
+        lines.append(f"・狀態回報次數：{total} 次")
+
+        parts = []
+        mapping = {
+            "恢復正常": "✅",
+            "有人排隊": "🟡",
+            "缺衛生紙": "🧻",
+            "暫停使用": "⛔",
+        }
+        # 只列出有出現過的狀態
+        for k, emo in mapping.items():
+            c = int(by.get(k, 0) or 0)
+            if c > 0:
+                parts.append(f"{emo}{k} {c} 次")
+        if parts:
+            # 放在同一行，避免太長
+            lines.append("  └ 狀態類型：" + "｜".join(parts))
+
+        lines.append(f"・最近一次回報時間：{last_ts}")
+    else:
+        lines.append("・目前還沒有任何狀態回報紀錄")
+
+    lines.append("")
+    # 新增廁所 & 最愛
+    lines.append(f"・你新增的廁所：{num_contribs} 間")
+    lines.append(f"・你收藏的最愛廁所：{num_favs} 間")
+
+    # 徽章提示
+    if unlocked_badges > 0:
+        lines.append("")
+        lines.append(f"🏅 已解鎖徽章數：{unlocked_badges} 個（可輸入「徽章」查看詳細）")
+    else:
+        lines.append("")
+        lines.append("🏅 還沒解鎖徽章，試著多回報幾次狀態就會慢慢解鎖囉！")
+
+    lines.append("")
+    lines.append("🔁 小提醒：可以輸入「附近廁所」或傳送位置，我會幫你找最近的廁所 🚽")
+
+    return "\n".join(lines)
+
 # --- 依使用者統計計算解鎖 ---
 def _badge_rules(uid: str):
     s = _stats_for_user(uid)              # {"total":N, "by_status":{...}, "last_ts":...}
@@ -3062,6 +3131,10 @@ def handle_text(event):
         reply_url = f"{PUBLIC_URL}/badges_liff"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看徽章 👉 {reply_url}"))
 
+    elif text == "使用回顧":
+        summary = build_usage_review_text(uid)
+        reply_messages.append(TextSendMessage(text=summary))
+        
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===
