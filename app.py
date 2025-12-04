@@ -2329,6 +2329,7 @@ def api_achievements():
     return {"ok": True, "achievements": out}
 
 def build_usage_review_text(uid: str) -> str:
+    search_times = user_search_count.get(uid, 0)
     stats = _stats_for_user(uid)  
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
@@ -2354,6 +2355,8 @@ def build_usage_review_text(uid: str) -> str:
         pass
 
     lines = []
+    lines.append(f"・你總共查詢過附近廁所：{search_times} 次")
+    lines.append("")
     lines.append("📊 使用回顧")
     lines.append("")
     # 狀態回報
@@ -2985,6 +2988,7 @@ def home():
 # === 共用狀態 ===
 user_locations = {}
 pending_delete_confirm = {}
+user_search_count = {}
 
 # 建議：高併發時避免競態
 _dict_lock = threading.Lock()
@@ -3071,6 +3075,7 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
     elif text == "附近廁所":
+        user_search_count[uid] = user_search_count.get(uid, 0) + 1
         try:
             safe_reply(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
         except Exception as e:
@@ -3134,7 +3139,7 @@ def handle_text(event):
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
         reply_messages.append(TextSendMessage(text=summary))
-        
+
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===
