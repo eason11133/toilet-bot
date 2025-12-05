@@ -2299,6 +2299,18 @@ def _stats_for_user(uid: str):
         last_ts = r.get("timestamp") or last_ts
     return {"total": total, "by_status": by_status, "last_ts": last_ts}
 
+def get_search_count(uid: str) -> int:
+    try:
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM search_log WHERE user_id = ?", (uid,))
+        row = cur.fetchone()
+        conn.close()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception as e:
+        logging.warning(f"查詢 search_log 失敗: {e}")
+        return 0
+
 # ==== 成就 API ====
 @app.route("/api/achievements")
 def api_achievements():
@@ -2989,7 +3001,6 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 user_search_count = {}
-user_location_search_count = {}
 
 # 建議：高併發時避免競態
 _dict_lock = threading.Lock()
@@ -3139,6 +3150,13 @@ def handle_text(event):
 
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
+        search_times = get_search_count(uid)
+        msg = (
+            "📊 使用回顧（測試版）\n"
+            f"・你從系統開始記錄以來，總共查詢過附近廁所：{search_times} 次\n"
+            "（註：此統計自「開啟 search_log 功能」之後才開始計算，較早期的使用紀錄無法補回）"
+        )
+        reply_messages.append(TextSendMessage(text=msg))
         reply_messages.append(TextSendMessage(text=summary))
 
     if reply_messages:
@@ -3153,7 +3171,18 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
-    user_location_search_count[uid] = user_location_search_count.get(uid, 0) + 1
+    try:
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO search_log (user_id, lat, lon, ts) VALUES (?,?,?,?)",
+            (uid, norm_coord(lat), norm_coord(lon),
+             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"記錄查詢次數失敗: {e}")
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
@@ -3392,6 +3421,25 @@ def _ensure_pending_table():
     conn.commit(); conn.close()
 
 _ensure_pending_table()
+
+# === 查詢紀錄 search_log ===
+def _ensure_search_table():
+    conn = _get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS search_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        lat TEXT,
+        lon TEXT,
+        ts TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+_ensure_search_table()
+
 
 def _queue_pending_row(row_values):
     try:
