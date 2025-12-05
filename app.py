@@ -2414,6 +2414,105 @@ def build_usage_review_text(uid: str) -> str:
     lines.append("🔁 小提醒：可以輸入「附近廁所」或傳送位置，我會幫你找最近的廁所 🚽")
 
     return "\n".join(lines)
+def build_ai_usage_summary(uid: str) -> str:
+    """
+    用 AI 幫使用者做『個人使用回顧』總結。
+    - 有資料時：呼叫 OpenAI 產生精簡的 Wrapped 風格文字
+    - 資料太少時：直接回固定提示，不浪費 AI 流量
+    - 沒有 AI client 時：退回原本的文字版使用回顧
+    """
+    # 先拿你原本的資料來源
+    search_times = get_search_count(uid)  # 資料表 search_log
+    stats = _stats_for_user(uid)          # 狀態回報統計
+
+    total = int(stats.get("total", 0) or 0)
+    by = stats.get("by_status", {}) or {}
+    last_ts = stats.get("last_ts") or "尚無紀錄"
+
+    try:
+        contribs = get_user_contributions(uid) or []
+        num_contribs = len(contribs)
+    except Exception:
+        num_contribs = 0
+
+    try:
+        favs = get_user_favorites(uid) or []
+        num_favs = len(favs)
+    except Exception:
+        num_favs = 0
+
+    # 徽章數
+    unlocked_badges = 0
+    try:
+        rules = _badge_rules(uid)
+        unlocked_badges = sum(1 for v in rules.values() if v)
+    except Exception:
+        pass
+
+    # 🔹 如果幾乎沒有任何紀錄，就不要浪費 AI，直接回固定文字
+    if (search_times == 0 and total == 0 and
+        num_contribs == 0 and num_favs == 0 and
+        unlocked_badges == 0):
+        return (
+            "目前還沒有足夠的使用紀錄可以產生 AI 使用回顧喔～\n"
+            "可以多多使用「附近廁所」「狀態回報」「新增廁所」「收藏最愛」，\n"
+            "之後我會幫你做一份專屬的使用報告 🙌"
+        )
+
+    # 🔸 如果沒有設定 AI 金鑰或 client，退回原本的文字版使用回顧
+    if client is None:
+        return build_usage_review_text(uid)
+
+    # 組成給 AI 的資料 payload（JSON）
+    payload = {
+        "search_times": search_times,
+        "status_total": total,
+        "status_by_type": by,
+        "last_status_time": last_ts,
+        "contributions": num_contribs,
+        "favorites": num_favs,
+        "unlocked_badges": unlocked_badges,
+    }
+
+    try:
+        import json  # 檔案裡本來就有用到，如果已經有就不會出問題
+        prompt = f"""
+你是一個溫暖的生活小助手，要幫使用者總結他使用「智慧廁所助手」的情況。
+
+下面是一位使用者的使用統計資料（JSON）：
+{json.dumps(payload, ensure_ascii=False)}
+
+請根據這些數據，幫他產生一段「個人使用回顧」，要求如下：
+
+- 使用繁體中文
+- 整體篇幅控制在 4～7 行以內
+- 第一行給一個總結句（像 Spotify Wrapped 的開場：例如「你是最常回報缺衛生紙的人之一！」）
+- 接著條列 3～5 點重點，建議可以包含：
+  - 查詢附近廁所的次數
+  - 狀態回報次數，常出現的狀態類型（例如：缺衛生紙、有人排隊、恢復正常等）
+  - 你新增了多少間廁所
+  - 你收藏了多少間最愛廁所
+  - 解鎖了多少個徽章（如果有的話）
+- 最後一行給一個簡短的鼓勵或建議（例如鼓勵多多回報、一起維護好廁所環境）
+
+請直接輸出給使用者看的內容，不要再出現 JSON 或技術描述。
+        """.strip()
+
+        resp = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": "你是一個幫忙做使用回顧的生活小助手，說話親切、簡潔，用繁體中文。"},
+                {"role": "user", "content": prompt}
+            ],
+        )
+
+        summary = (resp.choices[0].message.content or "").strip()
+        return summary or build_usage_review_text(uid)
+
+    except Exception as e:
+        logging.error(f"AI usage summary error: {e}", exc_info=True)
+        # 有問題時，不讓使用者噴錯，退回原本版本
+        return build_usage_review_text(uid)
 
 # --- 依使用者統計計算解鎖 ---
 def _badge_rules(uid: str):
@@ -2692,7 +2791,7 @@ def get_clean_trend_by_coord(lat, lon):
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
 
-# === AI 回饋摘要頁面（新加的） ===
+# === AI 回饋摘要頁面 ===
 @app.route("/ai_feedback_summary_page/<lat>/<lon>")
 def ai_feedback_summary_page(lat, lon):
     """
@@ -2715,6 +2814,15 @@ def ai_feedback_summary_page(lat, lon):
         lon=lon,
         api_url=api_url,
         feedback_url=feedback_url,
+    )
+
+@app.route("/ai_usage_summary_page/<uid>")
+def ai_usage_summary_page(uid):
+    text = build_ai_usage_summary(uid)
+    return render_template(
+        "ai_usage_summary.html",
+        uid=uid,
+        summary=text
     )
 
 # === AI 回饋摘要 API（放在清潔度趨勢 API 的下面） ===
@@ -3290,13 +3398,22 @@ def handle_text(event):
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
         search_times = get_search_count(uid)
+
+        # 傳統使用回顧
         msg = (
-            "📊 使用回顧（測試版）\n"
+            "📊 使用回顧\n"
             f"・你從系統開始記錄以來，總共查詢過附近廁所：{search_times} 次\n"
-            "（註：此統計自「開啟 search_log 功能」之後才開始計算，較早期的使用紀錄無法補回）"
+            "（註：此統計自「啟用 search_log 功能」開始才計算，較早期紀錄無法補回）"
         )
+        
         reply_messages.append(TextSendMessage(text=msg))
         reply_messages.append(TextSendMessage(text=summary))
+
+        # 🆕 新增：AI 分析按鈕（跳到網頁，不塞到聊天室）
+        ai_url = f"{PUBLIC_URL}/ai_usage_summary_page/{uid}"
+        reply_messages.append(TextSendMessage(
+            text=f"🤖 想看 AI 幫你整理的個人使用分析嗎？\n👉 點我查看：{ai_url}"
+        ))
 
     if reply_messages:
         safe_reply(event, reply_messages)
