@@ -2329,7 +2329,7 @@ def api_achievements():
     return {"ok": True, "achievements": out}
 
 def build_usage_review_text(uid: str) -> str:
-    search_times = user_search_count.get(uid, 0)
+    search_times = user_location_search_count.get(uid, 0)
     stats = _stats_for_user(uid)  
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
@@ -2989,6 +2989,7 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 user_search_count = {}
+user_location_search_count = {}
 
 # 建議：高併發時避免競態
 _dict_lock = threading.Lock()
@@ -3151,6 +3152,8 @@ def handle_location(event):
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
+
+    user_location_search_count[uid] = user_location_search_count.get(uid, 0) + 1
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
