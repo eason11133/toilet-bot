@@ -402,8 +402,6 @@ def _self_keepalive_background():
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-_CACHE = SimpleLRU(maxsize=500)
-
 def get_nearby_toilets(uid, lat, lon):
     key = f"{lat},{lon}"
     cached = _CACHE.get(key)
@@ -452,14 +450,6 @@ _STATUS_NEAR_M = 35
 _STATUS_TTL_HOURS = 6
 _status_index_cache = {"ts": 0, "data": {}}
 _STATUS_INDEX_TTL = 60
-
-# ===== A1 欄名工具：把 1->A, 26->Z, 27->AA =====
-def _a1_col(n: int) -> str:
-    s = ""
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        s = chr(65 + r) + s
-    return s
 
 MAX_SHEET_ROWS = int(os.getenv("MAX_SHEET_ROWS", "4000")) 
 
@@ -1949,6 +1939,9 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
         if not header or not data:
             return []
 
+        # 🔧 補上這行
+        idx = _feedback_indices(header)
+
         def close(a, b):
             try: return abs(float(a) - float(b)) <= tol
             except: return False
@@ -1987,6 +1980,9 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         if not header or not data:
             return "尚無回饋資料"
+
+        # 🔧 補上這行
+        idx = _feedback_indices(header)
 
         if idx["lat"] is None or idx["lon"] is None:
             return "（表頭缺少 lat/lon 欄位）"
@@ -2028,6 +2024,8 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
         summary += f"🧻 衛生紙：{'有' if paper_counts['有'] >= paper_counts['沒有'] else '沒有'}\n"
         summary += f"♿ 無障礙：{'有' if access_counts['有'] >= access_counts['沒有'] else '沒有'}\n"
         if comments:
+            # 你現在拿 comments[-1]，因為 _get_header_and_tail 取尾巴，
+            # 通常最後一筆就是最新，這邏輯 OK。
             summary += f"💬 最新留言：{comments[-1]}"
         return summary
     except Exception as e:
@@ -2341,7 +2339,9 @@ def api_achievements():
     return {"ok": True, "achievements": out}
 
 def build_usage_review_text(uid: str) -> str:
-    search_times = user_location_search_count.get(uid, 0)
+    # 改成用 DB 裡的 search_log 統計查詢次數
+    search_times = get_search_count(uid)
+
     stats = _stats_for_user(uid)  
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
@@ -2635,6 +2635,8 @@ def get_clean_trend_by_coord(lat, lon):
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         if not header or not data:
             return {"success": True, "data": []}, 200
+        
+        idx = _feedback_indices(header)
 
         if idx["lat"] is None or idx["lon"] is None:
             return {"success": False, "data": []}, 200
