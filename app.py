@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+from openai import OpenAI
 import joblib
 import threading
 import time
@@ -84,6 +85,7 @@ class SimpleLRU(OrderedDict):
 LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "3"))      # 同時最多幾個使用者在跑附近查詢
 LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))  # 各資料源逾時（秒）
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "4"))             # 最多回幾個
+
 SHOW_SEARCHING_BUBBLE = False
 _LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
 ENRICH_MAX_ITEMS    = int(os.getenv("ENRICH_MAX_ITEMS", "60"))
@@ -2690,6 +2692,117 @@ def get_clean_trend_by_coord(lat, lon):
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
 
+# === AI 回饋摘要 API（放在清潔度趨勢 API 的下面） ===
+AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
+AI_KEY   = os.getenv("OPENAI_API_KEY", "")
+client   = OpenAI(api_key=AI_KEY) if AI_KEY else None
+
+@app.route("/api/ai_feedback_summary/<lat>/<lon>")
+def api_ai_feedback_summary(lat, lon):
+    """
+    依照座標讀取 feedback_sheet 的回饋紀錄，
+    有資料才丟給 OpenAI 做中文摘要；
+    若沒有任何回饋，就直接回「尚無回饋資料」，不呼叫 AI。
+    """
+    try:
+        _ensure_sheets_ready()
+        if feedback_sheet is None:
+            return {"success": False, "message": "feedback_sheet not ready"}, 503
+
+        # 1. 從雲端回饋表抓資料
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
+            # ✅ 直接回覆「尚無回饋資料」，不呼叫 AI
+            return {
+                "success": True,
+                "summary": (
+                    "目前這間廁所還沒有任何使用者回饋。\n\n"
+                    "💡 小提醒：歡迎你成為第一位回饋者！\n"
+                    "👉 請點卡片上的「廁所回饋」按鈕填寫意見。"
+                ),
+                "data": []
+            }, 200
+
+        idx = _feedback_indices(header)
+        if idx["lat"] is None or idx["lon"] is None:
+            return {"success": False, "message": "lat/lon 欄位缺少"}, 400
+
+        def close(a, b, tol=1e-4):
+            try:
+                return abs(float(a) - float(b)) <= tol
+            except Exception:
+                return False
+
+        matched = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if not (close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)):
+                continue
+
+            def v(key):
+                i = idx.get(key)
+                return (r[i] if i is not None and i < len(r) else "").strip()
+
+            item = {
+                "rating":     v("rating"),
+                "paper":      v("paper"),
+                "access":     v("access"),
+                "comment":    v("comment"),
+                "created_at": v("created"),
+            }
+            matched.append(item)
+
+        # 2. 若這個座標完全沒有任何回饋 → 也不要叫 AI
+        if not matched:
+            return {
+                "success": True,
+                "summary": (
+                    "目前這間廁所還沒有任何使用者回饋。\n\n"
+                    "💡 小提醒：歡迎你成為第一位回饋者！\n"
+                    "👉 請點卡片上的「廁所回饋」按鈕填寫意見。"
+                ),
+                "data": []
+            }, 200
+
+        # 3. 有資料才進到 AI 摘要
+        if client is None:
+            return {"success": False, "message": "AI 金鑰未設定"}, 500
+
+        prompt = f"""
+你是一個廁所清潔度分析助理，請閱讀以下回饋資料（JSON 格式），並輸出：
+
+1. 最近常見的主要問題（例如：衛生紙不足、地板濕滑、異味、設備老舊等）
+2. 使用者整體情緒傾向（正面 / 中性 / 負面），簡短說明原因
+3. 清潔度狀態的趨勢（變乾淨 / 變髒 / 大致持平），如果資料不足請說明
+4. 最後請用三行以內，給出一段總結建議
+
+請使用繁體中文、條列式或短句，讓一般使用者容易閱讀。
+
+以下是回饋資料（JSON）：
+{matched}
+        """.strip()
+
+        ai_resp = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": "你是一個分析廁所使用回饋的助手。"},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        summary = (ai_resp.choices[0].message.content or "").strip()
+
+        return {
+            "success": True,
+            "summary": summary,
+            "data": matched
+        }, 200
+
+    except Exception as e:
+        logging.error(f"AI summary error: {e}", exc_info=True)
+        return {"success": False, "message": "AI error"}, 500
+
 # === 同意頁面 / 隱私頁 ===
 @app.route("/consent", methods=["GET"])
 def render_consent_page():
@@ -2866,6 +2979,11 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 f"{quote(title)}/{addr_param}"
                 f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
             )
+        })
+        actions.append({
+            "type": "postback",
+            "label": "AI 清潔摘要",
+            "data": f"ai_summary:{lat_s}:{lon_s}"
         })
 
         if toilet.get("type") == "favorite" and uid:
@@ -3288,6 +3406,32 @@ def handle_postback(event):
                 TextSendMessage(text="⚠️ 確定要刪除此『你新增的廁所』嗎？此動作會從主資料表刪除該列。"),
                 TextSendMessage(text="請輸入『確認刪除』或『取消』")
             ])
+        elif data.startswith("ai_summary:"):
+            # data 形式：ai_summary:<lat>:<lon>
+            try:
+                _, lat, lon = data.split(":", 2)
+            except ValueError:
+                safe_reply(event, TextSendMessage(text="格式錯誤，無法查詢 AI 摘要"))
+                return
+
+            try:
+                # 呼叫自己後端的 AI API（用 PUBLIC_URL 當 base）
+                base = PUBLIC_URL.rstrip("/") if PUBLIC_URL else ""
+                url = f"{base}/api/ai_feedback_summary/{lat}/{lon}"
+                resp = requests.get(url, timeout=15)
+                if resp.status_code == 200:
+                    js = resp.json()
+                    if js.get("success") and js.get("summary"):
+                        msg = js["summary"]
+                    else:
+                        msg = js.get("message", "暫時無法取得 AI 摘要")
+                else:
+                    msg = "AI 摘要服務暫時忙碌，請稍後再試～"
+            except Exception as e:
+                logging.error(f"AI summary postback error: {e}")
+                msg = "AI 摘要發生錯誤，請稍後再試"
+
+            safe_reply(event, TextSendMessage(text=msg))
 
     except Exception as e:
         logging.error(f"❌ 處理 postback 失敗: {e}")
