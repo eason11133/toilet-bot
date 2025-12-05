@@ -2243,15 +2243,11 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 # ==== 頁面 routes ====
 @app.route("/achievements_liff")
 def achievements_liff_page():
-    return render_template("achievements_liff.html",
-                           liff_id=LIFF_ID_STATUS,
-                           public_url=PUBLIC_URL)
+    return render_template("achievements_liff.html", liff_id=LIFF_ID_STATUS, public_url=PUBLIC_URL)
 
 @app.route("/badges_liff")
 def badges_liff_page():
-    return render_template("badges_liff.html",
-                           liff_id=LIFF_ID_STATUS,
-                           public_url=PUBLIC_URL)
+    return render_template("badges_liff.html", liff_id=LIFF_ID_STATUS, public_url=PUBLIC_URL)
 
 # ==== 小工具：讀取狀態表並彙總 ====
 def _read_status_rows():
@@ -2413,6 +2409,9 @@ def build_usage_review_text(uid: str) -> str:
     lines.append("")
     lines.append("🔁 小提醒：可以輸入「附近廁所」或傳送位置，我會幫你找最近的廁所 🚽")
 
+    lines.append("")
+    lines.append("🤖 查看 AI 為你生成的個人化使用分析：")
+    lines.append(f"👉 https://school-i9co.onrender.com/ai_usage_summary_page/{uid}")
     return "\n".join(lines)
 def build_ai_usage_summary(uid: str) -> str:
     """
@@ -2475,7 +2474,7 @@ def build_ai_usage_summary(uid: str) -> str:
     }
 
     try:
-        import json  # 檔案裡本來就有用到，如果已經有就不會出問題
+        import json  # 如果檔案裡已經有 import 過也沒關係
         prompt = f"""
 你是一個溫暖的生活小助手，要幫使用者總結他使用「智慧廁所助手」的情況。
 
