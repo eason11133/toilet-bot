@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI 回饋摘要</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 16px;
+      line-height: 1.6;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 8px 12px;
+      border-radius: 6px;
+      text-decoration: none;
+      border: 1px solid #007bff;
+    }
+  </style>
+</head>
+<body>
+  <h2>AI 回饋摘要</h2>
+  <p>這是根據使用者對這間廁所的回饋，由 AI 自動整理的摘要。</p>
+
+  <div id="summary-card" class="card">
+    <div id="status">載入中⋯⋯</div>
+    <pre id="summary-text" style="white-space: pre-wrap;"></pre>
+  </div>
+
+  <div class="card">
+    <h3>幫忙留下你的回饋 🙌</h3>
+    <p>如果你剛剛有使用這間廁所，可以點下面的按鈕填寫回饋，讓資料更完整。</p>
+    <a href="{{ feedback_url }}" class="btn">前往回饋表單</a>
+  </div>
+
+  <script>
+    const apiUrl = "{{ api_url }}";
+
+    fetch(apiUrl)
+      .then(r => r.json())
+      .then(data => {
+        const statusEl = document.getElementById("status");
+        const textEl   = document.getElementById("summary-text");
+
+        if (!data.success) {
+          statusEl.textContent = "讀取失敗，請稍後再試。";
+          return;
+        }
+
+        // has_data = False 代表沒有任何回饋 → 顯示文字就好，不呼叫 AI
+        if (!data.has_data) {
+          statusEl.textContent = "";
+          textEl.textContent = data.summary || "目前還沒有任何回饋資料。";
+          return;
+        }
+
+        statusEl.textContent = "";
+        textEl.textContent = data.summary || "目前沒有可用的摘要內容。";
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("status").textContent = "系統錯誤，請稍後再試。";
+      });
+  </script>
+</body>
+</html>

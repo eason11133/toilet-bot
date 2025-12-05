@@ -2692,6 +2692,31 @@ def get_clean_trend_by_coord(lat, lon):
         logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
         return {"success": False, "data": []}, 500
 
+# === AI 回饋摘要頁面（新加的） ===
+@app.route("/ai_feedback_summary_page/<lat>/<lon>")
+def ai_feedback_summary_page(lat, lon):
+    """
+    顯示某一個廁所（用座標表示）的 AI 回饋摘要頁面。
+    前端會在這個頁面裡用 JS 呼叫 /api/ai_feedback_summary/<lat>/<lon>。
+    """
+    # 給前端 JS 用的 API URL
+    api_url = f"{PUBLIC_URL}/api/ai_feedback_summary/{lat}/{lon}"
+
+    # 順便做一個「去留下回饋」的連結（就算沒回饋也可以用）
+    feedback_url = (
+        f"{PUBLIC_URL}/feedback_form/"
+        f"{quote('這間廁所')}/{quote(lat + ',' + lon)}"
+        f"?lat={lat}&lon={lon}&address={quote(lat + ',' + lon)}"
+    )
+
+    return render_template(
+        "ai_feedback_summary.html",
+        lat=lat,
+        lon=lon,
+        api_url=api_url,
+        feedback_url=feedback_url,
+    )
+
 # === AI 回饋摘要 API（放在清潔度趨勢 API 的下面） ===
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 AI_KEY   = os.getenv("OPENAI_API_KEY", "")
@@ -2701,26 +2726,25 @@ client   = OpenAI(api_key=AI_KEY) if AI_KEY else None
 def api_ai_feedback_summary(lat, lon):
     """
     依照座標讀取 feedback_sheet 的回饋紀錄，
-    有資料才丟給 OpenAI 做中文摘要；
-    若沒有任何回饋，就直接回「尚無回饋資料」，不呼叫 AI。
+    丟給 OpenAI 做中文摘要，回傳 JSON 給前端使用。
     """
     try:
         _ensure_sheets_ready()
         if feedback_sheet is None:
             return {"success": False, "message": "feedback_sheet not ready"}, 503
 
+        if client is None:
+            return {"success": False, "message": "AI 金鑰未設定"}, 500
+
         # 1. 從雲端回饋表抓資料
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         if not header or not data:
-            # ✅ 直接回覆「尚無回饋資料」，不呼叫 AI
+            # ✅ 這裡「直接回沒有資料」，不呼叫 AI，避免浪費 token
             return {
                 "success": True,
-                "summary": (
-                    "目前這間廁所還沒有任何使用者回饋。\n\n"
-                    "💡 小提醒：歡迎你成為第一位回饋者！\n"
-                    "👉 請點卡片上的「廁所回饋」按鈕填寫意見。"
-                ),
-                "data": []
+                "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                "data": [],
+                "has_data": False
             }, 200
 
         idx = _feedback_indices(header)
@@ -2753,22 +2777,16 @@ def api_ai_feedback_summary(lat, lon):
             }
             matched.append(item)
 
-        # 2. 若這個座標完全沒有任何回饋 → 也不要叫 AI
         if not matched:
+            # ✅ 一樣不呼叫 AI，直接回「沒有資料」
             return {
                 "success": True,
-                "summary": (
-                    "目前這間廁所還沒有任何使用者回饋。\n\n"
-                    "💡 小提醒：歡迎你成為第一位回饋者！\n"
-                    "👉 請點卡片上的「廁所回饋」按鈕填寫意見。"
-                ),
-                "data": []
+                "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                "data": [],
+                "has_data": False
             }, 200
 
-        # 3. 有資料才進到 AI 摘要
-        if client is None:
-            return {"success": False, "message": "AI 金鑰未設定"}, 500
-
+        # 2. 組 AI Prompt，請模型做中文摘要與趨勢判斷
         prompt = f"""
 你是一個廁所清潔度分析助理，請閱讀以下回饋資料（JSON 格式），並輸出：
 
@@ -2796,7 +2814,8 @@ def api_ai_feedback_summary(lat, lon):
         return {
             "success": True,
             "summary": summary,
-            "data": matched
+            "data": matched,
+            "has_data": True
         }, 200
 
     except Exception as e:
@@ -2981,9 +3000,9 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
             )
         })
         actions.append({
-            "type": "postback",
-            "label": "AI 清潔摘要",
-            "data": f"ai_summary:{lat_s}:{lon_s}"
+            "type": "uri",
+            "label": "AI 回饋摘要",
+            "uri": f"https://school-i9co.onrender.com/ai_feedback_summary_page/{lat_s}/{lon_s}"
         })
 
         if toilet.get("type") == "favorite" and uid:
