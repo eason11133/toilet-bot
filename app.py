@@ -3407,13 +3407,7 @@ def handle_text(event):
         
         reply_messages.append(TextSendMessage(text=msg))
         reply_messages.append(TextSendMessage(text=summary))
-
-        # 🆕 新增：AI 分析按鈕（跳到網頁，不塞到聊天室）
-        ai_url = f"{PUBLIC_URL}/ai_usage_summary_page/{uid}"
-        reply_messages.append(TextSendMessage(
-            text=f"🤖 想看 AI 幫你整理的個人使用分析嗎？\n👉 點我查看：{ai_url}"
-        ))
-
+        
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===
