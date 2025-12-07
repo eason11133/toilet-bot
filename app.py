@@ -2462,6 +2462,12 @@ def build_ai_usage_summary(uid: str) -> str:
     if client is None:
         return build_usage_review_text(uid)
 
+    # 🔹 每個使用者「AI 使用回顧」每天最多觸發 AI_DAILY_LIMIT 次
+    ok, used = _ai_quota_check_and_inc(f"usage:{uid or 'anonymous'}")
+    if not ok:
+        base = build_usage_review_text(uid)
+        return base + "\n\n（今日 AI 使用回顧次數已達上限，明天再來看看新的分析吧 🙏）"
+
     # 組成給 AI 的資料 payload（JSON）
     payload = {
         "search_times": search_times,
@@ -2512,6 +2518,93 @@ def build_ai_usage_summary(uid: str) -> str:
         logging.error(f"AI usage summary error: {e}", exc_info=True)
         # 有問題時，不讓使用者噴錯，退回原本版本
         return build_usage_review_text(uid)
+    
+def build_ai_nearby_recommendation(uid: str, toilets):
+    """
+    依據附近廁所清單，呼叫 OpenAI 幫忙產生一段推薦說明文字。
+    - 如果沒有 AI 金鑰 / 沒有廁所資料，就直接回空字串，不影響原本流程
+    """
+    if client is None:
+        return ""
+    if not toilets:
+        return ""
+
+    try:
+        import json
+
+        # 最多拿前 5 間，避免 token 太大
+        indicators = build_feedback_index()
+        status_map = build_status_index()
+
+        items = []
+        for t in toilets[:5]:
+            try:
+                lat_s = norm_coord(t["lat"])
+                lon_s = norm_coord(t["lon"])
+            except Exception:
+                continue
+
+            key = (lat_s, lon_s)
+            ind = indicators.get(key, {})
+            st = status_map.get(key, {})
+
+            items.append({
+                "name": t.get("name") or t.get("place_hint") or "未命名廁所",
+                "distance_m": int(t.get("distance", 0) or 0),
+                "paper": ind.get("paper"),          # "有" / "沒有" / "?"
+                "access": ind.get("access"),        # "有" / "沒有" / "?"
+                "avg_score": ind.get("avg"),        # 清潔分數平均
+                "status": (st.get("status") or ""), # 例如：有人排隊、暫停使用、恢復正常
+            })
+
+        if not items:
+            return ""
+
+        payload = {
+            "uid": uid,
+            "nearby_toilets": items
+        }
+
+        prompt = f"""
+你是一個「智慧廁所助手」的推薦小幫手，使用者剛剛傳了他的位置，我們幫他找到幾間附近的廁所。
+
+下面是整理好的附近廁所資料（JSON）：
+{json.dumps(payload, ensure_ascii=False)}
+
+請你根據：
+- 距離（distance_m，越小越近）
+- 清潔分數 avg_score（數字越高代表越乾淨，如果是 null 代表目前沒有評分）
+- 衛生紙狀態 paper（"有"/"沒有"/"?"）
+- 無障礙設施 access（"有"/"沒有"/"?"）
+- 即時狀態 status（例如：有人排隊、暫停使用、恢復正常）
+
+幫使用者做一段簡短的「推薦說明」，要求：
+- 使用繁體中文
+- 總長度 3～5 行
+- 第一行先講整體情況，例如：「附近有幾間廁所可以選擇，我幫你挑出其中 1～2 間比較適合的。」
+- 接著條列推薦 1～2 間（最多 3 間）廁所：
+  - 每一行包含：名稱、距離、清潔度/衛生紙/無障礙或排隊狀態的重點
+- 最後一行給一個簡短小建議，例如：
+  - 「如果趕時間就先選最近那間，有多一點時間可以考慮評分較好的一間。」
+  - 「如果需要無障礙廁所，可以優先選我標註有無障礙的選項。」
+
+請直接輸出給使用者看的文字，不要再出現 JSON 或技術說明。
+        """.strip()
+
+        resp = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": "你是一個幫忙推薦附近廁所的生活小助手，說話親切、簡潔，用繁體中文。"},
+                {"role": "user", "content": prompt}
+            ],
+        )
+
+        text = (resp.choices[0].message.content or "").strip()
+        return text
+
+    except Exception as e:
+        logging.error(f"AI nearby recommendation error: {e}", exc_info=True)
+        return ""
 
 # --- 依使用者統計計算解鎖 ---
 def _badge_rules(uid: str):
@@ -2797,12 +2890,17 @@ def ai_feedback_summary_page(lat, lon):
     顯示某一個廁所（用座標表示）的 AI 回饋摘要頁面。
     前端會在這個頁面裡用 JS 呼叫 /api/ai_feedback_summary/<lat>/<lon>。
     """
-    # 給前端 JS 用的 API URL
-    api_url = f"{PUBLIC_URL}/api/ai_feedback_summary/{lat}/{lon}"
+    uid = (request.args.get("uid") or "").strip()
+
+    base = PUBLIC_URL.rstrip("/") if PUBLIC_URL else request.url_root.rstrip("/")
+    # 給前端 JS 用的 API URL（順便把 uid 帶進去，用來做每日額度控制）
+    api_url = f"{base}/api/ai_feedback_summary/{lat}/{lon}"
+    if uid:
+        api_url += f"?uid={quote(uid)}"
 
     # 順便做一個「去留下回饋」的連結（就算沒回饋也可以用）
     feedback_url = (
-        f"{PUBLIC_URL}/feedback_form/"
+        f"{base}/feedback_form/"
         f"{quote('這間廁所')}/{quote(lat + ',' + lon)}"
         f"?lat={lat}&lon={lon}&address={quote(lat + ',' + lon)}"
     )
@@ -2813,6 +2911,7 @@ def ai_feedback_summary_page(lat, lon):
         lon=lon,
         api_url=api_url,
         feedback_url=feedback_url,
+        uid=uid,
     )
 
 @app.route("/ai_usage_summary_page/<uid>")
@@ -2828,6 +2927,28 @@ def ai_usage_summary_page(uid):
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 AI_KEY   = os.getenv("OPENAI_API_KEY", "")
 client   = OpenAI(api_key=AI_KEY) if AI_KEY else None
+
+# --- AI 每日額度控制（方案 D：同一使用者每天最多觸發幾次 AI） ---
+AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT", "3"))  # 預設 3 次/人/天
+
+_ai_quota_lock = threading.Lock()
+_ai_quota = {}  # key: (usage_key, date_str) -> count
+
+
+def _ai_quota_check_and_inc(key: str):
+    """
+    簡單的記憶體版每日額度統計：
+    - key 可以是 "usage:<uid>" 或 "fb:<uid>" 等
+    - 每日超過 AI_DAILY_LIMIT 次就會回 False，不再呼叫 OpenAI
+    """
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    k = (key, today)
+    with _ai_quota_lock:
+        cnt = _ai_quota.get(k, 0)
+        if cnt >= AI_DAILY_LIMIT:
+            return False, cnt
+        _ai_quota[k] = cnt + 1
+        return True, cnt + 1
 
 @app.route("/api/ai_feedback_summary/<lat>/<lon>")
 def api_ai_feedback_summary(lat, lon):
@@ -2892,7 +3013,22 @@ def api_ai_feedback_summary(lat, lon):
                 "data": [],
                 "has_data": False
             }, 200
+        
+        # 🔹 依 user_id 做每日額度控制（若沒有 uid，就退而求其次用 IP）
+        uid = (request.args.get("uid") or "").strip()
+        quota_key = uid or f"ip:{request.remote_addr or 'unknown'}"
 
+        ok, used = _ai_quota_check_and_inc(f"fb:{quota_key}")
+        if not ok:
+            # 已達今日上限：不再呼叫 OpenAI，直接回簡短文字
+            return {
+                "success": True,
+                "summary": "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
+                "data": matched,
+                "has_data": True,
+                "limit_reached": True
+            }, 200
+        
         # 2. 組 AI Prompt，請模型做中文摘要與趨勢判斷
         prompt = f"""
 你是一個廁所清潔度分析助理，請閱讀以下回饋資料（JSON 格式），並輸出：
@@ -3106,11 +3242,19 @@ def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
                 f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
             )
         })
+        
+        ai_page_base = "https://school-i9co.onrender.com/ai_feedback_summary_page"
+        if uid:
+            ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}?uid={quote(uid)}"
+        else:
+            ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}"
+
         actions.append({
             "type": "uri",
             "label": "AI 回饋摘要",
-            "uri": f"https://school-i9co.onrender.com/ai_feedback_summary_page/{lat_s}/{lon_s}"
+            "uri": ai_uri
         })
+
 
         if toilet.get("type") == "favorite" and uid:
             actions.append({
@@ -3445,18 +3589,19 @@ def handle_location(event):
         if toilets:
             msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
 
-            # ✅ 一次回覆「附近廁所」+「換地點再找」
+            # ✅ 原本就有的回覆內容
             messages = [
                 FlexSendMessage("附近廁所", msg),
                 make_location_quick_reply("想換個地點再找嗎？"),
             ]
-            safe_reply(event, messages)
 
-        else:
-            safe_reply(event, make_no_toilet_quick_reply(
-                uid, lat, lon,
-                text="附近沒有廁所 😥 要不要補上一間，或換個點再試？"
-            ))
+            # 🧠 新增：AI 幫忙推薦附近廁所的說明文字
+            ai_text = build_ai_nearby_recommendation(uid, toilets)
+            if ai_text:
+                # 插在中間：先卡片、再 AI 說明、最後是「再找一次」的提示
+                messages.insert(1, TextSendMessage(text=ai_text))
+
+            safe_reply(event, messages)
 
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
@@ -3538,8 +3683,10 @@ def handle_postback(event):
             try:
                 # 呼叫自己後端的 AI API（用 PUBLIC_URL 當 base）
                 base = PUBLIC_URL.rstrip("/") if PUBLIC_URL else ""
-                url = f"{base}/api/ai_feedback_summary/{lat}/{lon}"
+                q_uid = quote(uid)
+                url = f"{base}/api/ai_feedback_summary/{lat}/{lon}?uid={q_uid}"
                 resp = requests.get(url, timeout=15)
+
                 if resp.status_code == 200:
                     js = resp.json()
                     if js.get("success") and js.get("summary"):
