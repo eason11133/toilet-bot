@@ -3396,18 +3396,10 @@ def handle_text(event):
 
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
-        search_times = get_search_count(uid)
 
-        # 傳統使用回顧
-        msg = (
-            "📊 使用回顧\n"
-            f"・你從系統開始記錄以來，總共查詢過附近廁所：{search_times} 次\n"
-            "（註：此統計自「啟用 search_log 功能」開始才計算，較早期紀錄無法補回）"
-        )
-        
         reply_messages.append(TextSendMessage(text=msg))
         reply_messages.append(TextSendMessage(text=summary))
-        
+
     if reply_messages:
         safe_reply(event, reply_messages)
 # === LocationMessage ===
