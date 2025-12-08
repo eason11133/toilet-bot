@@ -274,21 +274,14 @@ def make_location_quick_reply(prompt_text="📍 請分享你的位置"):
     return TextSendMessage(
         text=prompt_text,
         quick_reply=QuickReply(items=[
-            # 原本的：直接傳位置（不走 AI）
             QuickReplyButton(
-                action=LocationAction(label="傳送我的位置")
+                action=LocationAction(label="傳送我的位置")  # 一般搜尋
             ),
-
-            # 新增 AI 推薦附近廁所按鈕（Postback）
             QuickReplyButton(
-                action=PostbackAction(
-                    label="AI 推薦附近廁所",
-                    data="ask_ai_location"
-                )
-            ),
+                action=LocationAction(label="AI 推薦附近廁所")  # AI 推薦
+            )
         ])
     )
-
 
 def make_retry_location_text(text="現在查詢人數有點多，我排一下隊；你可再傳一次位置或稍候幾秒～"):
     return TextSendMessage(
@@ -3526,9 +3519,19 @@ def handle_text(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_text] event too old; skip reply.")
         return
+
     uid = event.source.user_id
     text_raw = event.message.text or ""
-    text = text_raw.strip().lower()
+    text = text_raw.strip().lower()   # ← 注意：這裡會變小寫！
+
+    # ------------ 新增：偵測由 LocationAction 按鈕送出的文字 ------------
+    if text_raw == "傳送我的位置":
+        set_user_loc_mode(uid, "normal")
+
+    elif text_raw == "AI 推薦附近廁所" or text_raw == "ai推薦附近廁所":
+        # 若使用者按的是第二顆按鈕（AI專用）
+        set_user_loc_mode(uid, "ai")
+    # ---------------------------------------------------------------------
 
     if is_duplicate_and_mark_event(event):
         return
@@ -3540,6 +3543,7 @@ def handle_text(event):
 
     reply_messages = []
 
+    # === 刪除確認 ===
     if uid in pending_delete_confirm:
         info = pending_delete_confirm[uid]
         if text == "確認刪除":
@@ -3557,35 +3561,39 @@ def handle_text(event):
                 msg = "✅ 已刪除該廁所" if success else "❌ 移除失敗"
             del pending_delete_confirm[uid]
             reply_messages.append(TextSendMessage(text=msg))
+
         elif text == "取消":
             del pending_delete_confirm[uid]
             reply_messages.append(TextSendMessage(text="❌ 已取消刪除"))
+
         else:
             reply_messages.append(TextSendMessage(text="⚠️ 請輸入『確認刪除』或『取消』"))
 
+    # === 一般搜尋附近廁所 ===
     elif text == "附近廁所":
         user_search_count[uid] = user_search_count.get(uid, 0) + 1
-        set_user_loc_mode(uid, "normal")  # 標記這次是一般模式
+        set_user_loc_mode(uid, "normal")  # ← 設定成一般搜尋模式
         try:
             safe_reply(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
         except Exception as e:
             logging.error(f"附近廁所 quick reply 失敗: {e}")
             safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
-        return  # 確保這個事件處理完畢，不會往下執行其他回覆
+        return
 
-    elif text == "AI推薦附近廁所":
-        # 使用者主動要求用 AI 模式找廁所
+    # === AI 推薦附近廁所 ===
+    elif text == "ai推薦附近廁所":   # ← lower() 之後會變這樣
         set_user_loc_mode(uid, "ai")
         try:
             safe_reply(
                 event,
-                make_location_quick_reply("📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所")
+                make_location_quick_reply("📍 一鍵傳送位置，我會用 AI 幫你挑選最適合的附近廁所")
             )
         except Exception as e:
             logging.error(f"AI 推薦附近廁所 quick reply 失敗: {e}")
             safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
         return
 
+    # === 我的最愛 ===
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
         if not favs:
@@ -3599,6 +3607,7 @@ def handle_text(event):
             msg = create_toilet_flex_messages(favs, uid=uid)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
+    # === 我的貢獻 ===
     elif text == "我的貢獻":
         msg = create_my_contrib_flex(uid)
         if msg:
@@ -3606,6 +3615,7 @@ def handle_text(event):
         else:
             reply_messages.append(TextSendMessage(text="你還沒有新增過廁所喔。"))
 
+    # === 新增廁所 ===
     elif text == "新增廁所":
         base = "https://school-i9co.onrender.com/add"
         loc = get_user_location(uid)
@@ -3616,45 +3626,54 @@ def handle_text(event):
             url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
         reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
 
+    # === 意見回饋 ===
     elif text == "意見回饋":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
         reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
 
+    # === 合作信箱 ===
     elif text == "合作信箱":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
         ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
         reply_messages.append(TextSendMessage(
             text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
         ))
-    
+
+    # === 狀態回報 ===
     elif text == "狀態回報":
-        url = _status_liff_url()  # 不帶參數
+        url = _status_liff_url()
         safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
-    
+
+    # === 成就 ===
     elif text == "成就":
         reply_url = f"{PUBLIC_URL}/achievements_liff"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看成就 👉 {reply_url}"))
-    
+
+    # === 徽章 ===
     elif text == "徽章":
         reply_url = f"{PUBLIC_URL}/badges_liff"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看徽章 👉 {reply_url}"))
 
+    # === 使用回顧 ===
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
         reply_messages.append(TextSendMessage(text=summary))
 
     if reply_messages:
         safe_reply(event, reply_messages)
+
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_location] event too old; skip reply.")
         return
+
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
 
+    # --- 寫入查詢紀錄 ---
     try:
         conn = _get_db()
         cur = conn.cursor()
@@ -3668,6 +3687,7 @@ def handle_location(event):
     except Exception as e:
         logging.warning(f"記錄查詢次數失敗: {e}")
 
+    # --- Consent gate ---
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -3675,7 +3695,7 @@ def handle_location(event):
 
     if is_duplicate_and_mark_event(event):
         return
-
+    
     set_user_location(uid, (lat, lon))
 
     if not _try_acquire_loc_slot():
@@ -3686,32 +3706,38 @@ def handle_location(event):
         toilets = build_nearby_toilets(uid, lat, lon)
 
         if toilets:
+            mode = get_user_loc_mode(uid)   # ← 取得使用者目前模式 normal / ai
             msg = create_toilet_flex_messages(toilets, uid=uid)
 
-            mode = get_user_loc_mode(uid)
-
             if mode == "ai":
-                # 🔍 AI 模式：卡片 + AI 推薦說明 + 再找一次 quick reply
-                messages = [
-                    FlexSendMessage("附近廁所（AI 模式）", msg),
-                    make_location_quick_reply("想用 AI 再分析其他位置嗎？"),
-                ]
+
                 ai_text = build_ai_nearby_recommendation(uid, toilets)
+
+                messages = [FlexSendMessage("附近廁所（AI 模式）", msg)]
+
                 if ai_text:
-                    # 插在中間：先卡片、再 AI 說明、最後是「再找一次」提示
-                    messages.insert(1, TextSendMessage(text=ai_text))
+                    messages.append(TextSendMessage(text=ai_text))
+
+                # 直接附上兩顆按鈕（不管 normal 或 AI）
+                messages.append(
+                    make_location_quick_reply("要不要再用 AI 換個地點試試？")
+                )
+
+                safe_reply(event, messages)
+                return
+
             else:
-                # ⚡ 一般模式：只有卡片 + 再找一次，完全不叫 AI，保持速度
                 messages = [
                     FlexSendMessage("附近廁所", msg),
-                    make_location_quick_reply("想換個地點再找嗎？"),
+                    make_location_quick_reply("想換個地點再找嗎？")
                 ]
-
-            safe_reply(event, messages)
+                safe_reply(event, messages)
+                return
 
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
         safe_reply(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+
     finally:
         _release_loc_slot()
 
