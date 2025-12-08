@@ -14,9 +14,12 @@ from urllib.parse import quote, unquote
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
-    MessageEvent, TextMessage, LocationMessage,
-    FlexSendMessage, PostbackEvent, TextSendMessage, LocationAction, MessageAction
+    MessageEvent, TextMessage, TextSendMessage,
+    LocationMessage, FlexSendMessage,
+    QuickReply, QuickReplyButton, LocationAction,
+    PostbackAction
 )
+
 from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
