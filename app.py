@@ -25,6 +25,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from openai import OpenAI
+import html
 import joblib
 import threading
 import time
@@ -117,7 +118,11 @@ SHEETS_CACHE_MAX_ROWS = int(os.getenv("SHEETS_CACHE_MAX_ROWS", "20000"))
 
 _sheets_sem = threading.Semaphore(SHEETS_MAX_CONCURRENCY)
 _read_cache = {}            # key: (sheet_id, ws_title, op) -> {ts, val}
+_ENRICH_CACHE = {}
 _cache_lock = threading.Lock()
+_gsheet_lock = threading.Lock()
+_cache_lock = threading.Lock()
+_fallback_lock = threading.Lock()
 
 def _is_quota_or_retryable(exc: Exception) -> bool:
     s = str(exc).lower()
@@ -570,6 +575,9 @@ def norm_coord(x, ndigits=6):
         return f"{round(float(x), ndigits):.{ndigits}f}"
     except:
         return str(x)
+    
+def safe_html(s):
+    return html.escape(s or "")
 
 def _parse_lat_lon(lat_s, lon_s):
     try:
@@ -1990,7 +1998,7 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
                     "toilet_paper": val("paper"),
                     "accessibility": val("access"),
                     "time_of_use": val("time"),
-                    "comment": val("comment"),
+                    "comment": safe_html(val("comment")),
                     "cleanliness_score": val("pred"),
                     "created_at": val("created"),
                 })
@@ -2313,14 +2321,30 @@ def _stats_for_user(uid: str):
     total = 0
     by_status = {}
     last_ts = None
+
     for r in rows:
         if uid and r.get("user_id") != uid:
             continue
+
         total += 1
         s = r.get("status") or ""
         by_status[s] = by_status.get(s, 0) + 1
-        last_ts = r.get("timestamp") or last_ts
-    return {"total": total, "by_status": by_status, "last_ts": last_ts}
+
+        ts = r.get("timestamp")
+        if ts:
+            try:
+                # 比較時間，取最新的
+                t = datetime.fromisoformat(ts)
+                if last_ts is None or t > last_ts:
+                    last_ts = t
+            except:
+                pass
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "last_ts": last_ts.isoformat() if last_ts else None
+    }
 
 def get_search_count(uid: str) -> int:
     try:
@@ -2804,7 +2828,7 @@ def toilet_feedback(toilet_name):
                 "toilet_paper": val("paper"),
                 "accessibility": val("access"),
                 "time_of_use": val("time"),
-                "comment": val("comment"),
+                "comment": safe_html(val("comment")),
                 "cleanliness_score": str(sc) if sc is not None else "",
                 "created_at": val("created"),
             })
@@ -3041,19 +3065,28 @@ _ai_quota = {}  # key: (usage_key, date_str) -> count
 
 
 def _ai_quota_check_and_inc(key: str):
-    """
-    簡單的記憶體版每日額度統計：
-    - key 可以是 "usage:<uid>" 或 "fb:<uid>" 等
-    - 每日超過 AI_DAILY_LIMIT 次就會回 False，不再呼叫 OpenAI
-    """
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    k = (key, today)
-    with _ai_quota_lock:
-        cnt = _ai_quota.get(k, 0)
-        if cnt >= AI_DAILY_LIMIT:
-            return False, cnt
-        _ai_quota[k] = cnt + 1
-        return True, cnt + 1
+
+    conn = _get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT count FROM ai_quota WHERE key=? AND date=?", (key, today))
+    row = cur.fetchone()
+    cnt = row[0] if row else 0
+
+    if cnt >= AI_DAILY_LIMIT:
+        conn.close()
+        return False, cnt
+
+    if row:
+        cur.execute("UPDATE ai_quota SET count=? WHERE key=? AND date=?", (cnt+1, key, today))
+    else:
+        cur.execute("INSERT INTO ai_quota (key, date, count) VALUES (?, ?, ?)", (key, today, 1))
+
+    conn.commit()
+    conn.close()
+
+    return True, cnt+1
 
 @app.route("/api/ai_feedback_summary/<lat>/<lon>")
 def api_ai_feedback_summary(lat, lon):
@@ -3570,7 +3603,8 @@ def handle_text(event):
         ...
 
     elif text == "附近廁所":
-        user_search_count[uid] = user_search_count.get(uid, 0) + 1
+        with _dict_lock:
+            user_search_count[uid] = user_search_count.get(uid, 0) + 1
         set_user_loc_mode(uid, "normal")  # 標記為一般模式
         try:
             safe_reply(
@@ -3767,7 +3801,9 @@ def handle_location(event):
                         # 安全插入到 carousel 最前面
                         if isinstance(msg, dict) and msg.get("type") == "carousel":
                             msg.setdefault("contents", [])
-                            msg["contents"].insert(0, ai_bubble)
+                            contents = msg.get("contents")
+                            if isinstance(contents, list):
+                                contents.insert(0, ai_bubble)
                     except Exception as e:
                         logging.warning(f"插入 AI bubble 失敗: {e}")
 
@@ -3947,69 +3983,98 @@ _toilet_sheet_over_quota = False
 _toilet_sheet_over_quota_ts = 0
 
 def _fallback_store_toilet_row_locally(row_values):
-    # 1) 附加到 public_toilets.csv
-    try:
-        if not os.path.exists(TOILETS_FILE_PATH):
-            with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(PUBLIC_HEADERS)
-        header = ensure_toilet_sheet_header(worksheet)
-        idx = {h:i for i,h in enumerate(header)}
-        def v(col): 
-            try: return row_values[idx[col]]
-            except Exception: return ""
-        name = v("name"); addr = v("address")
-        lat_s = v("lat");  lon_s = v("lon")
-        with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "00000","0000000","未知里","USERADD", name, addr, "使用者補充",
-                lat_s, lon_s,
-                "普通級","公共場所","未知","使用者","0"
-            ])
-    except Exception as e:
-        logging.warning(f"備份至本地 CSV 失敗：{e}")
+    # CSV + SQLite 都不是 thread-safe，需要鎖住整段
+    with _fallback_lock:
 
-    # 2) 寫入 SQLite（cache.db）
-    try:
-        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-        cur = conn.cursor()
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_toilets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT, name TEXT, address TEXT,
-            lat TEXT, lon TEXT,
-            level TEXT, floor_hint TEXT, entrance_hint TEXT, access_note TEXT, open_hours TEXT,
-            timestamp TEXT
-        )
-        """)
-        header = ensure_toilet_sheet_header(worksheet)
-        idx = {h:i for i,h in enumerate(header)}
-        def v(col): 
-            try: return row_values[idx[col]]
-            except Exception: return ""
-        cur.execute("""
-            INSERT INTO user_toilets (user_id, name, address, lat, lon, level, floor_hint, entrance_hint, access_note, open_hours, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            v("user_id"), v("name"), v("address"),
-            v("lat"), v("lon"),
-            v("level"), v("floor_hint"), v("entrance_hint"), v("access_note"), v("open_hours"),
-            v("timestamp")
-        ))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.warning(f"備份至 SQLite 失敗：{e}")
+        # 1) 附加到 public_toilets.csv
+        try:
+            if not os.path.exists(TOILETS_FILE_PATH):
+                with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(PUBLIC_HEADERS)
+
+            header = ensure_toilet_sheet_header(worksheet)
+            idx = {h:i for i,h in enumerate(header)}
+
+            def v(col):
+                try:
+                    return row_values[idx[col]]
+                except Exception:
+                    return ""
+
+            name = v("name")
+            addr = v("address")
+            lat_s = v("lat")
+            lon_s = v("lon")
+
+            with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "00000","0000000","未知里","USERADD",
+                    name, addr, "使用者補充",
+                    lat_s, lon_s,
+                    "普通級","公共場所","未知","使用者","0"
+                ])
+
+        except Exception as e:
+            logging.warning(f"備份至本地 CSV 失敗：{e}")
+
+        # 2) 寫入 SQLite
+        try:
+            conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+            cur = conn.cursor()
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_toilets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT, name TEXT, address TEXT,
+                lat TEXT, lon TEXT,
+                level TEXT, floor_hint TEXT, entrance_hint TEXT,
+                access_note TEXT, open_hours TEXT, timestamp TEXT
+            )
+            """)
+
+            header = ensure_toilet_sheet_header(worksheet)
+            idx = {h:i for i,h in enumerate(header)}
+
+            def v(col):
+                try:
+                    return row_values[idx[col]]
+                except:
+                    return ""
+
+            cur.execute("""
+                INSERT INTO user_toilets (
+                    user_id, name, address, lat, lon,
+                    level, floor_hint, entrance_hint,
+                    access_note, open_hours, timestamp
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                v("user_id"), v("name"), v("address"),
+                v("lat"), v("lon"),
+                v("level"), v("floor_hint"), v("entrance_hint"),
+                v("access_note"), v("open_hours"),
+                v("timestamp")
+            ))
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            logging.warning(f"備份至 SQLite 失敗：{e}")
 
 def _append_toilet_row_safely(ws, row_values):
     global _toilet_sheet_over_quota, _toilet_sheet_over_quota_ts
+
     if _toilet_sheet_over_quota:
         _fallback_store_toilet_row_locally(row_values)
         return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
+
     try:
-        ws.append_row(row_values, value_input_option="USER_ENTERED")
+        with _gsheet_lock:
+            ws.append_row(row_values, value_input_option="USER_ENTERED")
         return ("ok", "已寫入 Google 試算表")
+
     except Exception as e:
         s = str(e)
         if "10000000" in s or "above the limit" in s:
@@ -4018,6 +4083,7 @@ def _append_toilet_row_safely(ws, row_values):
             _toilet_sheet_over_quota_ts = time.time()
             _fallback_store_toilet_row_locally(row_values)
             return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
+
         raise
 
 def _get_db():
@@ -4055,6 +4121,30 @@ def _ensure_search_table():
 
 _ensure_search_table()
 
+def _ensure_search_index():
+    conn = _get_db()
+    cur = conn.cursor()
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_search_user ON search_log(user_id)")
+    conn.commit()
+    conn.close()
+
+_ensure_search_index()
+# === 查詢紀錄 search_log ===
+def _ensure_ai_quota_table():
+    conn = _get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ai_quota (
+        key TEXT,
+        date TEXT,
+        count INTEGER,
+        PRIMARY KEY(key, date)
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+_ensure_ai_quota_table()
 
 def _queue_pending_row(row_values):
     try:
@@ -4080,7 +4170,8 @@ def _drain_pending(limit=200):
     for row_id, payload in rows:
         try:
             vals = json.loads(payload)
-            worksheet.append_row(vals, value_input_option="USER_ENTERED")
+            with _gsheet_lock:
+                worksheet.append_row(vals, value_input_option="USER_ENTERED")
             cur.execute("DELETE FROM pending_gsheet WHERE id=?", (row_id,))
             ok += 1
         except Exception as e:
