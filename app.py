@@ -3246,7 +3246,7 @@ def create_toilet_flex_messages(toilets, uid=None):
         pos   = (toilet.get("floor_hint") or "").strip()
         hours = (toilet.get("open_hours") or "").strip()
 
-        # 額外顯示行（避免重覆；自動截斷需有 _short_txt）
+        # 額外顯示行
         extra_lines = []
         st_obj = status_map.get((lat_s, lon_s))
         if st_obj and st_obj.get("status"):
@@ -3259,7 +3259,6 @@ def create_toilet_flex_messages(toilets, uid=None):
             })
 
         if lvl or pos:
-            # 兩者都有且不同 → 顯示「樓層」與「位置」兩行；否則合併成一行
             if lvl and pos and (lvl.strip().lower() != pos.strip().lower()):
                 extra_lines.append({
                     "type": "text",
@@ -3278,6 +3277,7 @@ def create_toilet_flex_messages(toilets, uid=None):
                     "text": _short_txt(f"🧭 位置/樓層：{val}"),
                     "size": "sm", "color": "#666666", "wrap": True
                 })
+
         if hours:
             extra_lines.append({
                 "type": "text",
@@ -3302,6 +3302,7 @@ def create_toilet_flex_messages(toilets, uid=None):
             "label": "查詢回饋",
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
+
         addr_raw = toilet.get('address') or ""
         addr_param = quote(addr_raw or "-")
         actions.append({
@@ -3313,19 +3314,14 @@ def create_toilet_flex_messages(toilets, uid=None):
                 f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
             )
         })
-        
-        ai_page_base = "https://school-i9co.onrender.com/ai_feedback_summary_page"
-        if uid:
-            ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}?uid={quote(uid)}"
-        else:
-            ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}"
 
+        ai_page_base = "https://school-i9co.onrender.com/ai_feedback_summary_page"
+        ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}" + (f"?uid={quote(uid)}" if uid else "")
         actions.append({
             "type": "uri",
             "label": "AI 回饋摘要",
             "uri": ai_uri
         })
-
 
         if toilet.get("type") == "favorite" and uid:
             actions.append({
@@ -3340,7 +3336,7 @@ def create_toilet_flex_messages(toilets, uid=None):
                 "data": f"add:{quote(title)}:{lat_s}:{lon_s}"
             })
 
-        # 主體內容：原本前三行 + extra_lines + 距離
+        # 主體內容
         body_contents = [
             {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
             {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
@@ -3348,7 +3344,7 @@ def create_toilet_flex_messages(toilets, uid=None):
         ] + extra_lines + [
             {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"}
         ]
-
+        
         bubble = {
             "type": "bubble",
             "body": {
@@ -3368,6 +3364,25 @@ def create_toilet_flex_messages(toilets, uid=None):
                 ]
             }
         }
+
+        if uid and get_user_loc_mode(uid) == "ai":
+            bubble["header"] = {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "🤖 AI 推薦",
+                        "weight": "bold",
+                        "size": "xs",
+                        "color": "#FFFFFF",
+                        "backgroundColor": "#4B8BF4",
+                        "paddingAll": "4px",
+                        "align": "start"
+                    }
+                ]
+            }
+
         bubbles.append(bubble)
 
     return {"type": "carousel", "contents": bubbles}
