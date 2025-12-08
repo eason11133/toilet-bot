@@ -3714,6 +3714,7 @@ def handle_location(event):
     lat = event.message.latitude
     lon = event.message.longitude
 
+    # 記錄查詢次數（寫 DB）
     try:
         conn = _get_db()
         cur = conn.cursor()
@@ -3735,6 +3736,7 @@ def handle_location(event):
     if is_duplicate_and_mark_event(event):
         return
 
+    # 記下使用者最近一次的位置
     set_user_location(uid, (lat, lon))
 
     if not _try_acquire_loc_slot():
@@ -3745,24 +3747,59 @@ def handle_location(event):
         toilets = build_nearby_toilets(uid, lat, lon)
 
         if toilets:
+            # 先產出原本的廁所 carousel
             msg = create_toilet_flex_messages(toilets, uid=uid)
+
+            # 看目前是一般模式還是 AI 模式
             mode = get_user_loc_mode(uid)
 
             if mode == "ai":
-                # 🔍 AI 模式：卡片 + AI 說明 + AI 模式的 quick reply（含「切換回一般模式」）
+                # 🧠 AI 模式：把 AI 推薦文字塞成「第一個 bubble」
+                ai_text = build_ai_nearby_recommendation(uid, toilets)
+
+                if ai_text:
+                    ai_bubble = {
+                        "type": "bubble",
+                        "body": {
+                            "type": "box",
+                            "layout": "vertical",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "🤖 AI 推薦分析",
+                                    "weight": "bold",
+                                    "size": "lg",
+                                    "wrap": True,
+                                },
+                                {
+                                    "type": "text",
+                                    "text": ai_text,
+                                    "size": "sm",
+                                    "color": "#444444",
+                                    "wrap": True,
+                                },
+                            ]
+                        }
+                    }
+                    try:
+                        # 安全插入到 carousel 最前面
+                        if isinstance(msg, dict) and msg.get("type") == "carousel":
+                            msg.setdefault("contents", [])
+                            msg["contents"].insert(0, ai_bubble)
+                    except Exception as e:
+                        logging.warning(f"插入 AI bubble 失敗: {e}")
+
+                # 👉 訊息數量：1 則 Flex + 1 則 quick-reply 文字
                 messages = [
                     FlexSendMessage("附近廁所（AI 模式）", msg),
-                    make_location_quick_reply("想用 AI 再分析其他位置嗎？", mode="ai"),
+                    make_location_quick_reply("想用 AI 再分析其他位置嗎？"),
                 ]
 
-                ai_text = build_ai_nearby_recommendation(uid, toilets)
-                if ai_text:
-                    messages.insert(1, TextSendMessage(text=ai_text))
             else:
-                # ⚡ 一般模式：不跑 AI，只給卡片 + 一般 quick reply（含「AI 推薦附近廁所」）
+                # ⚡ 一般模式：原本行為不變
                 messages = [
                     FlexSendMessage("附近廁所", msg),
-                    make_location_quick_reply("想換個地點再找嗎？", mode="normal"),
+                    make_location_quick_reply("想換個地點再找嗎？"),
                 ]
 
             safe_reply(event, messages)
