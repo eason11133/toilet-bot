@@ -3469,7 +3469,7 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 user_search_count = {}
-ai_recommend_mode = {}
+user_loc_mode = {}  # 新增：記錄使用者目前查廁所模式（"normal" or "ai"）
 
 # 建議：高併發時避免競態
 _dict_lock = threading.Lock()
@@ -3480,14 +3480,15 @@ def set_user_location(uid, latlon):
 def get_user_location(uid):
     with _dict_lock:
         return user_locations.get(uid)
-    
-def set_ai_recommend_mode(uid, mode: bool):
-    with _dict_lock:
-        ai_recommend_mode[uid] = bool(mode)
 
-def consume_ai_recommend_mode(uid) -> bool:
+def set_user_loc_mode(uid, mode):
     with _dict_lock:
-        return bool(ai_recommend_mode.pop(uid, False))
+        user_loc_mode[uid] = mode
+
+def get_user_loc_mode(uid):
+    with _dict_lock:
+        return user_loc_mode.get(uid, "normal")
+
 # === 共用執行緒池（避免每次臨時建立） ===
 _pool = ThreadPoolExecutor(max_workers=2)
 
@@ -3564,12 +3565,26 @@ def handle_text(event):
 
     elif text == "附近廁所":
         user_search_count[uid] = user_search_count.get(uid, 0) + 1
+        set_user_loc_mode(uid, "normal")  # 標記這次是一般模式
         try:
             safe_reply(event, make_location_quick_reply("📍 請點下方『發送我的位置』，我會幫你找最近的廁所"))
         except Exception as e:
             logging.error(f"附近廁所 quick reply 失敗: {e}")
             safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
         return  # 確保這個事件處理完畢，不會往下執行其他回覆
+
+    elif text == "AI推薦附近廁所":
+        # 使用者主動要求用 AI 模式找廁所
+        set_user_loc_mode(uid, "ai")
+        try:
+            safe_reply(
+                event,
+                make_location_quick_reply("📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所")
+            )
+        except Exception as e:
+            logging.error(f"AI 推薦附近廁所 quick reply 失敗: {e}")
+            safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+        return
 
     elif text == "我的最愛":
         favs = get_user_favorites(uid)
@@ -3636,12 +3651,10 @@ def handle_location(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_location] event too old; skip reply.")
         return
-
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
 
-    # === 記錄查詢次數（寫入 search_log） ===
     try:
         conn = _get_db()
         cur = conn.cursor()
@@ -3655,61 +3668,44 @@ def handle_location(event):
     except Exception as e:
         logging.warning(f"記錄查詢次數失敗: {e}")
 
-    # === 同意書檢查 ===
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
         return
 
-    # === 去重保護 ===
     if is_duplicate_and_mark_event(event):
         return
 
-    # 記住使用者最後一次定位（給「我的最愛」排序用）
     set_user_location(uid, (lat, lon))
 
-    # 檢查是否有可用的「定位查詢槽位」
     if not _try_acquire_loc_slot():
         safe_reply(event, make_retry_location_text())
         return
 
-    # ⚡ 這裡讀一次「是否為 AI 模式」
-    ai_mode = False
     try:
-        ai_mode = is_ai_recommend_mode(uid)
-    except Exception:
-        ai_mode = False
-
-    try:
-        # 1️⃣ 一律先找附近廁所（不管是不是 AI 模式，這步驟都一樣）
         toilets = build_nearby_toilets(uid, lat, lon)
 
         if toilets:
             msg = create_toilet_flex_messages(toilets, uid=uid)
 
-            # ✅ 基本回覆（卡片 + 再找一次 Quick Reply）
-            messages = [
-                FlexSendMessage("附近廁所", msg),
-                make_location_quick_reply("想換個地點再找嗎？"),
-            ]
+            mode = get_user_loc_mode(uid)
 
-            # 🧠 只有在「AI 模式」時，才多加一個 AI 推薦說明泡泡
-            if ai_mode:
-                try:
-                    ai_text = build_ai_nearby_recommendation(uid, toilets)
-                except Exception as e:
-                    logging.error(f"build_ai_nearby_recommendation error: {e}")
-                    ai_text = ""
-
+            if mode == "ai":
+                # 🔍 AI 模式：卡片 + AI 推薦說明 + 再找一次 quick reply
+                messages = [
+                    FlexSendMessage("附近廁所（AI 模式）", msg),
+                    make_location_quick_reply("想用 AI 再分析其他位置嗎？"),
+                ]
+                ai_text = build_ai_nearby_recommendation(uid, toilets)
                 if ai_text:
-                    # 插在中間：先卡片，再 AI 說明，最後是「再找一次」提示
+                    # 插在中間：先卡片、再 AI 說明、最後是「再找一次」提示
                     messages.insert(1, TextSendMessage(text=ai_text))
-
-                # 用完一次就關閉 AI 模式（下一次定位恢復成一般快版）
-                try:
-                    set_ai_recommend_mode(uid, False)
-                except Exception:
-                    pass
+            else:
+                # ⚡ 一般模式：只有卡片 + 再找一次，完全不叫 AI，保持速度
+                messages = [
+                    FlexSendMessage("附近廁所", msg),
+                    make_location_quick_reply("想換個地點再找嗎？"),
+                ]
 
             safe_reply(event, messages)
 
