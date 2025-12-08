@@ -272,9 +272,21 @@ def make_location_quick_reply(prompt_text="📍 請分享你的位置"):
     return TextSendMessage(
         text=prompt_text,
         quick_reply=QuickReply(items=[
-            QuickReplyButton(action=LocationAction(label="傳送我的位置"))
+            # 原本的：直接傳位置（不走 AI）
+            QuickReplyButton(
+                action=LocationAction(label="傳送我的位置")
+            ),
+
+            # 新增 AI 推薦附近廁所按鈕（Postback）
+            QuickReplyButton(
+                action=PostbackAction(
+                    label="AI 推薦附近廁所",
+                    data="ask_ai_location"
+                )
+            ),
         ])
     )
+
 
 def make_retry_location_text(text="現在查詢人數有點多，我排一下隊；你可再傳一次位置或稍候幾秒～"):
     return TextSendMessage(
@@ -2308,33 +2320,97 @@ def get_search_count(uid: str) -> int:
         return 0
 
 # ==== 成就 API ====
+ACHIEVEMENT_RULES = {
+    "first": {
+        "goal": 1,
+        "counter": "total",
+        "desc": "完成第一次狀態回報"
+    },
+    "helper10": {
+        "goal": 10,
+        "counter": "total",
+        "desc": "累積回報 10 次"
+    },
+    "pro_reporter": {
+        "goal": 20,
+        "counter": "total",
+        "desc": "累積回報 20 次"
+    },
+    "helper50": {
+        "goal": 50,
+        "counter": "total",
+        "desc": "累積回報 50 次"
+    },
+    "tissue_guard": {
+        "goal": 3,
+        "counter": "缺衛生紙",
+        "desc": "回報『缺衛生紙』滿 3 次"
+    },
+    "tissue_master": {
+        "goal": 10,
+        "counter": "缺衛生紙",
+        "desc": "回報『缺衛生紙』滿 10 次"
+    },
+    "queue_scout": {
+        "goal": 3,
+        "counter": "有人排隊",
+        "desc": "回報『有人排隊』滿 3 次"
+    },
+    "queue_commander": {
+        "goal": 10,
+        "counter": "有人排隊",
+        "desc": "回報『有人排隊』滿 10 次"
+    },
+    "maintenance_watcher": {
+        "goal": 3,
+        "counter": "暫停使用",
+        "desc": "回報『暫停使用』滿 3 次"
+    },
+    "good_news": {
+        "goal": 5,
+        "counter": "恢復正常",
+        "desc": "回報『恢復正常』滿 5 次"
+    },
+}
+
 @app.route("/api/achievements")
 def api_achievements():
     uid = request.args.get("user_id", "").strip()
     stats = _stats_for_user(uid)
-    t = stats["total"]
-    by = stats["by_status"]
+    total = int(stats.get("total", 0) or 0)
+    by = stats.get("by_status", {}) or {}
 
-    # 成就規則（你可自行擴充）
-    defs = [
-        {"key":"first","title":"新手上路","desc":"首次完成回報","goal":1},
-        {"key":"helper10","title":"勤勞小幫手","desc":"回報 10 次","goal":10},
-        {"key":"helper50","title":"超級幫手","desc":"回報 50 次","goal":50},
-        {"key":"tissue3","title":"紙巾守護者","desc":"回報『缺衛生紙』滿 3 次","goal":3, "counter": by.get("缺衛生紙", 0)},
-        {"key":"queue3","title":"排隊情報員","desc":"回報『有人排隊』滿 3 次","goal":3, "counter": by.get("有人排隊", 0)},
-    ]
+    # 用和徽章一樣的解鎖規則
+    unlocked_map = _badge_rules(uid)
+
     out = []
-    for d in defs:
-        progress = d.get("counter", t)  # 有指定 counter 的用 counter，否則用總次數
+    for cfg in BADGE_CONFIG:
+        key = cfg["key"]
+        rule = ACHIEVEMENT_RULES.get(key)
+        if not rule:
+            # 如果有在 BADGE_CONFIG 增加新 key 但還沒在 ACHIEVEMENT_RULES 定義，就先跳過
+            continue
+
+        counter_type = rule["counter"]
+        if counter_type == "total":
+            progress = total
+        else:
+            # counter_type 對應到 by_status 裡的中文 key，例如「缺衛生紙」「有人排隊」等
+            progress = int(by.get(counter_type, 0) or 0)
+
+        goal = rule["goal"]
+
         out.append({
-            "key": d["key"],
-            "title": d["title"],
-            "desc": d["desc"],
-            "goal": d["goal"],
+            "key": key,
+            "title": cfg["name"],            # 和徽章名稱一致
+            "desc": rule.get("desc", ""),    # 上面 ACHIEVEMENT_RULES 定義的描述
+            "goal": goal,
             "progress": progress,
-            "unlocked": progress >= d["goal"],
+            "unlocked": bool(unlocked_map.get(key, False)),
+            "icon": cfg.get("icon", ""),     # 多回傳 icon，前端要用也方便
         })
-    return {"ok": True, "achievements": out}
+
+    return {"ok": True, "achievements": out}, 200
 
 def build_usage_review_text(uid: str) -> str:
     # 改成用 DB 裡的 search_log 統計查詢次數
@@ -3154,7 +3230,7 @@ def _short_txt(s, n=60):
         return s
 
 # === 建立 Flex ===
-def create_toilet_flex_messages(toilets, show_delete=False, uid=None):
+def create_toilet_flex_messages(toilets, uid=None):
     indicators = build_feedback_index()
     status_map = build_status_index()
     bubbles = []
@@ -3391,6 +3467,7 @@ def home():
 user_locations = {}
 pending_delete_confirm = {}
 user_search_count = {}
+ai_recommend_mode = {}
 
 # 建議：高併發時避免競態
 _dict_lock = threading.Lock()
@@ -3401,7 +3478,14 @@ def set_user_location(uid, latlon):
 def get_user_location(uid):
     with _dict_lock:
         return user_locations.get(uid)
+    
+def set_ai_recommend_mode(uid, mode: bool):
+    with _dict_lock:
+        ai_recommend_mode[uid] = bool(mode)
 
+def consume_ai_recommend_mode(uid) -> bool:
+    with _dict_lock:
+        return bool(ai_recommend_mode.pop(uid, False))
 # === 共用執行緒池（避免每次臨時建立） ===
 _pool = ThreadPoolExecutor(max_workers=2)
 
@@ -3495,7 +3579,7 @@ def handle_text(event):
                 lat, lon = loc
                 for f in favs:
                     f["distance"] = haversine(lat, lon, f["lat"], f["lon"])
-            msg = create_toilet_flex_messages(favs, show_delete=True, uid=uid)
+            msg = create_toilet_flex_messages(favs, uid=uid)
             reply_messages.append(FlexSendMessage("我的最愛", msg))
 
     elif text == "我的貢獻":
@@ -3540,8 +3624,6 @@ def handle_text(event):
 
     elif text == "使用回顧":
         summary = build_usage_review_text(uid)
-
-        reply_messages.append(TextSendMessage(text=msg))
         reply_messages.append(TextSendMessage(text=summary))
 
     if reply_messages:
@@ -3552,10 +3634,12 @@ def handle_location(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_location] event too old; skip reply.")
         return
+
     uid = event.source.user_id
     lat = event.message.latitude
     lon = event.message.longitude
 
+    # === 記錄查詢次數（寫入 search_log） ===
     try:
         conn = _get_db()
         cur = conn.cursor()
@@ -3569,37 +3653,61 @@ def handle_location(event):
     except Exception as e:
         logging.warning(f"記錄查詢次數失敗: {e}")
 
+    # === 同意書檢查 ===
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
         return
 
+    # === 去重保護 ===
     if is_duplicate_and_mark_event(event):
         return
 
+    # 記住使用者最後一次定位（給「我的最愛」排序用）
     set_user_location(uid, (lat, lon))
 
+    # 檢查是否有可用的「定位查詢槽位」
     if not _try_acquire_loc_slot():
         safe_reply(event, make_retry_location_text())
         return
 
+    # ⚡ 這裡讀一次「是否為 AI 模式」
+    ai_mode = False
     try:
+        ai_mode = is_ai_recommend_mode(uid)
+    except Exception:
+        ai_mode = False
+
+    try:
+        # 1️⃣ 一律先找附近廁所（不管是不是 AI 模式，這步驟都一樣）
         toilets = build_nearby_toilets(uid, lat, lon)
 
         if toilets:
-            msg = create_toilet_flex_messages(toilets, show_delete=False, uid=uid)
+            msg = create_toilet_flex_messages(toilets, uid=uid)
 
-            # ✅ 原本就有的回覆內容
+            # ✅ 基本回覆（卡片 + 再找一次 Quick Reply）
             messages = [
                 FlexSendMessage("附近廁所", msg),
                 make_location_quick_reply("想換個地點再找嗎？"),
             ]
 
-            # 🧠 新增：AI 幫忙推薦附近廁所的說明文字
-            ai_text = build_ai_nearby_recommendation(uid, toilets)
-            if ai_text:
-                # 插在中間：先卡片、再 AI 說明、最後是「再找一次」的提示
-                messages.insert(1, TextSendMessage(text=ai_text))
+            # 🧠 只有在「AI 模式」時，才多加一個 AI 推薦說明泡泡
+            if ai_mode:
+                try:
+                    ai_text = build_ai_nearby_recommendation(uid, toilets)
+                except Exception as e:
+                    logging.error(f"build_ai_nearby_recommendation error: {e}")
+                    ai_text = ""
+
+                if ai_text:
+                    # 插在中間：先卡片，再 AI 說明，最後是「再找一次」提示
+                    messages.insert(1, TextSendMessage(text=ai_text))
+
+                # 用完一次就關閉 AI 模式（下一次定位恢復成一般快版）
+                try:
+                    set_ai_recommend_mode(uid, False)
+                except Exception:
+                    pass
 
             safe_reply(event, messages)
 
@@ -3626,6 +3734,16 @@ def handle_postback(event):
         if data == "ask_location":
             safe_reply(event, make_location_quick_reply("📍 請點『傳送我的位置』，我立刻幫你找廁所"))
             return
+        
+        if data == "ask_ai_location":
+            # 開啟「下一次傳位置就用 AI 分析」模式
+            set_ai_recommend_mode(uid, True)
+            safe_reply(
+                event,
+                make_location_quick_reply("📍 請點『傳送我的位置』，我會用 AI 幫你挑附近的廁所")
+            )
+            return
+
         
         if data.startswith("add:"):
             _, qname, lat, lon = data.split(":", 3)
