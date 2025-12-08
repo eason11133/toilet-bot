@@ -3399,24 +3399,6 @@ def create_toilet_flex_messages(toilets, uid=None):
             }
         }
 
-        if uid and get_user_loc_mode(uid) == "ai":
-            bubble["header"] = {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "🤖 AI 推薦",
-                        "weight": "bold",
-                        "size": "xs",
-                        "color": "#FFFFFF",
-                        "backgroundColor": "#4B8BF4",
-                        "paddingAll": "4px",
-                        "align": "start"
-                    }
-                ]
-            }
-
         bubbles.append(bubble)
 
     return {"type": "carousel", "contents": bubbles}
