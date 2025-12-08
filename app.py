@@ -3734,14 +3734,12 @@ def handle_postback(event):
             return
         
         if data == "ask_ai_location":
-            # 開啟「下一次傳位置就用 AI 分析」模式
-            set_ai_recommend_mode(uid, True)
+            set_user_loc_mode(uid, "ai")  # 改這裡！
             safe_reply(
                 event,
                 make_location_quick_reply("📍 請點『傳送我的位置』，我會用 AI 幫你挑附近的廁所")
             )
             return
-
         
         if data.startswith("add:"):
             _, qname, lat, lon = data.split(":", 3)
