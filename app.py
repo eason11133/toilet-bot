@@ -17,9 +17,8 @@ from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
     LocationMessage, FlexSendMessage,
     QuickReply, QuickReplyButton, LocationAction,
-    PostbackAction
+    PostbackAction, PostbackEvent
 )
-
 from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
