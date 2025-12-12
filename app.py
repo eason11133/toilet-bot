@@ -3727,6 +3727,7 @@ def handle_location(event):
         logging.warning("[handle_location] event too old; skip reply.")
         return
     uid = event.source.user_id
+    time.sleep(5)
     lat = event.message.latitude
     lon = event.message.longitude
 
