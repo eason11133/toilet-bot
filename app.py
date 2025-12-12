@@ -4097,7 +4097,7 @@ def _append_toilet_row_safely(ws, row_values):
             logging.error("🧱 Google 試算表達到 1e7 cells 上限，啟用本機暫存。")
             _toilet_sheet_over_quota = True
             _toilet_sheet_over_quota_ts = time.time()
-            _fallback_store_toilet_row_locally(row_values)
+            logging.error("❌ Sheets 已滿，SQLite fallback 已停用，請處理資料儲存策略")
             return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
 
         raise
