@@ -1942,22 +1942,24 @@ def submit_feedback():
         if payload_json and isinstance(payload_json, dict) and len(payload_json) > 0:
             data = payload_json
             src = "json"
-            getv = lambda k, d="": (data.get(k) or d)
+            getv = lambda k, d="": (data.get(k) if data.get(k) is not None else d)
             debug_dump = str(data)
         else:
             data = request.form
             src = "form"
-            getv = lambda k, d="": (data.get(k, d) or d)
+            getv = lambda k, d="": (data.get(k, d) if data.get(k, d) is not None else d)
             try:
                 debug_dump = str(data.to_dict(flat=True))
             except Exception:
                 debug_dump = "<form>"
 
-        name = getv("name", "").strip()
-        address = getv("address", "").strip()
+        # ✅ 基本欄位（統一用 getv）
+        name = (getv("name", "") or "").strip()
+        address = (getv("address", "") or "").strip()
 
-        lat_raw = (request.form.get("lat") or request.args.get("lat") or "").strip()
-        lon_raw = (request.form.get("lon") or request.args.get("lon") or "").strip()
+        # ✅ 修正重點：lat/lon 也統一用 getv，並允許從 args 補救
+        lat_raw = ((getv("lat", "") or request.args.get("lat") or "")).strip()
+        lon_raw = ((getv("lon", "") or request.args.get("lon") or "")).strip()
 
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
         if lat_f is None or lon_f is None:
@@ -1972,29 +1974,33 @@ def submit_feedback():
         lat = norm_coord(lat_f)
         lon = norm_coord(lon_f)
 
-        rating = getv("rating", "").strip()
-        toilet_paper = getv("toilet_paper", "").strip()
-        accessibility = getv("accessibility", "").strip()
-        time_of_use = getv("time_of_use", "").strip()
-        comment = getv("comment", "").strip()
-        floor_hint = getv("floor_hint", "").strip()
+        # ✅ 其他欄位（統一用 getv）
+        rating = ((getv("rating", "") or "")).strip()
+        toilet_paper = ((getv("toilet_paper", "") or "")).strip()
+        accessibility = ((getv("accessibility", "") or "")).strip()
+        time_of_use = ((getv("time_of_use", "") or "")).strip()
+        comment = ((getv("comment", "") or "")).strip()
+        floor_hint = ((getv("floor_hint", "") or "")).strip()
 
+        # ✅ 必填檢查（與前端 required 對齊）
         missing = []
         if not name: missing.append("name")
         if not rating: missing.append("rating")
         if not lat_raw: missing.append("lat")
         if not lon_raw: missing.append("lon")
+        if not toilet_paper: missing.append("toilet_paper")
+        if not accessibility: missing.append("accessibility")
 
         if missing:
             return (
-                "缺少必要欄位（需要：name、rating、lat、lon）\n"
+                "缺少必要欄位（需要：name、rating、toilet_paper、accessibility、lat、lon）\n"
                 f"missing={missing}\n"
                 f"src={src}\n"
-                f"收到：name={name}, rating={rating}, lat={lat_raw}, lon={lon_raw}\n"
+                f"收到：name={name}, rating={rating}, paper={toilet_paper}, access={accessibility}, lat={lat_raw}, lon={lon_raw}\n"
                 f"payload={debug_dump}"
             ), 400
 
-        # rating 檢查
+        # ✅ rating 檢查
         try:
             r = int(rating)
             if r < 1 or r > 10:
