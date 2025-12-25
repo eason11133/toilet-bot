@@ -1933,6 +1933,10 @@ def api_status_report():
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
     _ensure_sheets_ready()
+    logging.info(f"[submit_feedback] content_type={request.content_type}")
+    logging.info(f"[submit_feedback] form={request.form.to_dict(flat=True)}")
+    logging.info(f"[submit_feedback] args={request.args.to_dict(flat=True)}")
+
     try:
         payload_json = request.get_json(silent=True)
         if payload_json and isinstance(payload_json, dict) and len(payload_json) > 0:
@@ -1952,8 +1956,8 @@ def submit_feedback():
         name = getv("name", "").strip()
         address = getv("address", "").strip()
 
-        lat_raw = str(getv("lat", "")).strip()
-        lon_raw = str(getv("lon", "")).strip()
+        lat_raw = (request.form.get("lat") or request.args.get("lat") or "").strip()
+        lon_raw = (request.form.get("lon") or request.args.get("lon") or "").strip()
 
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
         if lat_f is None or lon_f is None:
