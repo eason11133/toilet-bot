@@ -2008,7 +2008,7 @@ def submit_feedback():
         except ValueError:
             return "清潔度評分必須是數字", 400
 
-        if floor_hint and len(floor_hint) < 4:
+        if floor_hint and len(floor_hint) < 1:
             return "『位置描述』太短，請至少 4 個字", 400
 
         if not floor_hint:
