@@ -1041,11 +1041,15 @@ def is_duplicate_and_mark_event(event) -> bool:
 
     return False
 
-def _too_old_to_reply(event, limit_seconds=55):
+def _too_old_to_reply(event, limit_seconds=None):
     try:
-        evt_ms = int(getattr(event, "timestamp", 0))  # 毫秒
+        if limit_seconds is None:
+            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "180"))
+
+        evt_ms = int(getattr(event, "timestamp", 0))
         if evt_ms <= 0:
             return False
+
         now_ms = int(time.time() * 1000)
         return (now_ms - evt_ms) > (limit_seconds * 1000)
     except Exception:
@@ -1557,15 +1561,53 @@ def get_user_favorites(uid):
 # === 地址轉經緯度 ===
 def geocode_address(address):
     try:
-        ua_email = os.getenv("CONTACT_EMAIL", "you@example.com")
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={quote(address)}"
-        headers = {"User-Agent": f"ToiletBot/1.0 (+{ua_email})"}
+        ua_email = os.getenv("CONTACT_EMAIL", "school-toilet-bot@gmail.com")
+
+        url = (
+            "https://nominatim.openstreetmap.org/search"
+            f"?format=json&q={quote(address)}"
+        )
+
+        headers = {
+            "User-Agent": f"ToiletBot/1.0 (+{ua_email})"
+        }
+
         resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json()
-        if resp.status_code == 200 and data:
-            return float(data[0]['lat']), float(data[0]['lon'])
+
+        # ① HTTP 狀態碼檢查
+        if resp.status_code != 200:
+            logging.error(
+                f"地址轉經緯度失敗: HTTP {resp.status_code}, text={resp.text[:200]}"
+            )
+            return None, None
+
+        # ② 空回應檢查
+        if not resp.text or not resp.text.strip():
+            logging.error("地址轉經緯度失敗: 回傳內容為空")
+            return None, None
+
+        # ③ JSON 解析保護
+        try:
+            data = resp.json()
+        except Exception:
+            logging.error(
+                f"地址轉經緯度失敗: 非 JSON 回應, text={resp.text[:200]}"
+            )
+            return None, None
+
+        # ④ 資料內容檢查
+        if not data:
+            logging.warning(f"地址轉經緯度失敗: 查無結果 address={address}")
+            return None, None
+
+        # ⑤ 正常回傳
+        lat = float(data[0].get("lat"))
+        lon = float(data[0].get("lon"))
+        return lat, lon
+
     except Exception as e:
-        logging.error(f"地址轉經緯度失敗: {e}")
+        logging.error(f"地址轉經緯度例外錯誤: {e}", exc_info=True)
+
     return None, None
 
 # === 附近廁所 API ===
