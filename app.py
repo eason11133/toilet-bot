@@ -1934,28 +1934,53 @@ def api_status_report():
 def submit_feedback():
     _ensure_sheets_ready()
     try:
-        data = request.form
-        name = (data.get("name","") or "").strip()
-        address = (data.get("address","") or "").strip()
+        # ✅ 同時支援 form-data 與 JSON
+        payload_json = request.get_json(silent=True)
+        if payload_json and isinstance(payload_json, dict) and len(payload_json) > 0:
+            data = payload_json
+            src = "json"
+        else:
+            data = request.form
+            src = "form"
 
-        lat_raw = data.get("lat","")
-        lon_raw = data.get("lon","")
+        # ✅ 方便你 debug：看後端到底收到什麼
+        try:
+            if src == "json":
+                logging.info(f"📥 /submit_feedback payload(src=json) = {data}")
+            else:
+                logging.info(f"📥 /submit_feedback payload(src=form) = {data.to_dict(flat=True)}")
+        except Exception:
+            pass
+
+        name = ((data.get("name") or "") if src == "json" else (data.get("name","") or "")).strip()
+        address = ((data.get("address") or "") if src == "json" else (data.get("address","") or "")).strip()
+
+        lat_raw = (data.get("lat") or "") if src == "json" else data.get("lat","")
+        lon_raw = (data.get("lon") or "") if src == "json" else data.get("lon","")
+
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
         if lat_f is None or lon_f is None:
-            return "座標格式錯誤", 400
+            # ✅ 回更清楚，讓你知道到底傳了什麼
+            return f"座標格式錯誤（lat={lat_raw}, lon={lon_raw}）", 400
+
         lat = norm_coord(lat_f)
         lon = norm_coord(lon_f)
 
-        rating = (data.get("rating","") or "").strip()
-        toilet_paper = (data.get("toilet_paper","") or "").strip()
-        accessibility = (data.get("accessibility","") or "").strip()
-        time_of_use = (data.get("time_of_use","") or "").strip()
-        comment = (data.get("comment","") or "").strip()
-        floor_hint = (data.get("floor_hint","") or "").strip()
+        rating = ((data.get("rating") or "") if src == "json" else (data.get("rating","") or "")).strip()
+        toilet_paper = ((data.get("toilet_paper") or "") if src == "json" else (data.get("toilet_paper","") or "")).strip()
+        accessibility = ((data.get("accessibility") or "") if src == "json" else (data.get("accessibility","") or "")).strip()
+        time_of_use = ((data.get("time_of_use") or "") if src == "json" else (data.get("time_of_use","") or "")).strip()
+        comment = ((data.get("comment") or "") if src == "json" else (data.get("comment","") or "")).strip()
+        floor_hint = ((data.get("floor_hint") or "") if src == "json" else (data.get("floor_hint","") or "")).strip()
 
+        # ✅ 必填檢查：這裡最常讓你 400
         if not all([name, rating, lat, lon]):
-            return "缺少必要欄位（需要：name、rating、lat、lon）", 400
+            return (
+                "缺少必要欄位（需要：name、rating、lat、lon）\n"
+                f"目前收到：name={name}, rating={rating}, lat={lat_raw}, lon={lon_raw}"
+            ), 400
 
+        # rating 檢查
         try:
             r = int(rating)
             if r < 1 or r > 10:
@@ -2016,11 +2041,14 @@ def submit_feedback():
             name, address, rating, toilet_paper, accessibility, time_of_use,
             comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             floor_hint
-        ])
+        ], value_input_option="USER_ENTERED")
 
-        return redirect(url_for("feedback_form", toilet_name=name, address=address or "") + f"?lat={lat}&lon={lon}")
+        # ✅ 你現在用的是 feedback_form(name版) 但你前面已經說「名稱版不穩」
+        # 建議直接導向座標版（你程式已經有 /toilet_feedback_by_coord）
+        return redirect(f"/toilet_feedback_by_coord/{lat}/{lon}")
+
     except Exception as e:
-        logging.error(f"❌ 提交回饋表單錯誤: {e}")
+        logging.error(f"❌ 提交回饋表單錯誤: {e}", exc_info=True)
         return "提交失敗", 500
 
 # === 讀座標的回饋清單 ===
