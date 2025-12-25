@@ -1934,50 +1934,60 @@ def api_status_report():
 def submit_feedback():
     _ensure_sheets_ready()
     try:
-        # ✅ 同時支援 form-data 與 JSON
         payload_json = request.get_json(silent=True)
         if payload_json and isinstance(payload_json, dict) and len(payload_json) > 0:
             data = payload_json
             src = "json"
+            getv = lambda k, d="": (data.get(k) or d)
+            debug_dump = str(data)
         else:
             data = request.form
             src = "form"
+            getv = lambda k, d="": (data.get(k, d) or d)
+            try:
+                debug_dump = str(data.to_dict(flat=True))
+            except Exception:
+                debug_dump = "<form>"
 
-        # ✅ 方便你 debug：看後端到底收到什麼
-        try:
-            if src == "json":
-                logging.info(f"📥 /submit_feedback payload(src=json) = {data}")
-            else:
-                logging.info(f"📥 /submit_feedback payload(src=form) = {data.to_dict(flat=True)}")
-        except Exception:
-            pass
+        name = getv("name", "").strip()
+        address = getv("address", "").strip()
 
-        name = ((data.get("name") or "") if src == "json" else (data.get("name","") or "")).strip()
-        address = ((data.get("address") or "") if src == "json" else (data.get("address","") or "")).strip()
-
-        lat_raw = (data.get("lat") or "") if src == "json" else data.get("lat","")
-        lon_raw = (data.get("lon") or "") if src == "json" else data.get("lon","")
+        lat_raw = str(getv("lat", "")).strip()
+        lon_raw = str(getv("lon", "")).strip()
 
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
         if lat_f is None or lon_f is None:
-            # ✅ 回更清楚，讓你知道到底傳了什麼
-            return f"座標格式錯誤（lat={lat_raw}, lon={lon_raw}）", 400
+            return (
+                "座標格式錯誤\n"
+                f"src={src}\n"
+                f"lat_raw={lat_raw}\n"
+                f"lon_raw={lon_raw}\n"
+                f"payload={debug_dump}"
+            ), 400
 
         lat = norm_coord(lat_f)
         lon = norm_coord(lon_f)
 
-        rating = ((data.get("rating") or "") if src == "json" else (data.get("rating","") or "")).strip()
-        toilet_paper = ((data.get("toilet_paper") or "") if src == "json" else (data.get("toilet_paper","") or "")).strip()
-        accessibility = ((data.get("accessibility") or "") if src == "json" else (data.get("accessibility","") or "")).strip()
-        time_of_use = ((data.get("time_of_use") or "") if src == "json" else (data.get("time_of_use","") or "")).strip()
-        comment = ((data.get("comment") or "") if src == "json" else (data.get("comment","") or "")).strip()
-        floor_hint = ((data.get("floor_hint") or "") if src == "json" else (data.get("floor_hint","") or "")).strip()
+        rating = getv("rating", "").strip()
+        toilet_paper = getv("toilet_paper", "").strip()
+        accessibility = getv("accessibility", "").strip()
+        time_of_use = getv("time_of_use", "").strip()
+        comment = getv("comment", "").strip()
+        floor_hint = getv("floor_hint", "").strip()
 
-        # ✅ 必填檢查：這裡最常讓你 400
-        if not all([name, rating, lat, lon]):
+        missing = []
+        if not name: missing.append("name")
+        if not rating: missing.append("rating")
+        if not lat_raw: missing.append("lat")
+        if not lon_raw: missing.append("lon")
+
+        if missing:
             return (
                 "缺少必要欄位（需要：name、rating、lat、lon）\n"
-                f"目前收到：name={name}, rating={rating}, lat={lat_raw}, lon={lon_raw}"
+                f"missing={missing}\n"
+                f"src={src}\n"
+                f"收到：name={name}, rating={rating}, lat={lat_raw}, lon={lon_raw}\n"
+                f"payload={debug_dump}"
             ), 400
 
         # rating 檢查
@@ -2043,8 +2053,6 @@ def submit_feedback():
             floor_hint
         ], value_input_option="USER_ENTERED")
 
-        # ✅ 你現在用的是 feedback_form(name版) 但你前面已經說「名稱版不穩」
-        # 建議直接導向座標版（你程式已經有 /toilet_feedback_by_coord）
         return redirect(f"/toilet_feedback_by_coord/{lat}/{lon}")
 
     except Exception as e:
