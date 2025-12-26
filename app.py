@@ -3191,6 +3191,9 @@ def _ai_quota_check_and_inc(key: str):
 
     return True, cnt+1
 
+from flask import jsonify
+import json
+
 @app.route("/api/ai_feedback_summary/<lat>/<lon>")
 def api_ai_feedback_summary(lat, lon):
     """
@@ -3200,25 +3203,31 @@ def api_ai_feedback_summary(lat, lon):
     try:
         _ensure_sheets_ready()
         if feedback_sheet is None:
-            return {"success": False, "message": "feedback_sheet not ready"}, 503
+            return jsonify({"success": False, "message": "feedback_sheet not ready"}), 503
 
         if client is None:
-            return {"success": False, "message": "AI 金鑰未設定"}, 500
+            return jsonify({"success": False, "message": "AI 金鑰未設定"}), 500
+
+        # ✅ 先驗證 lat/lon
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except Exception:
+            return jsonify({"success": False, "message": "lat/lon 格式錯誤"}), 400
 
         # 1. 從雲端回饋表抓資料
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         if not header or not data:
-            # ✅ 這裡「直接回沒有資料」，不呼叫 AI，避免浪費 token
-            return {
+            return jsonify({
                 "success": True,
                 "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
                 "data": [],
                 "has_data": False
-            }, 200
+            }), 200
 
         idx = _feedback_indices(header)
         if idx["lat"] is None or idx["lon"] is None:
-            return {"success": False, "message": "lat/lon 欄位缺少"}, 400
+            return jsonify({"success": False, "message": "lat/lon 欄位缺少"}), 400
 
         def close(a, b, tol=1e-4):
             try:
@@ -3230,47 +3239,54 @@ def api_ai_feedback_summary(lat, lon):
         for r in data:
             if len(r) <= max(idx["lat"], idx["lon"]):
                 continue
-            if not (close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon)):
+            if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
                 continue
 
             def v(key):
                 i = idx.get(key)
                 return (r[i] if i is not None and i < len(r) else "").strip()
 
-            item = {
+            matched.append({
                 "rating":     v("rating"),
                 "paper":      v("paper"),
                 "access":     v("access"),
                 "comment":    v("comment"),
                 "created_at": v("created"),
-            }
-            matched.append(item)
+            })
 
         if not matched:
-            # ✅ 一樣不呼叫 AI，直接回「沒有資料」
-            return {
+            return jsonify({
                 "success": True,
                 "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
                 "data": [],
                 "has_data": False
-            }, 200
-        
+            }), 200
+
+        # ✅ 限制最多送給 AI 的筆數（避免 token 爆炸）
+        matched = matched[:30]
+
         # 🔹 依 user_id 做每日額度控制（若沒有 uid，就退而求其次用 IP）
         uid = (request.args.get("uid") or "").strip()
-        quota_key = uid or f"ip:{request.remote_addr or 'unknown'}"
+
+        # ✅ 代理環境下 remote_addr 可能不準：嘗試取 X-Forwarded-For
+        xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        ip = xff or (request.remote_addr or "unknown")
+
+        quota_key = uid or f"ip:{ip}"
 
         ok, used = _ai_quota_check_and_inc(f"fb:{quota_key}")
         if not ok:
-            # 已達今日上限：不再呼叫 OpenAI，直接回簡短文字
-            return {
+            return jsonify({
                 "success": True,
                 "summary": "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
                 "data": matched,
                 "has_data": True,
                 "limit_reached": True
-            }, 200
-        
-        # 2. 組 AI Prompt，請模型做中文摘要與趨勢判斷
+            }), 200
+
+        # 2. 組 AI Prompt（用正式 JSON）
+        matched_json = json.dumps(matched, ensure_ascii=False)
+
         prompt = f"""
 你是一個廁所清潔度分析助理，請閱讀以下回饋資料（JSON 格式），並輸出：
 
@@ -3282,7 +3298,7 @@ def api_ai_feedback_summary(lat, lon):
 請使用繁體中文、條列式或短句，讓一般使用者容易閱讀。
 
 以下是回饋資料（JSON）：
-{matched}
+{matched_json}
         """.strip()
 
         ai_resp = client.chat.completions.create(
@@ -3295,16 +3311,16 @@ def api_ai_feedback_summary(lat, lon):
 
         summary = (ai_resp.choices[0].message.content or "").strip()
 
-        return {
+        return jsonify({
             "success": True,
             "summary": summary,
             "data": matched,
             "has_data": True
-        }, 200
+        }), 200
 
     except Exception as e:
         logging.error(f"AI summary error: {e}", exc_info=True)
-        return {"success": False, "message": "AI error"}, 500
+        return jsonify({"success": False, "message": "AI error"}), 500
 
 # === 同意頁面 / 隱私頁 ===
 @app.route("/consent", methods=["GET"])
