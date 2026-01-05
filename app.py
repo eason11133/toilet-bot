@@ -1540,7 +1540,7 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                     "floor_hint": floor_hint,
                 }
 
-                heapq.heappush(heap, (-dist, item))
+                heapq.heappush(heap, (-dist, id(item), item))   
                 if len(heap) > limit:
                     heapq.heappop(heap)
 
@@ -1548,7 +1548,7 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
         return []
 
-    return [item for _, item in sorted(heap, key=lambda x: -x[0])]
+    return [item for _, _, item in sorted(heap, key=lambda x: -x[0])]
 
 # === 合併 + 去重 ===
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
