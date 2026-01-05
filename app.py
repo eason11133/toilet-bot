@@ -370,6 +370,21 @@ def t(key, uid):
     lang = get_user_lang(uid)
     return TEXTS.get(key, {}).get(lang, TEXTS.get(key, {}).get("zh", ""))
 
+def L(uid, zh_or_key, en=None):
+    lang = get_user_lang(uid)
+
+    # key 模式（走 TEXTS）
+    if en is None:
+        if zh_or_key in TEXTS:
+            return TEXTS[zh_or_key].get(
+                lang,
+                TEXTS[zh_or_key].get("zh", "")
+            )
+        return zh_or_key  # fallback，不噴錯
+
+    # 舊版 zh / en 模式
+    return en if lang == "en" else zh_or_key
+
 # === consent 背景排隊（429 時不回 500） ===
 _consent_q = []                    
 _consent_lock = threading.Lock()    
