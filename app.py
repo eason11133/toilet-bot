@@ -289,6 +289,46 @@ class SafeWS:
     def title(self):
         return self._ws.title
 
+# 使用者語言（記憶體版，之後可換 DB）
+user_lang = {}
+
+def set_user_lang(uid, lang):
+    user_lang[uid] = lang
+
+def get_user_lang(uid):
+    return user_lang.get(uid, "zh")  # 預設中文
+
+TEXTS = {
+    "nearby_toilet": {
+        "zh": "附近廁所",
+        "en": "Nearby Toilets"
+    },
+    "ask_location": {
+        "zh": "請傳送你的位置",
+        "en": "Please share your location"
+    },
+    "no_result": {
+        "zh": "附近沒有找到廁所",
+        "en": "No toilets found nearby"
+    },
+    "loading": {
+        "zh": "查詢中，請稍候…",
+        "en": "Searching, please wait…"
+    },
+    "added_favorite": {
+        "zh": "已加入最愛 ⭐",
+        "en": "Added to favorites ⭐"
+    },
+    "removed_favorite": {
+        "zh": "已移除最愛",
+        "en": "Removed from favorites"
+    },
+}
+
+def t(key, uid):
+    lang = get_user_lang(uid)
+    return TEXTS.get(key, {}).get(lang, TEXTS.get(key, {}).get("zh", ""))
+
 # === consent 背景排隊（429 時不回 500） ===
 _consent_q = []                    
 _consent_lock = threading.Lock()    
@@ -3487,6 +3527,16 @@ def _short_txt(s, n=60):
 def create_toilet_flex_messages(toilets, uid=None):
     indicators = build_feedback_index()
     status_map = build_status_index()
+
+    # === 資料來源顯示對照 ===
+    SOURCE_LABEL = {
+        "public_csv": "政府開放資料",
+        "sheet": "使用者新增",
+        "osm": "OpenStreetMap",
+        "user": "使用者新增",
+        "favorite": "我的最愛",
+    }
+
     bubbles = []
     for toilet in toilets[:5]:
         actions = []
@@ -3499,6 +3549,10 @@ def create_toilet_flex_messages(toilets, uid=None):
         if (not title) or title == "無名稱":
             ph = toilet.get("place_hint")
             title = f"{ph}（附近）廁所" if ph else "（未命名）廁所"
+
+        # === 來源文字（小小顯示）===
+        source_type = toilet.get("type", "")
+        source_text = SOURCE_LABEL.get(source_type, "其他來源")
 
         # 只讀三個欄位（可能為空）
         lvl   = (toilet.get("level") or "").strip()
@@ -3595,13 +3649,20 @@ def create_toilet_flex_messages(toilets, uid=None):
                 "data": f"add:{quote(title)}:{lat_s}:{lon_s}"
             })
 
-        # 主體內容
+        # === 主體內容（加上資料來源）===
         body_contents = [
             {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
             {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
             {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
         ] + extra_lines + [
-            {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"}
+            {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"},
+            {
+                "type": "text",
+                "text": f"資料來源：{source_text}",
+                "size": "xs",
+                "color": "#AAAAAA",
+                "wrap": True
+            }
         ]
 
         bubble = {
@@ -3811,8 +3872,6 @@ def handle_text(event):
         ...
 
     elif text == "附近廁所":
-        with _dict_lock:
-            user_search_count[uid] = user_search_count.get(uid, 0) + 1
         set_user_loc_mode(uid, "normal")  # 標記為一般模式
         try:
             safe_reply(
@@ -3913,7 +3972,7 @@ def handle_text(event):
     # === 成就 ===
     elif text == "成就":
         reply_url = f"{PUBLIC_URL}/achievements_liff"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看成就 👉 {reply_url}"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{t('view_achievements', uid)} 👉 {reply_url}"))
 
     # === 徽章 ===
     elif text == "徽章":
@@ -4040,8 +4099,28 @@ def handle_location(event):
 # === Postback ===
 @handler.add(PostbackEvent)
 def handle_postback(event):
+    data = event.postback.data
     uid = event.source.user_id
-    data = event.postback.data or ""
+
+    # ===== 切成英文 =====
+    if data == "set_lang:en":
+        set_user_lang(uid, "en")
+
+        line_bot_api.link_rich_menu_id_to_user(
+            uid,
+            get_richmenu_id_by_alias("richmenu-alias-main-en")
+        )
+        return
+
+    # ===== 切回中文 =====
+    if data == "set_lang:zh":
+        set_user_lang(uid, "zh")
+
+        line_bot_api.link_rich_menu_id_to_user(
+            uid,
+            get_richmenu_id_by_alias("richmenu-alias-main")
+        )
+        return
 
     if is_duplicate_and_mark_event(event):
         return
