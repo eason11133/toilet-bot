@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import requests
 import traceback
+import heapq
 from collections import OrderedDict
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
@@ -97,6 +98,23 @@ class SimpleLRU(OrderedDict):
         self.move_to_end(key)
         while len(self) > self.maxsize:
             self.popitem(last=False)
+
+def _in_bbox(lat, lon, clat, clon, radius_m):
+    """
+    粗略矩形篩選，先擋掉不可能在半徑內的點
+    """
+    try:
+        lat = float(lat); lon = float(lon)
+        clat = float(clat); clon = float(clon)
+    except Exception:
+        return False
+
+    dlat = radius_m / 111000.0
+    dlon = radius_m / (111000.0 * math.cos(math.radians(clat)))
+    return (
+        clat - dlat <= lat <= clat + dlat and
+        clon - dlon <= lon <= clon + dlon
+    )
 
 # ------ 統一設定（可用環境變數覆寫；若你已在別處定義，請以這裡為準）------
 
@@ -1279,6 +1297,9 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
             if t_lat is None or t_lon is None:
                 continue
 
+            if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+                continue
+
             dist = haversine(user_lat, user_lon, t_lat, t_lon)
             if dist > radius:
                 continue
@@ -1302,10 +1323,11 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
                 "open_hours": open_hours,
             })
 
-        # 距離排序 + 截斷（先截斷再寫快取，縮小快取體積）
-        toilets.sort(key=lambda x: x["distance"])
-        if len(toilets) > SHEET_MAX_ITEMS:
-            toilets = toilets[:SHEET_MAX_ITEMS]
+        toilets = heapq.nsmallest(
+            SHEET_MAX_ITEMS,
+            toilets,
+            key=lambda x: x["distance"]
+        )
 
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
@@ -1316,6 +1338,7 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
     overall_deadline = time.time() + 8.0
+
     def _left():
         return max(1.0, overall_deadline - time.time())
 
@@ -1327,7 +1350,7 @@ def query_overpass_toilets(lat, lon, radius=500):
         "https://overpass.openstreetmap.ru/api/interpreter",
     ]
 
-    # 讀取限制值（有預設，不設環境變數也能跑）
+    # 讀取限制值
     try:
         max_items = int(os.getenv("OVERPASS_MAX_ITEMS", "80"))
     except Exception:
@@ -1337,7 +1360,7 @@ def query_overpass_toilets(lat, lon, radius=500):
     except Exception:
         enrich_on = False
 
-    # 先小半徑再原半徑，縮短時間 & 減少結果數
+    # 先小半徑再原半徑
     for r in (300, radius):
         if time.time() >= overall_deadline:
             break
@@ -1357,7 +1380,12 @@ def query_overpass_toilets(lat, lon, radius=500):
             if time.time() >= overall_deadline:
                 break
             try:
-                resp = requests.post(url, data=query, headers=headers, timeout=min(8, _left()))
+                resp = requests.post(
+                    url,
+                    data=query,
+                    headers=headers,
+                    timeout=min(8, _left())
+                )
                 ctype = (resp.headers.get("Content-Type") or "").lower()
                 if resp.status_code != 200 or "json" not in ctype:
                     last_err = RuntimeError(f"overpass non-json {resp.status_code}")
@@ -1367,8 +1395,8 @@ def query_overpass_toilets(lat, lon, radius=500):
                 elements = data.get("elements", [])
 
                 toilets = []
-                # 先對 elements 進行「快速距離近似」截斷：最多處理 4 * max_items 筆
-                # （way/relation 解析 center 前無法精算距離，先限定量）
+
+                # 最多處理 4 * max_items（避免 elements 太多）
                 hard_cap = max(40, max_items * 4)
                 processed = 0
 
@@ -1378,26 +1406,40 @@ def query_overpass_toilets(lat, lon, radius=500):
                     processed += 1
 
                     if "center" in elem:
-                        t_lat, t_lon = elem["center"].get("lat"), elem["center"].get("lon")
+                        t_lat = elem["center"].get("lat")
+                        t_lon = elem["center"].get("lon")
                     elif elem.get("type") == "node":
-                        t_lat, t_lon = elem.get("lat"), elem.get("lon")
+                        t_lat = elem.get("lat")
+                        t_lon = elem.get("lon")
                     else:
                         continue
+
                     if t_lat is None or t_lon is None:
+                        continue
+
+                    if not _in_bbox(t_lat, t_lon, lat, lon, r):
                         continue
 
                     tags = elem.get("tags", {}) or {}
                     name = tags.get("name", "無名稱")
-                    address = tags.get("addr:full", "") or tags.get("addr:street", "") or ""
+                    address = (
+                        tags.get("addr:full")
+                        or tags.get("addr:street")
+                        or ""
+                    )
 
-                    # 樓層/位置推斷
                     floor_hint = _floor_from_tags(tags) or _floor_from_name(name)
 
-                    # 一次計算距離，後續排序/截斷重用
                     try:
-                        dist = haversine(float(lat), float(lon), float(t_lat), float(t_lon))
+                        dist = haversine(
+                            float(lat), float(lon),
+                            float(t_lat), float(t_lon)
+                        )
                     except Exception:
-                        dist = 9e9
+                        continue
+
+                    if dist > r:
+                        continue
 
                     toilets.append({
                         "name": name,
@@ -1407,43 +1449,49 @@ def query_overpass_toilets(lat, lon, radius=500):
                         "distance": dist,
                         "type": "osm",
                         "floor_hint": floor_hint,
-                        # 附加欄位
                         "level": tags.get("level") or tags.get("addr:floor") or "",
                         "open_hours": tags.get("opening_hours") or "",
                         "entrance_hint": tags.get("entrance") or "",
                     })
 
-                # 若無結果，換下個 endpoint/半徑
                 if not toilets:
                     continue
 
-                # enrich 只在開啟時執行，而且只為「未命名」貼近的點補上 place_hint
+                # enrich（保持你原本邏輯，不動）
                 if enrich_on:
                     try:
                         nearby_named = enrich_nearby_places(lat, lon, radius=500)
                         if nearby_named:
                             for t in toilets:
                                 if (not t.get("name")) or t["name"] == "無名稱":
-                                    best = None; best_d = 61.0
+                                    best = None
+                                    best_d = 61.0
                                     for p in nearby_named:
-                                        d = haversine(t["lat"], t["lon"], p["lat"], p["lon"])
+                                        d = haversine(
+                                            t["lat"], t["lon"],
+                                            p["lat"], p["lon"]
+                                        )
                                         if d < best_d:
-                                            best_d = d; best = p
+                                            best_d = d
+                                            best = p
                                     if best:
                                         t["place_hint"] = best["name"]
                     except Exception:
                         pass
 
-                # 距離排序 + 截斷（雙重保險，確保回傳上限）
-                toilets.sort(key=lambda x: x["distance"])
-                if len(toilets) > max_items:
-                    toilets = toilets[:max_items]
+                toilets = heapq.nsmallest(
+                    max_items,
+                    toilets,
+                    key=lambda x: x["distance"]
+                )
                 return toilets
 
             except Exception as e:
                 last_err = e
                 logging.warning(f"Overpass API 查詢失敗（endpoint {idx}）: {e}")
+
         logging.warning(f"Overpass 半徑 {r} 失敗：{last_err}")
+
     return []
 
 # === 讀取 public_toilets.csv ===
@@ -1451,6 +1499,7 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
     pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
         return pts
+
     try:
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
@@ -1460,25 +1509,38 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                     t_lon = float(row.get("longitude"))
                 except Exception:
                     continue
+
+                if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+                    continue
+
                 dist = haversine(user_lat, user_lon, t_lat, t_lon)
-                if dist <= radius:
-                    name = (row.get("name") or "無名稱").strip()
-                    addr = (row.get("address") or "").strip()
-                    floor_hint = _floor_from_name(name)
-                    pts.append({
-                        "name": name,
-                        "lat": float(norm_coord(t_lat)),
-                        "lon": float(norm_coord(t_lon)),
-                        "address": addr,
-                        "distance": dist,
-                        "type": "public_csv",
-                        "grade": row.get("grade", ""),
-                        "category": row.get("type2", ""),
-                        "floor_hint": floor_hint
-                    })
+                if dist > radius:
+                    continue
+
+                name = (row.get("name") or "無名稱").strip()
+                addr = (row.get("address") or "").strip()
+                floor_hint = _floor_from_name(name)
+
+                pts.append({
+                    "name": name,
+                    "lat": float(norm_coord(t_lat)),
+                    "lon": float(norm_coord(t_lon)),
+                    "address": addr,
+                    "distance": dist,
+                    "type": "public_csv",
+                    "grade": row.get("grade", ""),
+                    "category": row.get("type2", ""),
+                    "floor_hint": floor_hint
+                })
+
     except Exception as e:
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
-    return sorted(pts, key=lambda x: x["distance"])
+
+    return heapq.nsmallest(
+        LOC_MAX_RESULTS,
+        pts,
+        key=lambda x: x["distance"]
+    )
 
 # === 合併 + 去重 ===
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
@@ -2266,6 +2328,8 @@ def build_feedback_index():
 
     except Exception as e:
         logging.warning(f"建立指示燈索引失敗：{e}")
+        _feedback_index_cache["ts"] = now
+        _feedback_index_cache["data"] = {}
         return {}
 
 def submit_status_update(lat, lon, status_text, user_id="", display_name="", note=""):
@@ -2372,6 +2436,8 @@ def build_status_index():
 
     except Exception as e:
         logging.warning(f"建立狀態索引失敗：{e}")
+        _status_index_cache["ts"] = now
+        _status_index_cache["data"] = {}
         return {}
 
 # ==== 環境變數 ====
