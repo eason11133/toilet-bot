@@ -217,6 +217,16 @@ def retry_request(func, *args, **kwargs):
             else:
                 raise e
 
+def L(uid, zh, en):
+    """
+    最小侵入式語言 helper
+    """
+    try:
+        lang = get_user_lang(uid)
+    except Exception:
+        lang = "zh"
+    return en if lang == "en" else zh
+
 class SafeWS:
     def __init__(self, ws, sheet_id: str, name: str):
         self._ws = ws
@@ -301,7 +311,7 @@ def get_user_lang(uid):
 TEXTS = {
     "nearby_toilet": {
         "zh": "附近廁所",
-        "en": "Nearby Toilets"
+        "en": "Nearby toilets"
     },
     "ask_location": {
         "zh": "請傳送你的位置",
@@ -2579,52 +2589,82 @@ ACHIEVEMENT_RULES = {
     "first": {
         "goal": 1,
         "counter": "total",
-        "desc": "完成第一次狀態回報"
+        "desc": {
+            "zh": "完成第一次狀態回報",
+            "en": "Complete your first status report"
+        }
     },
     "helper10": {
         "goal": 10,
         "counter": "total",
-        "desc": "累積回報 10 次"
+        "desc": {
+            "zh": "累積回報 10 次",
+            "en": "Report status 10 times"
+        }
     },
     "pro_reporter": {
         "goal": 20,
         "counter": "total",
-        "desc": "累積回報 20 次"
+        "desc": {
+            "zh": "累積回報 20 次",
+            "en": "Report status 20 times"
+        }
     },
     "helper50": {
         "goal": 50,
         "counter": "total",
-        "desc": "累積回報 50 次"
+        "desc": {
+            "zh": "累積回報 50 次",
+            "en": "Report status 50 times"
+        }
     },
     "tissue_guard": {
         "goal": 3,
         "counter": "缺衛生紙",
-        "desc": "回報『缺衛生紙』滿 3 次"
+        "desc": {
+            "zh": "回報『缺衛生紙』滿 3 次",
+            "en": "Report of 'toilet paper' shortage 3 time"
+        }
     },
     "tissue_master": {
         "goal": 10,
         "counter": "缺衛生紙",
-        "desc": "回報『缺衛生紙』滿 10 次"
+        "desc": {
+            "zh": "回報『缺衛生紙』滿 10 次",
+            "en": "Report of 'toilet paper' shortage 10 time"
+        }
     },
     "queue_scout": {
-        "goal": 3,
-        "counter": "有人排隊",
-        "desc": "回報『有人排隊』滿 3 次"
+    "goal": 3,
+    "counter": "有人排隊",
+    "desc": {
+        "zh": "回報『有人排隊』滿 3 次",
+        "en": "Report 'Queue present' status 3 times"
+    }
     },
     "queue_commander": {
         "goal": 10,
         "counter": "有人排隊",
-        "desc": "回報『有人排隊』滿 10 次"
+        "desc": {
+            "zh": "回報『有人排隊』滿 10 次",
+            "en": "Report 'Queue present' status 10 times"
+        }
     },
     "maintenance_watcher": {
         "goal": 3,
         "counter": "暫停使用",
-        "desc": "回報『暫停使用』滿 3 次"
+        "desc": {
+            "zh": "回報『暫停使用』滿 3 次",
+            "en": "Report 'Out of service' status 3 times"
+        }
     },
     "good_news": {
         "goal": 5,
         "counter": "恢復正常",
-        "desc": "回報『恢復正常』滿 5 次"
+        "desc": {
+            "zh": "回報『恢復正常』滿 5 次",
+            "en": "Report 'Back to normal' status 5 times"
+        }
     },
 }
 
@@ -2653,12 +2693,17 @@ def api_achievements():
             # counter_type 對應到 by_status 裡的中文 key，例如「缺衛生紙」「有人排隊」等
             progress = int(by.get(counter_type, 0) or 0)
 
+        lang = get_user_lang(uid)
         goal = rule["goal"]
 
         out.append({
             "key": key,
             "title": cfg["name"],            # 和徽章名稱一致
-            "desc": rule.get("desc", ""),    # 上面 ACHIEVEMENT_RULES 定義的描述
+            "desc": (
+                rule["desc"]["en"]
+                if lang == "en"
+                else rule["desc"]["zh"]
+            ),  # 上面 ACHIEVEMENT_RULES 定義的描述
             "goal": goal,
             "progress": progress,
             "unlocked": bool(unlocked_map.get(key, False)),
@@ -2671,10 +2716,10 @@ def build_usage_review_text(uid: str) -> str:
     # 改成用 DB 裡的 search_log 統計查詢次數
     search_times = get_search_count(uid)
 
-    stats = _stats_for_user(uid)  
+    stats = _stats_for_user(uid)
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
-    last_ts = stats.get("last_ts") or "尚無紀錄"
+    last_ts = stats.get("last_ts") or L(uid, "尚無紀錄", "No record")
 
     try:
         contribs = get_user_contributions(uid) or []
@@ -2696,54 +2741,111 @@ def build_usage_review_text(uid: str) -> str:
         pass
 
     lines = []
-    lines.append(f"・你總共查詢過附近廁所：{search_times} 次")
+
+    # === 查詢次數 ===
+    lines.append(L(
+        uid,
+        f"・你總共查詢過附近廁所：{search_times} 次",
+        f"• You searched nearby toilets {search_times} times"
+    ))
+
     lines.append("")
-    lines.append("📊 使用回顧")
+    lines.append(L(uid, "📊 使用回顧", "📊 Usage Summary"))
     lines.append("")
-    # 狀態回報
+
+    # === 狀態回報 ===
     if total > 0:
-        lines.append(f"・狀態回報次數：{total} 次")
+        lines.append(L(
+            uid,
+            f"・狀態回報次數：{total} 次",
+            f"• Status reports: {total} times"
+        ))
 
         parts = []
+
         mapping = {
-            "恢復正常": "✅",
-            "有人排隊": "🟡",
-            "缺衛生紙": "🧻",
-            "暫停使用": "⛔",
+            "恢復正常": ("✅", "Back to normal"),
+            "有人排隊": ("🟡", "Queue"),
+            "缺衛生紙": ("🧻", "No toilet paper"),
+            "暫停使用": ("⛔", "Out of service"),
         }
-        # 只列出有出現過的狀態
-        for k, emo in mapping.items():
-            c = int(by.get(k, 0) or 0)
+
+        for zh_key, (emo, en_label) in mapping.items():
+            c = int(by.get(zh_key, 0) or 0)
             if c > 0:
-                parts.append(f"{emo}{k} {c} 次")
+                parts.append(
+                    L(
+                        uid,
+                        f"{emo}{zh_key} {c} 次",
+                        f"{emo}{en_label} {c}"
+                    )
+                )
+
         if parts:
-            # 放在同一行，避免太長
-            lines.append("  └ 狀態類型：" + "｜".join(parts))
+            lines.append(L(
+                uid,
+                "  └ 狀態類型：" + "｜".join(parts),
+                "  └ Status types: " + " | ".join(parts)
+            ))
 
-        lines.append(f"・最近一次回報時間：{last_ts}")
+        lines.append(L(
+            uid,
+            f"・最近一次回報時間：{last_ts}",
+            f"• Last report time: {last_ts}"
+        ))
     else:
-        lines.append("・目前還沒有任何狀態回報紀錄")
+        lines.append(L(
+            uid,
+            "・目前還沒有任何狀態回報紀錄",
+            "• No status reports yet"
+        ))
 
     lines.append("")
-    # 新增廁所 & 最愛
-    lines.append(f"・你新增的廁所：{num_contribs} 間")
-    lines.append(f"・你收藏的最愛廁所：{num_favs} 間")
 
-    # 徽章提示
+    # === 新增廁所 & 最愛 ===
+    lines.append(L(
+        uid,
+        f"・你新增的廁所：{num_contribs} 間",
+        f"• Toilets you added: {num_contribs}"
+    ))
+    lines.append(L(
+        uid,
+        f"・你收藏的最愛廁所：{num_favs} 間",
+        f"• Favorite toilets: {num_favs}"
+    ))
+
+    # === 徽章 ===
+    lines.append("")
     if unlocked_badges > 0:
-        lines.append("")
-        lines.append(f"🏅 已解鎖徽章數：{unlocked_badges} 個（可輸入「徽章」查看詳細）")
+        lines.append(L(
+            uid,
+            f"🏅 已解鎖徽章數：{unlocked_badges} 個（可輸入「徽章」查看詳細）",
+            f"🏅 Badges unlocked: {unlocked_badges} (type 'Badges' to view)"
+        ))
     else:
-        lines.append("")
-        lines.append("🏅 還沒解鎖徽章，試著多回報幾次狀態就會慢慢解鎖囉！")
+        lines.append(L(
+            uid,
+            "🏅 還沒解鎖徽章，試著多回報幾次狀態就會慢慢解鎖囉！",
+            "🏅 No badges unlocked yet. Try reporting more status updates!"
+        ))
 
     lines.append("")
-    lines.append("🔁 小提醒：可以輸入「附近廁所」或傳送位置，我會幫你找最近的廁所 🚽")
+    lines.append(L(
+        uid,
+        "🔁 小提醒：可以輸入「附近廁所」或傳送位置，我會幫你找最近的廁所 🚽",
+        "🔁 Tip: Type 'Nearby toilets' or share your location to find toilets 🚽"
+    ))
 
     lines.append("")
-    lines.append("🤖 查看 AI 為你生成的個人化使用分析：")
+    lines.append(L(
+        uid,
+        "🤖 查看 AI 為你生成的個人化使用分析：",
+        "🤖 View your AI-generated personal usage summary:"
+    ))
     lines.append(f"👉 https://school-i9co.onrender.com/ai_usage_summary_page/{uid}")
+
     return "\n".join(lines)
+
 def build_ai_usage_summary(uid: str) -> str:
     """
     用 AI 幫使用者做『個人使用回顧』總結。
@@ -2870,11 +2972,12 @@ def build_ai_nearby_recommendation(uid: str, toilets):
         ok = True  # quota 壞掉時當作不限制
 
     if not ok:
-        # 達到今日上限：不呼叫 OpenAI，只回提示
-        return (
+        return L(
+            uid,
             "今天 AI 推薦附近廁所的次數已達每日上限喔～\n"
-            "如果還需要查詢，建議先點下面的「切換回一般模式」，\n"
-            "再用一般模式幫你找附近的廁所 👍"
+            "如果還需要查詢，建議先切換回一般模式 👍",
+            "You have reached today's AI nearby recommendation limit.\n"
+            "Please switch back to normal mode to continue 👍"
         )
 
     try:
@@ -3311,36 +3414,61 @@ import json
 def api_ai_feedback_summary(lat, lon):
     """
     依照座標讀取 feedback_sheet 的回饋紀錄，
-    丟給 OpenAI 做中文摘要，回傳 JSON 給前端使用。
+    丟給 OpenAI 做摘要，依使用者語言回傳中 / 英文 JSON。
     """
     try:
         _ensure_sheets_ready()
         if feedback_sheet is None:
-            return jsonify({"success": False, "message": "feedback_sheet not ready"}), 503
+            return jsonify({
+                "success": False,
+                "message": "feedback_sheet not ready"
+            }), 503
 
         if client is None:
-            return jsonify({"success": False, "message": "AI 金鑰未設定"}), 500
+            return jsonify({
+                "success": False,
+                "message": "AI key not configured"
+            }), 500
 
-        # ✅ 先驗證 lat/lon
+        # 先取得 uid（後面語言 & quota 會用）
+        uid = (request.args.get("uid") or "").strip()
+
+        # === 語言判斷 ===
+        try:
+            lang = get_user_lang(uid)
+        except Exception:
+            lang = "zh"
+
+        # 驗證 lat / lon
         try:
             lat_f = float(lat)
             lon_f = float(lon)
         except Exception:
-            return jsonify({"success": False, "message": "lat/lon 格式錯誤"}), 400
+            return jsonify({
+                "success": False,
+                "message": L(uid, "lat/lon 格式錯誤", "Invalid latitude / longitude")
+            }), 400
 
-        # 1. 從雲端回饋表抓資料
+        # 1️⃣ 從雲端回饋表抓資料
         header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
         if not header or not data:
             return jsonify({
                 "success": True,
-                "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                "summary": L(
+                    uid,
+                    "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                    "No feedback yet. You can leave a review using the button below 🙏"
+                ),
                 "data": [],
                 "has_data": False
             }), 200
 
         idx = _feedback_indices(header)
         if idx["lat"] is None or idx["lon"] is None:
-            return jsonify({"success": False, "message": "lat/lon 欄位缺少"}), 400
+            return jsonify({
+                "success": False,
+                "message": L(uid, "缺少 lat/lon 欄位", "lat/lon column missing")
+            }), 400
 
         def close(a, b, tol=1e-4):
             try:
@@ -3370,37 +3498,58 @@ def api_ai_feedback_summary(lat, lon):
         if not matched:
             return jsonify({
                 "success": True,
-                "summary": "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                "summary": L(
+                    uid,
+                    "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
+                    "No feedback yet. You can leave a review using the button below 🙏"
+                ),
                 "data": [],
                 "has_data": False
             }), 200
 
-        # ✅ 限制最多送給 AI 的筆數（避免 token 爆炸）
+        # 最多送 30 筆給 AI
         matched = matched[:30]
 
-        # 🔹 依 user_id 做每日額度控制（若沒有 uid，就退而求其次用 IP）
-        uid = (request.args.get("uid") or "").strip()
-
-        # ✅ 代理環境下 remote_addr 可能不準：嘗試取 X-Forwarded-For
+        # 2️⃣ 每日 AI 額度控制（uid → fallback IP）
         xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
         ip = xff or (request.remote_addr or "unknown")
-
         quota_key = uid or f"ip:{ip}"
 
         ok, used = _ai_quota_check_and_inc(f"fb:{quota_key}")
         if not ok:
             return jsonify({
                 "success": True,
-                "summary": "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
+                "summary": L(
+                    uid,
+                    "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
+                    "You’ve reached today’s AI summary limit. Please try again tomorrow 🙏"
+                ),
                 "data": matched,
                 "has_data": True,
                 "limit_reached": True
             }), 200
 
-        # 2. 組 AI Prompt（用正式 JSON）
+        # 3️⃣ 組 AI Prompt（依語言）
         matched_json = json.dumps(matched, ensure_ascii=False)
 
-        prompt = f"""
+        if lang == "en":
+            prompt = f"""
+You are a restroom cleanliness analysis assistant.
+
+Please read the following feedback data (JSON format) and provide:
+
+1. Common recent issues (e.g. lack of toilet paper, slippery floor, odor, broken facilities)
+2. Overall user sentiment (positive / neutral / negative) with a brief explanation
+3. Cleanliness trend (getting cleaner / getting worse / mostly stable). If data is insufficient, explain why.
+4. A concise recommendation in **no more than 3 lines**
+
+Please respond in **English**, using bullet points or short sentences.
+
+Feedback data (JSON):
+{matched_json}
+            """.strip()
+        else:
+            prompt = f"""
 你是一個廁所清潔度分析助理，請閱讀以下回饋資料（JSON 格式），並輸出：
 
 1. 最近常見的主要問題（例如：衛生紙不足、地板濕滑、異味、設備老舊等）
@@ -3412,12 +3561,12 @@ def api_ai_feedback_summary(lat, lon):
 
 以下是回饋資料（JSON）：
 {matched_json}
-        """.strip()
+            """.strip()
 
         ai_resp = client.chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": "你是一個分析廁所使用回饋的助手。"},
+                {"role": "system", "content": "You analyze restroom feedback and summarize it clearly."},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -3433,7 +3582,10 @@ def api_ai_feedback_summary(lat, lon):
 
     except Exception as e:
         logging.error(f"AI summary error: {e}", exc_info=True)
-        return jsonify({"success": False, "message": "AI error"}), 500
+        return jsonify({
+            "success": False,
+            "message": L(uid, "AI 發生錯誤，請稍後再試", "AI error, please try again later")
+        }), 500
 
 # === 同意頁面 / 隱私頁 ===
 @app.route("/consent", methods=["GET"])
@@ -3872,15 +4024,18 @@ def handle_text(event):
         ...
 
     elif text == "附近廁所":
-        set_user_loc_mode(uid, "normal")  # 標記為一般模式
+        set_user_loc_mode(uid, "normal")
         try:
+            msg = L(
+                uid,
+                "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
+                "📍 Please share your location and I will find nearby toilets for you"
+            )
             safe_reply(
                 event,
-                make_location_quick_reply(
-                    "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
-                    mode="normal"
-                )
+                make_location_quick_reply(msg, mode="normal")
             )
+
         except Exception as e:
             logging.error(f"附近廁所 quick reply 失敗: {e}")
             safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
@@ -4085,7 +4240,10 @@ def handle_location(event):
                 # ⚡ 一般模式：原本行為不變
                 messages = [
                     FlexSendMessage("附近廁所", msg),
-                    make_location_quick_reply("想換個地點再找嗎？"),
+                    make_location_quick_reply(
+                        L(uid, "想換個地點再找嗎？", "Want to search another location?")
+                    )
+                    ,
                 ]
 
             safe_reply(event, messages)
@@ -4102,25 +4260,14 @@ def handle_postback(event):
     data = event.postback.data
     uid = event.source.user_id
 
-    # ===== 切成英文 =====
     if data == "set_lang:en":
         set_user_lang(uid, "en")
-
-        line_bot_api.link_rich_menu_id_to_user(
-            uid,
-            get_richmenu_id_by_alias("richmenu-alias-main-en")
-        )
         return
 
-    # ===== 切回中文 =====
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
-
-        line_bot_api.link_rich_menu_id_to_user(
-            uid,
-            get_richmenu_id_by_alias("richmenu-alias-main")
-        )
         return
+
 
     if is_duplicate_and_mark_event(event):
         return
