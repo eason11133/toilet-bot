@@ -335,6 +335,37 @@ TEXTS = {
     },
 }
 
+TEXTS.update({
+    "ask_location_normal": {
+        "zh": "📍 請點『傳送我的位置』，我立刻幫你找廁所",
+        "en": "📍 Please share your location and I’ll find nearby toilets for you"
+    },
+    "ask_location_ai": {
+        "zh": "📍 請點『傳送我的位置』，我會用 AI 幫你挑附近的廁所",
+        "en": "📍 Please share your location and I’ll use AI to recommend nearby toilets"
+    },
+    "added_fav_ok": {
+        "zh": "✅ 已收藏 {name}",
+        "en": "✅ Added {name} to favorites"
+    },
+    "removed_fav_ok": {
+        "zh": "✅ 已移除最愛",
+        "en": "✅ Removed from favorites"
+    },
+    "removed_fav_fail": {
+        "zh": "❌ 移除失敗",
+        "en": "❌ Failed to remove"
+    },
+    "confirm_delete": {
+        "zh": "⚠️ 確定要刪除 {name} 嗎？（目前刪除為移除最愛）",
+        "en": "⚠️ Are you sure you want to remove {name} from favorites?"
+    },
+    "confirm_hint": {
+        "zh": "請輸入『確認刪除』或『取消』",
+        "en": "Please type “Confirm delete” or “Cancel”"
+    }
+})
+
 def t(key, uid):
     lang = get_user_lang(uid)
     return TEXTS.get(key, {}).get(lang, TEXTS.get(key, {}).get("zh", ""))
@@ -4260,6 +4291,9 @@ def handle_postback(event):
     data = event.postback.data
     uid = event.source.user_id
 
+    # =========================
+    # 1️⃣ 語言切換（最優先）
+    # =========================
     if data == "set_lang:en":
         set_user_lang(uid, "en")
         return
@@ -4268,40 +4302,56 @@ def handle_postback(event):
         set_user_lang(uid, "zh")
         return
 
-
+    # =========================
+    # 2️⃣ 重複事件擋掉
+    # =========================
     if is_duplicate_and_mark_event(event):
         return
 
+    # =========================
+    # 3️⃣ 同意條款 gate
+    # =========================
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
-        safe_reply(event, gate_msg); return
+        safe_reply(event, gate_msg)
+        return
 
     try:
+        # =========================
+        # 4️⃣ 位置查詢（一般）
+        # =========================
         if data == "ask_location":
-            mode = get_user_loc_mode(uid)  # 目前是 normal 還是 ai
+            mode = get_user_loc_mode(uid)  # normal / ai
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    "📍 請點『傳送我的位置』，我立刻幫你找廁所",
+                    L(uid, "ask_location_normal"),
                     mode=mode
                 )
             )
             return
 
+        # =========================
+        # 5️⃣ 位置查詢（AI）
+        # =========================
         if data == "ask_ai_location":
             set_user_loc_mode(uid, "ai")
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    "📍 請點『傳送我的位置』，我會用 AI 幫你挑附近的廁所",
+                    L(uid, "ask_location_ai"),
                     mode="ai"
                 )
             )
             return
 
+        # =========================
+        # 6️⃣ 加入最愛
+        # =========================
         if data.startswith("add:"):
             _, qname, lat, lon = data.split(":", 3)
             name = unquote(qname)
+
             toilet = {
                 "name": name,
                 "lat": float(lat),
@@ -4310,53 +4360,96 @@ def handle_postback(event):
                 "distance": 0,
                 "type": "sheet"
             }
-            add_to_favorites(uid, toilet)
-            safe_reply(event, TextSendMessage(text=f"✅ 已收藏 {name}"))
 
-        elif data.startswith("remove_fav:"):
+            add_to_favorites(uid, toilet)
+
+            safe_reply(
+                event,
+                TextSendMessage(
+                    text=L(uid, "added_fav_ok").format(name=name)
+                )
+            )
+            return
+
+        # =========================
+        # 7️⃣ 移除最愛
+        # =========================
+        if data.startswith("remove_fav:"):
             _, qname, lat, lon = data.split(":", 3)
             name = unquote(qname)
-            success = remove_from_favorites(uid, name, lat, lon)
-            msg = "✅ 已移除最愛" if success else "❌ 移除失敗"
-            safe_reply(event, TextSendMessage(text=msg))
 
-        elif data.startswith("confirm_delete:"):
+            success = remove_from_favorites(uid, name, lat, lon)
+            key = "removed_fav_ok" if success else "removed_fav_fail"
+
+            safe_reply(
+                event,
+                TextSendMessage(text=L(uid, key))
+            )
+            return
+
+        # =========================
+        # 8️⃣ 確認刪除（最愛）
+        # =========================
+        if data.startswith("confirm_delete:"):
             _, qname, qaddr, lat, lon = data.split(":", 4)
             name = unquote(qname)
+
             pending_delete_confirm[uid] = {
                 "mode": "favorite",
                 "name": name,
                 "lat": norm_coord(lat),
                 "lon": norm_coord(lon)
             }
-            safe_reply(event, [
-                TextSendMessage(text=f"⚠️ 確定要刪除 {name} 嗎？（目前刪除為移除最愛）"),
-                TextSendMessage(text="請輸入『確認刪除』或『取消』")
-            ])
 
-        elif data.startswith("confirm_delete_my_toilet:"):
+            safe_reply(event, [
+                TextSendMessage(
+                    text=L(uid, "confirm_delete").format(name=name)
+                ),
+                TextSendMessage(
+                    text=L(uid, "confirm_hint")
+                )
+            ])
+            return
+
+        # =========================
+        # 9️⃣ 確認刪除（自己新增）
+        # =========================
+        if data.startswith("confirm_delete_my_toilet:"):
             _, row_str = data.split(":", 1)
+
             pending_delete_confirm[uid] = {
                 "mode": "sheet_row",
                 "row": int(row_str)
             }
+
             safe_reply(event, [
-                TextSendMessage(text="⚠️ 確定要刪除此『你新增的廁所』嗎？此動作會從主資料表刪除該列。"),
-                TextSendMessage(text="請輸入『確認刪除』或『取消』")
+                TextSendMessage(
+                    text=L(uid, "confirm_delete_my_toilet")
+                ),
+                TextSendMessage(
+                    text=L(uid, "confirm_hint")
+                )
             ])
-        elif data.startswith("ai_summary:"):
-            # data 形式：ai_summary:<lat>:<lon>
+            return
+
+        # =========================
+        # 🔟 AI 回饋摘要
+        # =========================
+        if data.startswith("ai_summary:"):
             try:
                 _, lat, lon = data.split(":", 2)
             except ValueError:
-                safe_reply(event, TextSendMessage(text="格式錯誤，無法查詢 AI 摘要"))
+                safe_reply(
+                    event,
+                    TextSendMessage(text=L(uid, "ai_summary_format_error"))
+                )
                 return
 
             try:
-                # 呼叫自己後端的 AI API（用 PUBLIC_URL 當 base）
                 base = PUBLIC_URL.rstrip("/") if PUBLIC_URL else ""
                 q_uid = quote(uid)
                 url = f"{base}/api/ai_feedback_summary/{lat}/{lon}?uid={q_uid}"
+
                 resp = requests.get(url, timeout=15)
 
                 if resp.status_code == 200:
@@ -4364,14 +4457,16 @@ def handle_postback(event):
                     if js.get("success") and js.get("summary"):
                         msg = js["summary"]
                     else:
-                        msg = js.get("message", "暫時無法取得 AI 摘要")
+                        msg = js.get("message", L(uid, "ai_summary_unavailable"))
                 else:
-                    msg = "AI 摘要服務暫時忙碌，請稍後再試～"
+                    msg = L(uid, "ai_summary_busy")
+
             except Exception as e:
                 logging.error(f"AI summary postback error: {e}")
-                msg = "AI 摘要發生錯誤，請稍後再試"
+                msg = L(uid, "ai_summary_error")
 
             safe_reply(event, TextSendMessage(text=msg))
+            return
 
     except Exception as e:
         logging.error(f"❌ 處理 postback 失敗: {e}")
