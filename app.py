@@ -85,6 +85,16 @@ def _mark_token_used(tok: str):
 def _is_token_used(tok: str) -> bool:
     return tok in _USED_REPLY_TOKENS
 
+def grid_coord(v, g=0.0005):
+    """
+    座標格點化：
+    g=0.0005 ≈ 50 公尺
+    """
+    try:
+        return round(float(v) / g) * g
+    except Exception:
+        return v
+
 class SimpleLRU(OrderedDict):
     def __init__(self, maxsize=500):
         super().__init__()
@@ -1254,87 +1264,80 @@ def query_sheet_toilets(user_lat, user_lon, radius=500):
     if worksheet is None:
         return []
 
-    # 讀取可調上限：預設 120（可用 SHEET_MAX_ITEMS 環境變數覆寫）
     try:
         SHEET_MAX_ITEMS = int(os.getenv("SHEET_MAX_ITEMS", "120"))
     except Exception:
         SHEET_MAX_ITEMS = 120
 
-    query_key = f"{user_lat},{user_lon},{radius}"
-    cached_data = get_cached_data(query_key)
-    if cached_data:
-        return cached_data
+    toilets_heap = []
 
-    toilets = []
     try:
         header, data = _get_header_and_tail(worksheet, MAX_SHEET_ROWS)
         if not header or not data:
-            save_cache(query_key, toilets)
-            return toilets
+            return []
 
         idx = _toilet_sheet_indices(header)
-
-        # 若必備欄位不存在，直接返回（避免 index 錯誤）
         if idx.get("lat") is None or idx.get("lon") is None:
-            logging.warning("query_sheet_toilets: sheet header lacks lat/lon columns")
-            save_cache(query_key, toilets)
-            return toilets
+            return []
+
+        lat = float(user_lat)
+        lon = float(user_lon)
+        dlat = radius / 111000.0
+        dlon = radius / (111000.0 * max(0.1, math.cos(math.radians(lat))))
+
+        min_lat, max_lat = lat - dlat, lat + dlat
+        min_lon, max_lon = lon - dlon, lon + dlon
 
         for row in data:
-            # 基本欄位檢查
-            if len(row) <= max(
-                v for k, v in idx.items() if v is not None and k in ("name", "address", "lat", "lon")
-            ):
+            if len(row) <= max(idx["lat"], idx["lon"]):
                 continue
-
-            name = (row[idx["name"]] if idx["name"] is not None and len(row) > idx["name"] else "").strip() or "無名稱"
-            address = (row[idx["address"]] if idx["address"] is not None and len(row) > idx["address"] else "").strip()
 
             try:
-                t_lat = float(row[idx["lat"]]) if len(row) > idx["lat"] else None
-                t_lon = float(row[idx["lon"]]) if len(row) > idx["lon"] else None
+                t_lat = float(row[idx["lat"]])
+                t_lon = float(row[idx["lon"]])
             except Exception:
-                t_lat = t_lon = None
-            if t_lat is None or t_lon is None:
                 continue
 
-            if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+            if not (min_lat <= t_lat <= max_lat and min_lon <= t_lon <= max_lon):
                 continue
 
-            dist = haversine(user_lat, user_lon, t_lat, t_lon)
+            dist = haversine(lat, lon, t_lat, t_lon)
             if dist > radius:
                 continue
 
-            level         = (row[idx["level"]] if idx["level"] is not None and len(row) > idx["level"] else "").strip()
-            floor_hint_ws = (row[idx["floor_hint"]] if idx["floor_hint"] is not None and len(row) > idx["floor_hint"] else "").strip()
-            open_hours    = (row[idx["open_hours"]] if idx["open_hours"] is not None and len(row) > idx["open_hours"] else "").strip()
+            name = (
+                row[idx["name"]].strip()
+                if idx["name"] is not None and len(row) > idx["name"]
+                else "無名稱"
+            )
+            address = (
+                row[idx["address"]].strip()
+                if idx["address"] is not None and len(row) > idx["address"]
+                else ""
+            )
 
-            auto_floor = _floor_from_name(name)
-            floor_hint = floor_hint_ws or level or auto_floor
+            floor_hint = _floor_from_name(name)
 
-            toilets.append({
+            item = {
                 "name": name,
                 "lat": float(norm_coord(t_lat)),
                 "lon": float(norm_coord(t_lon)),
                 "address": address,
                 "distance": dist,
                 "type": "sheet",
-                "level": level,
                 "floor_hint": floor_hint,
-                "open_hours": open_hours,
-            })
+            }
 
-        toilets = heapq.nsmallest(
-            SHEET_MAX_ITEMS,
-            toilets,
-            key=lambda x: x["distance"]
-        )
+            heapq.heappush(toilets_heap, (-dist, item))
+            if len(toilets_heap) > SHEET_MAX_ITEMS:
+                heapq.heappop(toilets_heap)
+
+        toilets = [item for _, item in sorted(toilets_heap, key=lambda x: -x[0])]
+        return toilets
 
     except Exception as e:
         logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
-
-    save_cache(query_key, toilets)
-    return toilets
+        return []
 
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
@@ -1497,13 +1500,16 @@ def query_overpass_toilets(lat, lon, radius=500):
 
 # === 讀取 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
-    pts = []
     if not os.path.exists(TOILETS_FILE_PATH):
-        return pts
+        return []
+
+    heap = []  
+    limit = LOC_MAX_RESULTS
 
     try:
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
+
             for row in reader:
                 try:
                     t_lat = float(row.get("latitude"))
@@ -1522,7 +1528,7 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                 addr = (row.get("address") or "").strip()
                 floor_hint = _floor_from_name(name)
 
-                pts.append({
+                item = {
                     "name": name,
                     "lat": float(norm_coord(t_lat)),
                     "lon": float(norm_coord(t_lon)),
@@ -1531,17 +1537,18 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
                     "type": "public_csv",
                     "grade": row.get("grade", ""),
                     "category": row.get("type2", ""),
-                    "floor_hint": floor_hint
-                })
+                    "floor_hint": floor_hint,
+                }
+
+                heapq.heappush(heap, (-dist, item))
+                if len(heap) > limit:
+                    heapq.heappop(heap)
 
     except Exception as e:
         logging.error(f"讀 public_toilets.csv 失敗：{e}")
+        return []
 
-    return heapq.nsmallest(
-        LOC_MAX_RESULTS,
-        pts,
-        key=lambda x: x["distance"]
-    )
+    return [item for _, item in sorted(heap, key=lambda x: -x[0])]
 
 # === 合併 + 去重 ===
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
@@ -1964,7 +1971,6 @@ def api_status_candidates():
     except Exception as e:
         logging.error(f"/api/status_candidates 失敗: {e}")
         return {"ok": False, "message": "server error"}, 500
-
 
 # ==== 狀態：回報（靠 submit_status_update 寫入 status 分頁）====
 @app.route("/api/status_report", methods=["POST"])
@@ -3736,24 +3742,35 @@ def get_user_loc_mode(uid):
 _pool = ThreadPoolExecutor(max_workers=2)
 
 def build_nearby_toilets(uid, lat, lon, radius=500):
+    # === Grid cache key（第一步）===
+    lat_g = grid_coord(lat)
+    lon_g = grid_coord(lon)
+    query_key = f"nearby:{lat_g},{lon_g},{radius}"
+
+    cached = get_cached_data(query_key)
+    if cached:
+        logging.debug(f"[cache hit] nearby {query_key}")
+        return cached
+
     futures = []
     csv_res, sheet_res, osm_res = [], [], []
 
     try:
-        futures.append(("csv",  _pool.submit(query_public_csv_toilets, lat, lon, radius)))
+        futures.append(("csv",   _pool.submit(query_public_csv_toilets, lat, lon, radius)))
         futures.append(("sheet", _pool.submit(query_sheet_toilets,      lat, lon, radius)))
-        futures.append(("osm",  _pool.submit(query_overpass_toilets,    lat, lon, radius)))
+        futures.append(("osm",   _pool.submit(query_overpass_toilets,   lat, lon, radius)))
 
         for name, fut in futures:
             try:
                 res = fut.result(timeout=LOC_QUERY_TIMEOUT_SEC)
-                if   name == "csv":  csv_res  = res or []
+                if   name == "csv":   csv_res   = res or []
                 elif name == "sheet": sheet_res = res or []
-                else:                 osm_res  = res or []
+                else:                 osm_res   = res or []
             except FuturesTimeoutError:
                 logging.warning(f"{name} 查詢逾時")
             except Exception as e:
                 logging.warning(f"{name} 查詢失敗: {e}")
+
     finally:
         for _, fut in futures:
             if not fut.done():
@@ -3761,7 +3778,12 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
 
     quick = _merge_and_dedupe_lists(csv_res, sheet_res, osm_res)
     sort_toilets(quick)
-    return quick[:LOC_MAX_RESULTS]
+    result = quick[:LOC_MAX_RESULTS]
+
+    # === 寫入 cache（Grid cache）===
+    save_cache(query_key, result)
+
+    return result
 
 # === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
