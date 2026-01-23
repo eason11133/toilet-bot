@@ -490,26 +490,24 @@ def make_location_quick_reply(prompt_text, mode="normal", uid=None):
         quick_reply=QuickReply(items=items)
     )
 
-def make_retry_location_text(text="現在查詢人數有點多，我排一下隊；你可再傳一次位置或稍候幾秒～"):
+def make_retry_location_text(uid=None):
     return TextSendMessage(
-        text=text,
+        text=L(uid,
+               "現在查詢人數有點多，我排一下隊；你可再傳一次位置或稍候幾秒～",
+               "Too many requests now. Please send your location again or try in a few seconds."),
         quick_reply=QuickReply(items=[
-            QuickReplyButton(action=LocationAction(label="傳送我的位置"))
+            QuickReplyButton(action=LocationAction(label=L(uid, "傳送我的位置", "Share location")))
         ])
     )
-def make_no_toilet_quick_reply(uid, lat=None, lon=None,
-                               text="附近沒有廁所 😥 要不要補上一間？"):
-    base = "https://school-i9co.onrender.com/add"
-    if lat is not None and lon is not None:
-        add_url = f"{base}?uid={quote(uid)}&lat={lat}&lon={lon}#openExternalBrowser=1"
-    else:
-        add_url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
 
+def make_no_toilet_quick_reply(uid, lat=None, lon=None):
     return TextSendMessage(
-        text=text,
+        text=L(uid, "附近沒有廁所 😥 要不要補上一間？",
+                  "No toilets nearby 😥 Want to add one?"),
         quick_reply=QuickReply(items=[
-            QuickReplyButton(action=LocationAction(label="傳送我的位置")),
-            QuickReplyButton(action=MessageAction(label="新增廁所", text="新增廁所"))
+            QuickReplyButton(action=LocationAction(label=L(uid, "傳送我的位置", "Share location"))),
+            QuickReplyButton(action=MessageAction(label=L(uid, "新增廁所", "Add toilet"),
+                                                  text=L(uid, "新增廁所", "Add toilet")))
         ])
     )
 
@@ -4716,12 +4714,15 @@ def handle_postback(event):
         # 4️⃣ 位置查詢（一般）
         # =========================
         if data == "ask_location":
-            mode = get_user_loc_mode(uid)  # normal / ai
+            mode = get_user_loc_mode(uid)
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    t("ask_location_normal", uid),
-                    mode=mode
+                    L(uid,
+                    "📍 請點下方『傳送我的位置』，我立刻幫你找廁所",
+                    "📍 Please share your location and I’ll find nearby toilets for you"),
+                    mode=mode,
+                    uid=uid
                 )
             )
             return
@@ -4734,8 +4735,11 @@ def handle_postback(event):
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    t("ask_location_ai", uid),
-                    mode="ai"
+                    L(uid,
+                    "📍 請傳送你的位置，我會用 AI 幫你挑附近最適合的廁所",
+                    "📍 Please share your location. I will use AI to pick the best nearby toilets."),
+                    mode="ai",
+                    uid=uid
                 )
             )
             return
