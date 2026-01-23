@@ -25,7 +25,7 @@ from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from openai import OpenAI
 import html
 import joblib
@@ -615,6 +615,17 @@ def _self_keepalive_background():
 
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
+
+# === 共用 base url（避免硬寫 domain）===
+def _base_url():
+    # PUBLIC_URL 優先，沒設定就用 request.url_root
+    try:
+        if PUBLIC_URL:
+            return PUBLIC_URL.rstrip("/")
+        return request.url_root.rstrip("/")
+    except Exception:
+        # 保底：至少不要噴錯
+        return (PUBLIC_URL or "").rstrip("/")
 
 def get_nearby_toilets(uid, lat, lon):
     key = f"{lat},{lon}"
@@ -2583,7 +2594,6 @@ def build_status_index():
         _status_index_cache["data"] = {}
         return {}
 
-# ==== 環境變數 ====
 # ==== 環境變數（統一 LIFF 讀取）====
 def _get_liff_status_id() -> str:
     return (
@@ -2959,7 +2969,8 @@ def build_usage_review_text(uid: str) -> str:
         "🤖 查看 AI 為你生成的個人化使用分析：",
         "🤖 View your AI-generated personal usage summary:"
     ))
-    lines.append(f"👉 https://school-i9co.onrender.com/ai_usage_summary_page/{uid}")
+    base = _base_url()
+    lines.append(f"👉 {base}/ai_usage_summary_page/{uid}")
 
     return "\n".join(lines)
 
@@ -3002,10 +3013,14 @@ def build_ai_usage_summary(uid: str) -> str:
     if (search_times == 0 and total == 0 and
         num_contribs == 0 and num_favs == 0 and
         unlocked_badges == 0):
-        return (
+        return L(
+            uid,
             "目前還沒有足夠的使用紀錄可以產生 AI 使用回顧喔～\n"
             "可以多多使用「附近廁所」「狀態回報」「新增廁所」「收藏最愛」，\n"
-            "之後我會幫你做一份專屬的使用報告 🙌"
+            "之後我會幫你做一份專屬的使用報告 🙌",
+            "Not enough usage data yet to generate an AI usage summary.\n"
+            "Try using Nearby Toilets, Status Report, Add Toilet, and Favorites more often.\n"
+            "I’ll prepare a personalized report for you soon 🙌"
         )
 
     # 🔸 如果沒有設定 AI 金鑰或 client，退回原本的文字版使用回顧
@@ -3506,7 +3521,9 @@ _ai_quota = {}  # key: (usage_key, date_str) -> count
 
 
 def _ai_quota_check_and_inc(key: str):
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    TW_TZ = timezone(timedelta(hours=8))
+
+    today = datetime.now(TW_TZ).strftime("%Y-%m-%d")
 
     conn = _get_db()
     cur = conn.cursor()
@@ -3930,15 +3947,18 @@ def create_toilet_flex_messages(toilets, uid=None):
             access_text = "♿—"
 
         # 按鈕
+        base = _base_url()
+
         actions.append({
             "type": "uri",
             "label": L(uid, "導航", "Navigate"),
             "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
         })
+
         actions.append({
             "type": "uri",
             "label": L(uid, "查詢回饋", "View feedback"),
-            "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
+            "uri": f"{base}/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
 
         addr_raw = toilet.get('address') or ""
@@ -3947,14 +3967,13 @@ def create_toilet_flex_messages(toilets, uid=None):
             "type": "uri",
             "label": L(uid, "廁所回饋", "Leave feedback"),
             "uri": (
-                "https://school-i9co.onrender.com/feedback_form/"
+                f"{base}/feedback_form/"
                 f"{quote(title)}/{addr_param}"
                 f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
             )
         })
 
-        ai_page_base = "https://school-i9co.onrender.com/ai_feedback_summary_page"
-        ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}" + (f"?uid={quote(uid)}" if uid else "")
+        ai_uri = f"{base}/ai_feedback_summary_page/{lat_s}/{lon_s}" + (f"?uid={quote(uid)}" if uid else "")
         actions.append({
             "type": "uri",
             "label": L(uid, "AI 回饋摘要", "AI summary"),
@@ -5102,10 +5121,17 @@ def _drain_pending(limit=200):
     conn.commit(); conn.close()
     return ok, "done"
 
-@app.route("/admin/backfill", methods=["POST","GET"])
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+@app.route("/admin/backfill", methods=["POST"])
 def admin_backfill():
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        return {"ok": False, "message": "unauthorized"}, 401
+
     n, note = _drain_pending(limit=500)
     return {"ok": True, "written": n, "note": note}, 200
+
 
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
