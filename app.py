@@ -19,7 +19,7 @@ from linebot.models import (
     MessageEvent, TextMessage, LocationMessage,
     TextSendMessage, FlexSendMessage,
     QuickReply, QuickReplyButton, LocationAction, MessageAction,
-    PostbackEvent   
+    PostbackEvent, PostbackAction   
 )
 from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -302,11 +302,39 @@ class SafeWS:
 # 使用者語言（記憶體版，之後可換 DB）
 user_lang = {}
 
-def set_user_lang(uid, lang):
-    user_lang[uid] = lang
+def set_user_lang(uid: str, lang: str):
+    try:
+        if not uid:
+            return
+        lang = "en" if (lang or "").lower() == "en" else "zh"
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_lang (user_id, lang)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang
+        """, (uid, lang))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"set_user_lang failed: {e}")
 
-def get_user_lang(uid):
-    return user_lang.get(uid, "zh")  # 預設中文
+def get_user_lang(uid: str) -> str:
+    try:
+        if not uid:
+            return "zh"
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT lang FROM user_lang WHERE user_id=?", (uid,))
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0] == "en":
+            return "en"
+        return "zh"
+    except Exception as e:
+        logging.warning(f"get_user_lang failed: {e}")
+        return "zh"
+
 
 TEXTS = {
     "nearby_toilet": {
@@ -415,30 +443,44 @@ def _start_consent_worker():
 
 _start_consent_worker()
 
-def make_location_quick_reply(prompt_text="📍 請分享你的位置", mode="normal"):
+def make_location_quick_reply(prompt_text, mode="normal", uid=None):
+    """
+    prompt_text: 主訊息文字（建議呼叫前就用 L(uid, zh, en) 產好）
+    mode: "normal" or "ai"
+    uid: LINE user id（用來判斷語言）
+    """
+
+    # 防呆：如果沒傳 uid，就用中文
+    def _L(zh, en):
+        return L(uid, zh, en) if uid else zh
+
     items = [
         QuickReplyButton(
-            action=LocationAction(label="傳送我的位置")
+            action=LocationAction(
+                label=_L("傳送我的位置", "Share location")
+            )
         )
     ]
 
     if mode == "normal":
-        # 顯示「AI 推薦附近廁所」→ 送出文字給 handle_text
+        # 👉 切換到 AI 模式（走 postback，不再送文字）
         items.append(
             QuickReplyButton(
-                action=MessageAction(
-                    label="AI 推薦附近廁所",
-                    text="AI推薦附近廁所"
+                action=PostbackAction(
+                    label=_L("AI 推薦附近廁所", "AI nearby recommendation"),
+                    data="ask_ai_location",
+                    display_text=_L("切換成 AI 推薦模式", "Switch to AI mode")
                 )
             )
         )
     else:  # mode == "ai"
-        # 顯示「切換回一般模式」→ 送出文字給 handle_text
+        # 👉 切回一般模式
         items.append(
             QuickReplyButton(
-                action=MessageAction(
-                    label="切換回一般模式",
-                    text="切換回一般模式"
+                action=PostbackAction(
+                    label=_L("切換回一般模式", "Switch to normal mode"),
+                    data="ask_location",
+                    display_text=_L("切換回一般模式", "Switch to normal mode")
                 )
             )
         )
@@ -2544,7 +2586,16 @@ def build_status_index():
         return {}
 
 # ==== 環境變數 ====
-LIFF_ID_STATUS = os.getenv("LIFF_ID_STATUS") or os.getenv("LIFF_ID") or ""
+# ==== 環境變數（統一 LIFF 讀取）====
+def _get_liff_status_id() -> str:
+    return (
+        os.getenv("LIFF_STATUS_ID")      
+        or os.getenv("LIFF_ID_STATUS")
+        or os.getenv("LIFF_ID")
+        or ""
+    ).strip()
+
+LIFF_ID_STATUS = _get_liff_status_id()
 PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 
 # ==== 頁面 routes ====
@@ -2587,6 +2638,35 @@ def _read_status_rows():
     except Exception as e:
         logging.error(f"_read_status_rows error: {e}")
         return []
+def _parse_ts(ts: str):
+    try:
+        s = (ts or "").strip()
+        if not s:
+            return None
+
+        # ISO Z → +00:00
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+
+        try:
+            return datetime.fromisoformat(s)
+        except Exception:
+            pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M",
+        ):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+
+        return None
+    except Exception:
+        return None
 
 def _stats_for_user(uid: str):
     rows = _read_status_rows()
@@ -2604,13 +2684,10 @@ def _stats_for_user(uid: str):
 
         ts = r.get("timestamp")
         if ts:
-            try:
-                # 比較時間，取最新的
-                t = datetime.fromisoformat(ts)
+            t = _parse_ts(ts)
+            if t is not None:
                 if last_ts is None or t > last_ts:
                     last_ts = t
-            except:
-                pass
 
     return {
         "total": total,
@@ -2721,8 +2798,8 @@ def api_achievements():
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
 
-    # 用和徽章一樣的解鎖規則
-    unlocked_map = _badge_rules(uid)
+    # ✅ 語言只查一次（不要放在迴圈內）
+    lang = get_user_lang(uid)
 
     out = []
     for cfg in BADGE_CONFIG:
@@ -2739,21 +2816,17 @@ def api_achievements():
             # counter_type 對應到 by_status 裡的中文 key，例如「缺衛生紙」「有人排隊」等
             progress = int(by.get(counter_type, 0) or 0)
 
-        lang = get_user_lang(uid)
-        goal = rule["goal"]
+        goal = int(rule["goal"] or 0)
 
         out.append({
             "key": key,
-            "title": cfg["name"],            # 和徽章名稱一致
-            "desc": (
-                rule["desc"]["en"]
-                if lang == "en"
-                else rule["desc"]["zh"]
-            ),  # 上面 ACHIEVEMENT_RULES 定義的描述
+            "title": cfg["name"],  # 和徽章名稱一致
+            "desc": (rule["desc"]["en"] if lang == "en" else rule["desc"]["zh"]),
             "goal": goal,
             "progress": progress,
-            "unlocked": bool(unlocked_map.get(key, False)),
-            "icon": cfg.get("icon", ""),     # 多回傳 icon，前端要用也方便
+            # ✅ 成就解鎖應該用成就自己的規則（progress >= goal）
+            "unlocked": (progress >= goal),
+            "icon": cfg.get("icon", ""),
         })
 
     return {"ok": True, "achievements": out}, 200
@@ -3102,19 +3175,24 @@ def build_ai_nearby_recommendation(uid: str, toilets):
 
 # --- 依使用者統計計算解鎖 ---
 def _badge_rules(uid: str):
-    s = _stats_for_user(uid)              # {"total":N, "by_status":{...}, "last_ts":...}
-    by, total = s.get("by_status", {}), int(s.get("total", 0))
+    s = _stats_for_user(uid)
+    by = s.get("by_status", {}) or {}
+    total = int(s.get("total", 0) or 0)
+
+    def c(k):
+        return int(by.get(k, 0) or 0)
+
     return {
-        "first": total >= 1,                               # 第 1 次
-        "helper10": total >= 10,                           # 10 次
-        "pro_reporter": total >= 20,                       # 20 次
-        "helper50": total >= 50,                           # 50 次
-        "tissue_guard": by.get("缺衛生紙", 0) >= 3,         # 缺衛生紙 ×3
-        "tissue_master": by.get("缺衛生紙", 0) >= 10,       # 缺衛生紙 ×10
-        "queue_scout": by.get("有人排隊", 0) >= 3,          # 有人排隊 ×3
-        "queue_commander": by.get("有人排隊", 0) >= 10,     # 有人排隊 ×10
-        "maintenance_watcher": by.get("暫停使用", 0) >= 3,  # 暫停使用 ×3
-        "good_news": by.get("恢復正常", 0) >= 5,            # 恢復正常 ×5
+        "first": total >= 1,
+        "helper10": total >= 10,
+        "pro_reporter": total >= 20,
+        "helper50": total >= 50,
+        "tissue_guard": c("缺衛生紙") >= 3,
+        "tissue_master": c("缺衛生紙") >= 10,
+        "queue_scout": c("有人排隊") >= 3,
+        "queue_commander": c("有人排隊") >= 10,
+        "maintenance_watcher": c("暫停使用") >= 3,
+        "good_news": c("恢復正常") >= 5,
     }
 
 # --- 圖像/名稱設定（把 icon 檔放進 /static/badges/，檔名可依你實際素材調整）---
@@ -3645,11 +3723,22 @@ def render_privacy_page():
 # 狀態 LIFF 頁面
 @app.route("/status_liff")
 def status_liff():
-    liff_id = os.getenv("LIFF_STATUS_ID", "")
-    public_url = os.getenv("PUBLIC_URL", "")
-    assert liff_id, "LIFF_STATUS_ID not set"
-    assert public_url, "PUBLIC_URL not set"
-    return render_template("status_liff.html", liff_id=liff_id, public_url=public_url)
+    liff_id = _get_liff_status_id()
+    public_url = os.getenv("PUBLIC_URL", "").rstrip("/")
+
+    if not liff_id:
+        logging.error("LIFF_STATUS_ID / LIFF_ID_STATUS / LIFF_ID not set")
+        return "LIFF ID not set", 500
+
+    if not public_url:
+        logging.error("PUBLIC_URL not set")
+        return "PUBLIC_URL not set", 500
+
+    return render_template(
+        "status_liff.html",
+        liff_id=liff_id,
+        public_url=public_url
+    )
 
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
 _last_consent_ts = {}
@@ -3720,19 +3809,34 @@ def _short_txt(s, n=60):
         return s if len(s) <= n else (s[:n-1] + "…")
     except Exception:
         return s
+    
+def L(uid, zh, en=None):
+    try:
+        return en if (get_user_lang(uid) == "en" and en is not None) else zh
+    except Exception:
+        return zh
+
 
 # === 建立 Flex ===
 def create_toilet_flex_messages(toilets, uid=None):
     indicators = build_feedback_index()
     status_map = build_status_index()
 
-    # === 資料來源顯示對照 ===
+    # === 資料來源顯示對照（中/英）===
     SOURCE_LABEL = {
-        "public_csv": "政府開放資料",
-        "sheet": "使用者新增",
-        "osm": "OpenStreetMap",
-        "user": "使用者新增",
-        "favorite": "我的最愛",
+        "public_csv": ("政府開放資料", "Government Open Data"),
+        "sheet": ("使用者新增", "User Added"),
+        "osm": ("OpenStreetMap", "OpenStreetMap"),
+        "user": ("使用者新增", "User Added"),
+        "favorite": ("我的最愛", "My Favorites"),
+    }
+
+    # === 狀態（中/英）===
+    STATUS_EN = {
+        "恢復正常": "Back to normal",
+        "有人排隊": "Queue present",
+        "缺衛生紙": "No toilet paper",
+        "暫停使用": "Out of service",
     }
 
     bubbles = []
@@ -3741,16 +3845,23 @@ def create_toilet_flex_messages(toilets, uid=None):
 
         lat_s = norm_coord(toilet['lat'])
         lon_s = norm_coord(toilet['lon'])
-        addr_text = toilet.get('address') or "（無地址，使用座標）"
+        addr_text = toilet.get('address') or L(uid, "（無地址，使用座標）", "(No address, using coordinates)")
 
-        title = toilet.get('name') or ""
+        # -------------------------
+        # ✅ title（修正：不要先拼中文再 L）
+        # -------------------------
+        title = (toilet.get('name') or "").strip()
         if (not title) or title == "無名稱":
-            ph = toilet.get("place_hint")
-            title = f"{ph}（附近）廁所" if ph else "（未命名）廁所"
+            ph = (toilet.get("place_hint") or "").strip()
+
+            zh_title = f"{ph}（附近）廁所" if ph else "（未命名）廁所"
+            en_title = f"Toilet near {ph}" if ph else "(Unnamed) Toilet"
+            title = L(uid, zh_title, en_title)
 
         # === 來源文字（小小顯示）===
         source_type = toilet.get("type", "")
-        source_text = SOURCE_LABEL.get(source_type, "其他來源")
+        src_zh_en = SOURCE_LABEL.get(source_type, ("其他來源", "Other source"))
+        source_text = L(uid, src_zh_en[0], src_zh_en[1])
 
         # 只讀三個欄位（可能為空）
         lvl   = (toilet.get("level") or "").strip()
@@ -3763,9 +3874,11 @@ def create_toilet_flex_messages(toilets, uid=None):
         if st_obj and st_obj.get("status"):
             st = st_obj["status"]
             emoji = "🟡" if st == "有人排隊" else ("🧻" if st == "缺衛生紙" else ("⛔" if st == "暫停使用" else "✅"))
+            st_en = STATUS_EN.get(st, st)
+
             extra_lines.append({
                 "type": "text",
-                "text": _short_txt(f"{emoji} 狀態：{st}"),
+                "text": _short_txt(L(uid, f"{emoji} 狀態：{st}", f"{emoji} Status: {st_en}")),
                 "size": "sm", "color": "#666666", "wrap": True
             })
 
@@ -3773,44 +3886,60 @@ def create_toilet_flex_messages(toilets, uid=None):
             if lvl and pos and (lvl.strip().lower() != pos.strip().lower()):
                 extra_lines.append({
                     "type": "text",
-                    "text": _short_txt(f"🏷 樓層：{lvl}"),
+                    "text": _short_txt(L(uid, f"🏷 樓層：{lvl}", f"🏷 Floor: {lvl}")),
                     "size": "sm", "color": "#666666", "wrap": True
                 })
                 extra_lines.append({
                     "type": "text",
-                    "text": _short_txt(f"🧭 位置：{pos}"),
+                    "text": _short_txt(L(uid, f"🧭 位置：{pos}", f"🧭 Location: {pos}")),
                     "size": "sm", "color": "#666666", "wrap": True
                 })
             else:
                 val = pos or lvl
                 extra_lines.append({
                     "type": "text",
-                    "text": _short_txt(f"🧭 位置/樓層：{val}"),
+                    "text": _short_txt(L(uid, f"🧭 位置/樓層：{val}", f"🧭 Location/Floor: {val}")),
                     "size": "sm", "color": "#666666", "wrap": True
                 })
 
         if hours:
             extra_lines.append({
                 "type": "text",
-                "text": _short_txt(f"🕒 開放：{hours}"),
+                "text": _short_txt(L(uid, f"🕒 開放：{hours}", f"🕒 Hours: {hours}")),
                 "size": "sm", "color": "#666666", "wrap": True
             })
 
-        # 指示燈文字
+        # 指示燈文字（paper/access/avg）
         ind = indicators.get((lat_s, lon_s), {"paper": "?", "access": "?", "avg": None})
+
+        # ⭐ 評分顯示不分語言
         star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
-        paper_text = "🧻有" if ind.get("paper") == "有" else ("🧻無" if ind.get("paper") == "沒有" else "🧻—")
-        access_text = "♿有" if ind.get("access") == "有" else ("♿無" if ind.get("access") == "沒有" else "♿—")
+
+        # 🧻 paper 顯示
+        if ind.get("paper") == "有":
+            paper_text = L(uid, "🧻有", "🧻Yes")
+        elif ind.get("paper") == "沒有":
+            paper_text = L(uid, "🧻無", "🧻No")
+        else:
+            paper_text = "🧻—"
+
+        # ♿ access 顯示
+        if ind.get("access") == "有":
+            access_text = L(uid, "♿有", "♿Yes")
+        elif ind.get("access") == "沒有":
+            access_text = L(uid, "♿無", "♿No")
+        else:
+            access_text = "♿—"
 
         # 按鈕
         actions.append({
             "type": "uri",
-            "label": "導航",
+            "label": L(uid, "導航", "Navigate"),
             "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
         })
         actions.append({
             "type": "uri",
-            "label": "查詢回饋",
+            "label": L(uid, "查詢回饋", "View feedback"),
             "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
         })
 
@@ -3818,7 +3947,7 @@ def create_toilet_flex_messages(toilets, uid=None):
         addr_param = quote(addr_raw or "-")
         actions.append({
             "type": "uri",
-            "label": "廁所回饋",
+            "label": L(uid, "廁所回饋", "Leave feedback"),
             "uri": (
                 "https://school-i9co.onrender.com/feedback_form/"
                 f"{quote(title)}/{addr_param}"
@@ -3830,33 +3959,36 @@ def create_toilet_flex_messages(toilets, uid=None):
         ai_uri = f"{ai_page_base}/{lat_s}/{lon_s}" + (f"?uid={quote(uid)}" if uid else "")
         actions.append({
             "type": "uri",
-            "label": "AI 回饋摘要",
+            "label": L(uid, "AI 回饋摘要", "AI summary"),
             "uri": ai_uri
         })
 
         if toilet.get("type") == "favorite" and uid:
             actions.append({
                 "type": "postback",
-                "label": "移除最愛",
+                "label": L(uid, "移除最愛", "Remove favorite"),
                 "data": f"remove_fav:{quote(title)}:{lat_s}:{lon_s}"
             })
         elif toilet.get("type") not in ["user", "favorite"] and uid:
             actions.append({
                 "type": "postback",
-                "label": "加入最愛",
+                "label": L(uid, "加入最愛", "Add favorite"),
                 "data": f"add:{quote(title)}:{lat_s}:{lon_s}"
             })
 
         # === 主體內容（加上資料來源）===
+        dist = int(toilet.get('distance', 0) or 0)
+        dist_text = L(uid, f"{dist} 公尺", f"{dist} m")
+
         body_contents = [
             {"type": "text", "text": title, "weight": "bold", "size": "lg", "wrap": True},
             {"type": "text", "text": f"{paper_text}  {access_text}  {star_text}", "size": "sm", "color": "#555555", "wrap": True},
             {"type": "text", "text": addr_text, "size": "sm", "color": "#666666", "wrap": True},
         ] + extra_lines + [
-            {"type": "text", "text": f"{int(toilet.get('distance', 0))} 公尺", "size": "sm", "color": "#999999"},
+            {"type": "text", "text": dist_text, "size": "sm", "color": "#999999"},
             {
                 "type": "text",
-                "text": f"資料來源：{source_text}",
+                "text": L(uid, f"資料來源：{source_text}", f"Source: {source_text}"),
                 "size": "xs",
                 "color": "#AAAAAA",
                 "wrap": True
@@ -3924,39 +4056,68 @@ def create_my_contrib_flex(uid):
     contribs = get_user_contributions(uid)
     if not contribs:
         return None
+
     bubbles = []
     for it in contribs[:10]:
-        lat_s = norm_coord(it["lat"]); lon_s = norm_coord(it["lon"])
+        lat_s = norm_coord(it["lat"])
+        lon_s = norm_coord(it["lon"])
         addr_raw = it.get('address','') or ""
         addr_param = quote(addr_raw or "-")
+
         actions = [
-            {"type":"uri","label":"導航","uri":f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"},
-            {"type":"uri","label":"查詢回饋（座標）","uri":f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"},
-            {"type":"uri","label":"廁所回饋",
-             "uri":(
-                f"https://school-i9co.onrender.com/feedback_form/{quote(it['name'])}/{addr_param}"
-                f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
-             )},
-            {"type":"postback","label":"刪除此貢獻","data":f"confirm_delete_my_toilet:{it['row_index']}"}
+            {
+                "type": "uri",
+                "label": L(uid, "導航", "Navigate"),
+                "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
+            },
+            {
+                "type": "uri",
+                "label": L(uid, "查詢回饋（座標）", "View feedback (coord)"),
+                "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
+            },
+            {
+                "type": "uri",
+                "label": L(uid, "廁所回饋", "Leave feedback"),
+                "uri": (
+                    f"https://school-i9co.onrender.com/feedback_form/{quote(it['name'])}/{addr_param}"
+                    f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
+                )
+            },
+            {
+                "type": "postback",
+                "label": L(uid, "刪除此貢獻", "Delete this contribution"),
+                "data": f"confirm_delete_my_toilet:{it['row_index']}"
+            }
         ]
+
         bubble = {
-            "type":"bubble",
-            "body":{
-                "type":"box","layout":"vertical","contents":[
-                    {"type":"text","text":it["name"],"size":"lg","weight":"bold","wrap":True},
-                    {"type":"text","text":it.get("address") or "（無地址）","size":"sm","color":"#666666","wrap":True},
-                    {"type":"text","text":it['created'], "size":"xs","color":"#999999"}
+            "type": "bubble",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": it["name"], "size": "lg", "weight": "bold", "wrap": True},
+                    {"type": "text", "text": it.get("address") or L(uid, "（無地址）", "(No address)"),
+                     "size": "sm", "color": "#666666", "wrap": True},
+                    {"type": "text", "text": it.get("created",""), "size": "xs", "color": "#999999"}
                 ]
             },
-            "footer":{
-                "type":"box","layout":"vertical","spacing":"sm",
-                "contents":[{"type":"button","style":"primary","height":"sm","action":actions[0]}] + [
-                    {"type":"button","style":"secondary","height":"sm","action":a} for a in actions[1:]
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {"type": "button", "style": "primary", "height": "sm", "action": actions[0]}
+                ] + [
+                    {"type": "button", "style": "secondary", "height": "sm", "action": a}
+                    for a in actions[1:]
                 ]
             }
         }
+
         bubbles.append(bubble)
-    return {"type":"carousel","contents":bubbles}
+
+    return {"type":"carousel", "contents": bubbles}
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
@@ -4050,9 +4211,11 @@ def handle_text(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_text] event too old; skip reply.")
         return
+
     uid = event.source.user_id
     text_raw = event.message.text or ""
-    text = text_raw.strip().lower()
+    text_norm = text_raw.strip()
+    text = text_norm.lower()
 
     if is_duplicate_and_mark_event(event):
         return
@@ -4064,12 +4227,90 @@ def handle_text(event):
 
     reply_messages = []
 
+    # =========================
+    # ✅ 0) 把「中英文文字指令」統一成 cmd
+    # =========================
+    # 你可以在這裡一直擴充同義詞
+    TEXT_TO_CMD = {
+        # 附近廁所
+        "附近廁所": "nearby",
+        "nearby toilets": "nearby",
+        "nearby": "nearby",
+        "toilets nearby": "nearby",
+
+        # AI 推薦
+        "ai推薦附近廁所": "nearby_ai",
+        "ai nearby toilets": "nearby_ai",
+        "ai recommend": "nearby_ai",
+        "ai recommendation": "nearby_ai",
+
+        # 切換回一般模式
+        "切換回一般模式": "mode_normal",
+        "switch to normal": "mode_normal",
+        "normal mode": "mode_normal",
+
+        # 我的最愛
+        "我的最愛": "favs",
+        "my favorites": "favs",
+        "favorites": "favs",
+
+        # 我的貢獻
+        "我的貢獻": "contrib",
+        "my contributions": "contrib",
+        "contributions": "contrib",
+
+        # 新增廁所
+        "新增廁所": "add",
+        "add toilet": "add",
+        "add a toilet": "add",
+
+        # 意見回饋
+        "意見回饋": "feedback",
+        "feedback": "feedback",
+
+        # 合作信箱
+        "合作信箱": "contact",
+        "contact": "contact",
+
+        # 狀態回報
+        "狀態回報": "status",
+        "status report": "status",
+        "report status": "status",
+
+        # 成就
+        "成就": "ach",
+        "achievements": "ach",
+
+        # 徽章
+        "徽章": "badges",
+        "badges": "badges",
+
+        # 使用回顧
+        "使用回顧": "review",
+        "usage summary": "review",
+        "review": "review",
+
+        # 使用說明
+        "使用說明": "help",
+        "help": "help",
+    }
+
+    cmd = TEXT_TO_CMD.get(text_norm, None)
+    if cmd is None:
+        cmd = TEXT_TO_CMD.get(text, None)
+
+    # =========================
+    # 你原本：pending_delete_confirm 的處理維持原樣
+    # =========================
     if uid in pending_delete_confirm:
         ...
         # （這段維持原樣）
         ...
 
-    elif text == "附近廁所":
+    # =========================
+    # ✅ 1) 統一用 cmd 走（文字輸入）
+    # =========================
+    elif cmd == "nearby":
         set_user_loc_mode(uid, "normal")
         try:
             msg = L(
@@ -4077,53 +4318,48 @@ def handle_text(event):
                 "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
                 "📍 Please share your location and I will find nearby toilets for you"
             )
-            safe_reply(
-                event,
-                make_location_quick_reply(msg, mode="normal")
-            )
-
+            safe_reply(event, make_location_quick_reply(msg, mode="normal"))
         except Exception as e:
-            logging.error(f"附近廁所 quick reply 失敗: {e}")
-            safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+            logging.error(f"附近廁所 quick reply 失敗: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
         return
 
-    elif text == "ai推薦附近廁所":
-        # 切換成 AI 模式，之後傳位置都走 AI
+    elif cmd == "nearby_ai":
         set_user_loc_mode(uid, "ai")
         try:
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    "📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所",
+                    L(uid, "📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所",
+                      "📍 Please share your location. I will use AI to pick the best nearby toilets."),
                     mode="ai"
                 )
             )
         except Exception as e:
-            logging.error(f"AI 推薦附近廁所 quick reply 失敗: {e}")
-            safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+            logging.error(f"AI 推薦附近廁所 quick reply 失敗: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
         return
 
-    elif text == "切換回一般模式":
-        # 使用者主動切回一般模式
+    elif cmd == "mode_normal":
         set_user_loc_mode(uid, "normal")
         try:
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    "✅ 已切換回一般模式，請點『發送我的位置』我會幫你找最近的廁所",
+                    L(uid, "✅ 已切換回一般模式，請點『發送我的位置』我會幫你找最近的廁所",
+                      "✅ Switched to normal mode. Please share your location to find nearby toilets."),
                     mode="normal"
                 )
             )
         except Exception as e:
-            logging.error(f"切換回一般模式 quick reply 失敗: {e}")
-            safe_reply(event, TextSendMessage(text="❌ 系統錯誤，請稍後再試"))
+            logging.error(f"切換回一般模式 quick reply 失敗: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
         return
-    
-    # === 我的最愛 ===
-    elif text == "我的最愛":
+
+    elif cmd == "favs":
         favs = get_user_favorites(uid)
         if not favs:
-            reply_messages.append(TextSendMessage(text="你尚未收藏任何廁所"))
+            reply_messages.append(TextSendMessage(text=L(uid, "你尚未收藏任何廁所", "You have no favorites yet.")))
         else:
             loc = get_user_location(uid)
             if loc:
@@ -4131,18 +4367,16 @@ def handle_text(event):
                 for f in favs:
                     f["distance"] = haversine(lat, lon, f["lat"], f["lon"])
             msg = create_toilet_flex_messages(favs, uid=uid)
-            reply_messages.append(FlexSendMessage("我的最愛", msg))
+            reply_messages.append(FlexSendMessage(L(uid, "我的最愛", "My Favorites"), msg))
 
-    # === 我的貢獻 ===
-    elif text == "我的貢獻":
+    elif cmd == "contrib":
         msg = create_my_contrib_flex(uid)
         if msg:
-            reply_messages.append(FlexSendMessage("我新增的廁所", msg))
+            reply_messages.append(FlexSendMessage(L(uid, "我新增的廁所", "My Contributions"), msg))
         else:
-            reply_messages.append(TextSendMessage(text="你還沒有新增過廁所喔。"))
+            reply_messages.append(TextSendMessage(text=L(uid, "你還沒有新增過廁所喔。", "You haven't added any toilets yet.")))
 
-    # === 新增廁所 ===
-    elif text == "新增廁所":
+    elif cmd == "add":
         base = "https://school-i9co.onrender.com/add"
         loc = get_user_location(uid)
         if loc:
@@ -4150,41 +4384,48 @@ def handle_text(event):
             url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
         else:
             url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
-        reply_messages.append(TextSendMessage(text=f"請前往此頁新增廁所：\n{url}"))
+        reply_messages.append(TextSendMessage(text=L(uid, f"請前往此頁新增廁所：\n{url}", f"Please add a toilet here:\n{url}")))
 
-    # === 意見回饋 ===
-    elif text == "意見回饋":
+    elif cmd == "feedback":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
-        reply_messages.append(TextSendMessage(text=f"💡 請透過下列連結回報問題或提供意見：\n{form_url}"))
+        reply_messages.append(TextSendMessage(text=L(uid, f"💡 請透過下列連結回報問題或提供意見：\n{form_url}",
+                                                  f"💡 Please send feedback via:\n{form_url}")))
 
-    # === 合作信箱 ===
-    elif text == "合作信箱":
+    elif cmd == "contact":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
         ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
-        reply_messages.append(TextSendMessage(
-            text=f"📬 合作信箱：{email}\n\n 📸 官方IG: {ig_url}"
-        ))
+        reply_messages.append(TextSendMessage(text=L(uid, f"📬 合作信箱：{email}\n\n📸 官方IG: {ig_url}",
+                                                  f"📬 Contact: {email}\n\n📸 IG: {ig_url}")))
 
-    # === 狀態回報 ===
-    elif text == "狀態回報":
+    elif cmd == "status":
         url = _status_liff_url()
-        safe_reply(event, TextSendMessage(text=f"⚡ 開啟狀態回報：\n{url}"))
+        safe_reply(event, TextSendMessage(text=L(uid, f"⚡ 開啟狀態回報：\n{url}", f"⚡ Open status report:\n{url}")))
+        return
 
-    # === 成就 ===
-    elif text == "成就":
+    elif cmd == "ach":
         reply_url = f"{PUBLIC_URL}/achievements_liff"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{t('view_achievements', uid)} 👉 {reply_url}"))
+        safe_reply(event, TextSendMessage(text=L(uid, f"查看成就 👉 {reply_url}", f"View achievements 👉 {reply_url}")))
+        return
 
-    # === 徽章 ===
-    elif text == "徽章":
+    elif cmd == "badges":
         reply_url = f"{PUBLIC_URL}/badges_liff"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查看徽章 👉 {reply_url}"))
+        safe_reply(event, TextSendMessage(text=L(uid, f"查看徽章 👉 {reply_url}", f"View badges 👉 {reply_url}")))
+        return
 
-    # === 使用回顧 ===
-    elif text == "使用回顧":
+    elif cmd == "review":
         summary = build_usage_review_text(uid)
         reply_messages.append(TextSendMessage(text=summary))
 
+    elif cmd == "help":
+        reply_messages.append(TextSendMessage(text=L(
+            uid,
+            "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
+            "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
+        )))
+
+    # =========================
+    # ✅ 最後照你原本：有 reply_messages 就回
+    # =========================
     if reply_messages:
         safe_reply(event, reply_messages)
 
@@ -4278,18 +4519,17 @@ def handle_location(event):
 
                 # 👉 訊息數量：1 則 Flex + 1 則 quick-reply 文字
                 messages = [
-                    FlexSendMessage("附近廁所（AI 模式）", msg),
-                    make_location_quick_reply("想用 AI 再分析其他位置嗎？"),
+                    FlexSendMessage(L(uid, "附近廁所（AI 模式）", "Nearby Toilets (AI Mode)"), msg),
+                    make_location_quick_reply(L(uid, "想用 AI 再分析其他位置嗎？", "Want AI to analyze another location?")),
                 ]
 
             else:
                 # ⚡ 一般模式：原本行為不變
                 messages = [
-                    FlexSendMessage("附近廁所", msg),
+                    FlexSendMessage(L(uid, "附近廁所", "Nearby Toilets"), msg),
                     make_location_quick_reply(
                         L(uid, "想換個地點再找嗎？", "Want to search another location?")
-                    )
-                    ,
+                    ),
                 ]
 
             safe_reply(event, messages)
@@ -4303,12 +4543,30 @@ def handle_location(event):
 # === Postback ===
 @handler.add(PostbackEvent)
 def handle_postback(event):
-    data = event.postback.data
+    data = (event.postback.data or "").strip()
     uid = event.source.user_id
-
     # =========================
     # 1️⃣ 語言切換（最優先）
     # =========================
+    # ✅ 支援 richmenuswitch data: "lang=en" / "lang=zh"
+    if data in ("lang=en", "lang=zh"):
+        try:
+            lang = "en" if data == "lang=en" else "zh"
+            set_user_lang(uid, lang)
+
+            # （可選）提示使用者
+            safe_reply(
+                event,
+                TextSendMessage(
+                    text=("✅ Language switched to English" if lang == "en" else "✅ 已切換為中文")
+                )
+            )
+        except Exception as e:
+            logging.error(f"切換語言失敗: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text="❌ 切換語言失敗，請稍後再試"))
+        return
+
+    # ✅ 保留你原本的 set_lang:en / set_lang:zh
     if data == "set_lang:en":
         set_user_lang(uid, "en")
         return
@@ -4332,6 +4590,128 @@ def handle_postback(event):
         return
 
     try:
+        # ==========================================================
+        # ✅ 3.5️⃣ Rich Menu 統一指令：cmd=xxxx（中英文按鈕都走這）
+        # ==========================================================
+        if data.startswith("cmd="):
+            cmd = data.split("=", 1)[1].strip()
+
+            # 只是佔位不做事
+            if cmd in ("noop_main", "noop_more"):
+                return
+
+            # 我的最愛
+            if cmd == "favs":
+                favs = get_user_favorites(uid)
+                if not favs:
+                    safe_reply(event, TextSendMessage(text=L(uid, "你尚未收藏任何廁所", "You have no favorites yet.")))
+                    return
+
+                loc = get_user_location(uid)
+                if loc:
+                    lat, lon = loc
+                    for f in favs:
+                        f["distance"] = haversine(lat, lon, f["lat"], f["lon"])
+
+                msg = create_toilet_flex_messages(favs, uid=uid)
+                safe_reply(event, FlexSendMessage(L(uid, "我的最愛", "My Favorites"), msg))
+                return
+
+            # 使用說明
+            if cmd == "help":
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
+                    "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
+                )))
+                return
+
+            # 新增廁所（⚠️ 你的 rich menu 用 cmd=add）
+            if cmd == "add":
+                base = "https://school-i9co.onrender.com/add"
+                loc = get_user_location(uid)
+                if loc:
+                    la, lo = loc
+                    url = f"{base}?uid={quote(uid)}&lat={la}&lon={lo}#openExternalBrowser=1"
+                else:
+                    url = f"{base}?uid={quote(uid)}#openExternalBrowser=1"
+
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"請前往此頁新增廁所：\n{url}",
+                    f"Please add a toilet here:\n{url}"
+                )))
+                return
+
+            # 我的貢獻（⚠️ 你的 rich menu 用 cmd=contrib）
+            if cmd == "contrib":
+                msg = create_my_contrib_flex(uid)
+                if msg:
+                    safe_reply(event, FlexSendMessage(L(uid, "我新增的廁所", "My Contributions"), msg))
+                else:
+                    safe_reply(event, TextSendMessage(text=L(uid, "你還沒有新增過廁所喔。", "You haven't added any toilets yet.")))
+                return
+
+            # 意見回饋
+            if cmd == "feedback":
+                form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"💡 請透過下列連結回報問題或提供意見：\n{form_url}",
+                    f"💡 Please send feedback via:\n{form_url}"
+                )))
+                return
+
+            # 狀態回報
+            if cmd == "status":
+                url = _status_liff_url()
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"⚡ 開啟狀態回報：\n{url}",
+                    f"⚡ Open status report:\n{url}"
+                )))
+                return
+
+            # 成就（⚠️ 你的 rich menu 用 cmd=ach）
+            if cmd == "ach":
+                reply_url = f"{PUBLIC_URL}/achievements_liff"
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"查看成就 👉 {reply_url}",
+                    f"View achievements 👉 {reply_url}"
+                )))
+                return
+
+            # 徽章
+            if cmd == "badges":
+                reply_url = f"{PUBLIC_URL}/badges_liff"
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"查看徽章 👉 {reply_url}",
+                    f"View badges 👉 {reply_url}"
+                )))
+                return
+
+            # 使用回顧（⚠️ 你的 rich menu 用 cmd=review）
+            if cmd == "review":
+                summary = build_usage_review_text(uid)
+                safe_reply(event, TextSendMessage(text=summary))
+                return
+
+            # 你想加的合作信箱（目前 rich menu 沒放也沒關係）
+            if cmd == "contact":
+                email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
+                ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    f"📬 合作信箱：{email}\n\n📸 官方IG: {ig_url}",
+                    f"📬 Contact: {email}\n\n📸 IG: {ig_url}"
+                )))
+                return
+
+            # 沒對到就不回（避免噴錯）
+            return
+
         # =========================
         # 4️⃣ 位置查詢（一般）
         # =========================
@@ -4340,7 +4720,7 @@ def handle_postback(event):
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    L(uid, "ask_location_normal"),
+                    t("ask_location_normal", uid),
                     mode=mode
                 )
             )
@@ -4354,7 +4734,7 @@ def handle_postback(event):
             safe_reply(
                 event,
                 make_location_quick_reply(
-                    L(uid, "ask_location_ai"),
+                    t("ask_location_ai", uid),
                     mode="ai"
                 )
             )
@@ -4377,13 +4757,7 @@ def handle_postback(event):
             }
 
             add_to_favorites(uid, toilet)
-
-            safe_reply(
-                event,
-                TextSendMessage(
-                    text=L(uid, "added_fav_ok").format(name=name)
-                )
-            )
+            safe_reply(event, TextSendMessage(text=L(uid, "added_fav_ok").format(name=name)))
             return
 
         # =========================
@@ -4395,11 +4769,7 @@ def handle_postback(event):
 
             success = remove_from_favorites(uid, name, lat, lon)
             key = "removed_fav_ok" if success else "removed_fav_fail"
-
-            safe_reply(
-                event,
-                TextSendMessage(text=L(uid, key))
-            )
+            safe_reply(event, TextSendMessage(text=L(uid, key)))
             return
 
         # =========================
@@ -4417,12 +4787,8 @@ def handle_postback(event):
             }
 
             safe_reply(event, [
-                TextSendMessage(
-                    text=L(uid, "confirm_delete").format(name=name)
-                ),
-                TextSendMessage(
-                    text=L(uid, "confirm_hint")
-                )
+                TextSendMessage(text=t("confirm_delete", uid).format(name=name)),
+                TextSendMessage(text=t("confirm_hint", uid))
             ])
             return
 
@@ -4438,26 +4804,19 @@ def handle_postback(event):
             }
 
             safe_reply(event, [
-                TextSendMessage(
-                    text=L(uid, "confirm_delete_my_toilet")
-                ),
-                TextSendMessage(
-                    text=L(uid, "confirm_hint")
-                )
+                TextSendMessage(text=L(uid, "confirm_delete_my_toilet")),
+                TextSendMessage(text=L(uid, "confirm_hint"))
             ])
             return
 
         # =========================
-        # 🔟 AI 回饋摘要
+        # 🔟 AI 回饋摘要（你原本的）
         # =========================
         if data.startswith("ai_summary:"):
             try:
                 _, lat, lon = data.split(":", 2)
             except ValueError:
-                safe_reply(
-                    event,
-                    TextSendMessage(text=L(uid, "ai_summary_format_error"))
-                )
+                safe_reply(event, TextSendMessage(text=t("ai_summary_format_error", uid)))
                 return
 
             try:
@@ -4472,19 +4831,19 @@ def handle_postback(event):
                     if js.get("success") and js.get("summary"):
                         msg = js["summary"]
                     else:
-                        msg = js.get("message", L(uid, "ai_summary_unavailable"))
+                        msg = js.get("message", t("ai_summary_unavailable", uid))
                 else:
-                    msg = L(uid, "ai_summary_busy")
+                    msg = t("ai_summary_busy", uid)
 
             except Exception as e:
-                logging.error(f"AI summary postback error: {e}")
-                msg = L(uid, "ai_summary_error")
+                logging.error(f"AI summary postback error: {e}", exc_info=True)
+                msg = t("ai_summary_error", uid)
 
             safe_reply(event, TextSendMessage(text=msg))
             return
 
     except Exception as e:
-        logging.error(f"❌ 處理 postback 失敗: {e}")
+        logging.error(f"❌ 處理 postback 失敗: {e}", exc_info=True)
 
 # === 新增廁所頁面 ===
 @app.route("/add", methods=["GET"])
@@ -4665,6 +5024,20 @@ def _ensure_search_table():
     conn.close()
 
 _ensure_search_table()
+
+def _ensure_user_lang_table():
+    conn = _get_db()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_lang (
+        user_id TEXT PRIMARY KEY,
+        lang TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+_ensure_user_lang_table()
 
 def _ensure_search_index():
     conn = _get_db()
