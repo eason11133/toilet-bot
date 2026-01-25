@@ -217,16 +217,6 @@ def retry_request(func, *args, **kwargs):
             else:
                 raise e
 
-def L(uid, zh, en):
-    """
-    最小侵入式語言 helper
-    """
-    try:
-        lang = get_user_lang(uid)
-    except Exception:
-        lang = "zh"
-    return en if lang == "en" else zh
-
 class SafeWS:
     def __init__(self, ws, sheet_id: str, name: str):
         self._ws = ws
@@ -412,6 +402,26 @@ def L(uid, zh_or_key, en=None):
 
     # 舊版 zh / en 模式
     return en if lang == "en" else zh_or_key
+
+def _api_lang():
+    # API 沒有 LINE uid 時，用 querystring 控制語言：?lang=en
+    lang = (request.args.get("lang") or "").strip().lower()
+    return "en" if lang == "en" else "zh"
+
+def _api_L(zh, en):
+    return en if _api_lang() == "en" else zh
+
+API_TEXTS = {
+    "missing_params": ("缺少參數", "Missing parameters"),
+    "invalid_params": ("參數錯誤", "Invalid parameters"),
+    "not_found": ("找不到資料", "Data not found"),
+    "write_failed": ("寫入失敗", "Write failed"),
+    "server_error": ("伺服器錯誤", "Server error"),
+}
+
+def _api_T(key: str):
+    zh, en = API_TEXTS.get(key, (key, key))
+    return _api_L(zh, en)
 
 # === consent 背景排隊（429 時不回 500） ===
 _consent_q = []                    
@@ -1833,7 +1843,7 @@ def nearby_toilets():
     user_lat = request.args.get('lat')
     user_lon = request.args.get('lon')
     if not user_lat or not user_lon:
-        return {"error": "缺少位置參數"}, 400
+        return {"error": _api_L("缺少位置參數", "Missing location parameters")}, 400
 
     user_lat = float(user_lat)
     user_lon = float(user_lon)
@@ -1846,7 +1856,7 @@ def nearby_toilets():
     sort_toilets(all_toilets)
 
     if not all_toilets:
-        return {"message": "附近找不到廁所"}, 404
+        return {"message": _api_L("附近找不到廁所", "No nearby toilets found")}, 404
     return {"toilets": all_toilets}, 200
 
 # === 顯示回饋表單 ===
@@ -2131,16 +2141,15 @@ def api_status_report():
         display_name = (payload.get("display_name") or "").strip()
         note = (payload.get("note") or "").strip()
     except Exception:
-        return {"ok": False, "message": "參數錯誤"}, 400
+        return {"ok": False, "message": _api_L("參數錯誤", "Invalid parameters")}, 400
 
-    # 白名單檢查，避免髒資料
     allowed = {"有人排隊", "缺衛生紙", "暫停使用", "恢復正常"}
     if status_text not in allowed:
-        return {"ok": False, "message": "不支援的狀態"}, 400
+        return {"ok": False, "message": _api_L("不支援的狀態", "Unsupported status")}, 400
 
     try:
         ok = submit_status_update(lat, lon, status_text, user_id, display_name, note)
-        return ({"ok": True}, 200) if ok else ({"ok": False, "message": "寫入失敗"}, 500)
+        return ({"ok": True}, 200) if ok else ({"ok": False, "message": _api_L("寫入失敗", "Write failed")}, 500)
     except Exception as e:
         logging.error(f"/api/status_report 寫入失敗: {e}")
         return {"ok": False, "message": "server error"}, 500
@@ -2987,7 +2996,7 @@ def build_ai_usage_summary(uid: str) -> str:
 
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
-    last_ts = stats.get("last_ts") or "尚無紀錄"
+    last_ts = stats.get("last_ts") or L(uid, "尚無紀錄", "No record")
 
     try:
         contribs = get_user_contributions(uid) or []
@@ -3023,8 +3032,9 @@ def build_ai_usage_summary(uid: str) -> str:
             "I’ll prepare a personalized report for you soon 🙌"
         )
 
-    # 🔸 如果沒有設定 AI 金鑰或 client，退回原本的文字版使用回顧
-    if client is None:
+    # 🔸 client 防呆（避免 client 尚未初始化就被呼叫）
+    _client = globals().get("client", None)
+    if _client is None:
         return build_usage_review_text(uid)
 
     # 🔹 每個使用者「AI 使用回顧」每天最多觸發 AI_DAILY_LIMIT 次
@@ -3033,7 +3043,12 @@ def build_ai_usage_summary(uid: str) -> str:
         base = build_usage_review_text(uid)
         return base + "\n\n（今日 AI 使用回顧次數已達上限，明天再來看看新的分析吧 🙏）"
 
-    # 組成給 AI 的資料 payload（JSON）
+    # ✅ 依使用者語言決定 AI 回覆語言（加防呆）
+    try:
+        lang = get_user_lang(uid)
+    except Exception:
+        lang = "zh"
+
     payload = {
         "search_times": search_times,
         "status_total": total,
@@ -3045,33 +3060,58 @@ def build_ai_usage_summary(uid: str) -> str:
     }
 
     try:
-        import json  # 如果檔案裡已經有 import 過也沒關係
-        prompt = f"""
+        import json
+        payload_json = json.dumps(payload, ensure_ascii=False)
+
+        # ✅ 中英 prompt 分離（避免模型語言混亂）
+        prompt_zh = f"""
 你是一個溫暖的生活小助手，要幫使用者總結他使用「智慧廁所助手」的情況。
 
 下面是一位使用者的使用統計資料（JSON）：
-{json.dumps(payload, ensure_ascii=False)}
+{payload_json}
 
 請根據這些數據，幫他產生一段「個人使用回顧」，要求如下：
-
 - 使用繁體中文
 - 整體篇幅控制在 4～7 行以內
-- 第一行給一個總結句（像 Spotify Wrapped 的開場：例如「你是最常回報缺衛生紙的人之一！」）
-- 接著條列 3～5 點重點，建議可以包含：
-  - 查詢附近廁所的次數
-  - 狀態回報次數，常出現的狀態類型（例如：缺衛生紙、有人排隊、恢復正常等）
-  - 你新增了多少間廁所
-  - 你收藏了多少間最愛廁所
-  - 解鎖了多少個徽章（如果有的話）
-- 最後一行給一個簡短的鼓勵或建議（例如鼓勵多多回報、一起維護好廁所環境）
+- 第 1 行：Wrapped 風格的一句開場總結
+- 接著列出 3～5 點重點（用條列）
+  - 查詢附近廁所次數
+  - 狀態回報次數、最常見的狀態類型
+  - 新增廁所數
+  - 收藏最愛數
+  - 解鎖徽章數（若有）
+- 最後 1 行：一句鼓勵或小建議
 
 請直接輸出給使用者看的內容，不要再出現 JSON 或技術描述。
         """.strip()
 
-        resp = client.chat.completions.create(
+        prompt_en = f"""
+You are a warm, friendly assistant summarizing a user's usage of the "Smart Toilet Assistant".
+
+Here is the user's usage stats (JSON):
+{payload_json}
+
+Write a short "usage recap" with:
+- English only
+- 4–7 lines total
+- Line 1: a Wrapped-style headline
+- Then 3–5 bullet highlights (searches, status reports + most common types, contributions, favorites, badges)
+- Final line: a short encouragement or tip
+
+Output user-facing text only. Do NOT include JSON or technical descriptions.
+        """.strip()
+
+        prompt = prompt_en if lang == "en" else prompt_zh
+        system_msg = (
+            "You are a friendly assistant that writes a short usage recap in English."
+            if lang == "en"
+            else "你是一個幫忙做使用回顧的生活小助手，說話親切、簡潔，用繁體中文。"
+        )
+
+        resp = _client.chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": "你是一個幫忙做使用回顧的生活小助手，說話親切、簡潔，用繁體中文。"},
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
             ],
         )
@@ -3081,9 +3121,8 @@ def build_ai_usage_summary(uid: str) -> str:
 
     except Exception as e:
         logging.error(f"AI usage summary error: {e}", exc_info=True)
-        # 有問題時，不讓使用者噴錯，退回原本版本
         return build_usage_review_text(uid)
-    
+
 def build_ai_nearby_recommendation(uid: str, toilets):
     """
     依據附近廁所清單，呼叫 OpenAI 幫忙產生一段推薦說明文字。
@@ -3111,6 +3150,10 @@ def build_ai_nearby_recommendation(uid: str, toilets):
             "You have reached today's AI nearby recommendation limit.\n"
             "Please switch back to normal mode to continue 👍"
         )
+
+    # ✅ 3-3：依使用者語言決定 AI 回覆語言
+    lang = get_user_lang(uid)
+    lang_rule = "請使用繁體中文回答。" if lang != "en" else "Please answer in English."
 
     try:
         import json
@@ -3162,19 +3205,22 @@ def build_ai_nearby_recommendation(uid: str, toilets):
 - 即時狀態 status（例如：有人排隊、暫停使用、恢復正常）
 
 幫使用者做一段簡短的「推薦說明」，要求：
-- 使用繁體中文
-- 總長度 3～5 行
-- 第一行先講整體情況
-- 接著條列推薦 1～2 間（最多 3 間）廁所
-- 最後一行給一個簡短小建議
+{lang_rule}
+- Keep the total length within 3–5 lines.
+- First line: a quick overall summary.
+- Then recommend 1–2 toilets (up to 3 max) with brief reasons.
+- Final line: a short tip.
 
-請直接輸出給使用者看的文字，不要再出現 JSON 或技術說明。
+Please output user-facing text only. Do NOT include JSON or technical descriptions.
         """.strip()
 
         resp = client.chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": "你是一個幫忙推薦附近廁所的生活小助手，說話親切、簡潔，用繁體中文。"},
+                {
+                    "role": "system",
+                    "content": f"You are a friendly assistant that recommends nearby toilets. {lang_rule}"
+                },
                 {"role": "user", "content": prompt}
             ],
         )
@@ -3555,28 +3601,35 @@ def api_ai_feedback_summary(lat, lon):
     依照座標讀取 feedback_sheet 的回饋紀錄，
     丟給 OpenAI 做摘要，依使用者語言回傳中 / 英文 JSON。
     """
+    uid = (request.args.get("uid") or "").strip()  # ✅ 先放最前面，避免 except 用不到 uid
+
     try:
         _ensure_sheets_ready()
         if feedback_sheet is None:
             return jsonify({
                 "success": False,
-                "message": "feedback_sheet not ready"
+                "message": L(uid, "回饋表尚未就緒，請稍後再試", "Feedback sheet not ready, please try again later")
             }), 503
 
         if client is None:
             return jsonify({
                 "success": False,
-                "message": "AI key not configured"
+                "message": L(uid, "AI 金鑰尚未設定", "AI key not configured")
             }), 500
-
-        # 先取得 uid（後面語言 & quota 會用）
-        uid = (request.args.get("uid") or "").strip()
 
         # === 語言判斷 ===
         try:
             lang = get_user_lang(uid)
         except Exception:
             lang = "zh"
+
+        # ✅ 讓 system 也跟語言一致（避免混語）
+        lang_rule = "請使用繁體中文回答。" if lang != "en" else "Please answer in English."
+        system_msg = (
+            f"You analyze restroom feedback and summarize it clearly. {lang_rule}"
+            if lang == "en"
+            else f"你負責分析廁所回饋並清楚摘要重點。{lang_rule}"
+        )
 
         # 驗證 lat / lon
         try:
@@ -3676,7 +3729,6 @@ def api_ai_feedback_summary(lat, lon):
 You are a restroom cleanliness analysis assistant.
 
 Please read the following feedback data (JSON format) and provide:
-
 1. Common recent issues (e.g. lack of toilet paper, slippery floor, odor, broken facilities)
 2. Overall user sentiment (positive / neutral / negative) with a brief explanation
 3. Cleanliness trend (getting cleaner / getting worse / mostly stable). If data is insufficient, explain why.
@@ -3705,7 +3757,7 @@ Feedback data (JSON):
         ai_resp = client.chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": "You analyze restroom feedback and summarize it clearly."},
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
             ]
         )
@@ -3824,13 +3876,6 @@ def _short_txt(s, n=60):
         return s if len(s) <= n else (s[:n-1] + "…")
     except Exception:
         return s
-    
-def L(uid, zh, en=None):
-    try:
-        return en if (get_user_lang(uid) == "en" and en is not None) else zh
-    except Exception:
-        return zh
-
 
 # === 建立 Flex ===
 def create_toilet_flex_messages(toilets, uid=None):
