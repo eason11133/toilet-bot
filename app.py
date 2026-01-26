@@ -4295,7 +4295,7 @@ def handle_text(event):
     # 你可以在這裡一直擴充同義詞
     TEXT_TO_CMD = {
         # 附近廁所
-        "附近廁所": "nearby",
+        "附近廁所": "Nearby Toilets",
         "nearby toilets": "nearby",
         "nearby": "nearby",
         "toilets nearby": "nearby",
