@@ -4295,7 +4295,7 @@ def handle_text(event):
     # 你可以在這裡一直擴充同義詞
     TEXT_TO_CMD = {
         # 附近廁所
-        "附近廁所": "Nearby Toilets",
+        "附近廁所": "nearby",
         "nearby toilets": "nearby",
         "nearby": "nearby",
         "toilets nearby": "nearby",
@@ -4607,16 +4607,14 @@ def handle_location(event):
 def handle_postback(event):
     data = (event.postback.data or "").strip()
     uid = event.source.user_id
+
     # =========================
     # 1️⃣ 語言切換（最優先）
     # =========================
-    # ✅ 支援 richmenuswitch data: "lang=en" / "lang=zh"
     if data in ("lang=en", "lang=zh"):
         try:
             lang = "en" if data == "lang=en" else "zh"
             set_user_lang(uid, lang)
-
-            # （可選）提示使用者
             safe_reply(
                 event,
                 TextSendMessage(
@@ -4628,7 +4626,6 @@ def handle_postback(event):
             safe_reply(event, TextSendMessage(text="❌ 切換語言失敗，請稍後再試"))
         return
 
-    # ✅ 保留你原本的 set_lang:en / set_lang:zh
     if data == "set_lang:en":
         set_user_lang(uid, "en")
         return
@@ -4653,13 +4650,29 @@ def handle_postback(event):
 
     try:
         # ==========================================================
-        # ✅ 3.5️⃣ Rich Menu 統一指令：cmd=xxxx（中英文按鈕都走這）
+        # 3.5️⃣ Rich Menu 統一指令：cmd=xxxx
         # ==========================================================
         if data.startswith("cmd="):
             cmd = data.split("=", 1)[1].strip()
 
-            # 只是佔位不做事
             if cmd in ("noop_main", "noop_more"):
+                return
+
+            # =========================
+            # ✅ 新增：附近廁所（重點）
+            # =========================
+            if cmd == "nearby":
+                mode = get_user_loc_mode(uid)
+                safe_reply(
+                    event,
+                    make_location_quick_reply(
+                        L(uid,
+                          "📍 請點下方『傳送我的位置』，我立刻幫你找廁所",
+                          "📍 Please share your location and I’ll find nearby toilets for you"),
+                        mode=mode,
+                        uid=uid
+                    )
+                )
                 return
 
             # 我的最愛
@@ -4688,7 +4701,7 @@ def handle_postback(event):
                 )))
                 return
 
-            # 新增廁所（⚠️ 你的 rich menu 用 cmd=add）
+            # 新增廁所
             if cmd == "add":
                 base = "https://school-i9co.onrender.com/add"
                 loc = get_user_location(uid)
@@ -4705,7 +4718,7 @@ def handle_postback(event):
                 )))
                 return
 
-            # 我的貢獻（⚠️ 你的 rich menu 用 cmd=contrib）
+            # 我的貢獻
             if cmd == "contrib":
                 msg = create_my_contrib_flex(uid)
                 if msg:
@@ -4734,7 +4747,7 @@ def handle_postback(event):
                 )))
                 return
 
-            # 成就（⚠️ 你的 rich menu 用 cmd=ach）
+            # 成就
             if cmd == "ach":
                 reply_url = f"{PUBLIC_URL}/achievements_liff"
                 safe_reply(event, TextSendMessage(text=L(
@@ -4754,28 +4767,16 @@ def handle_postback(event):
                 )))
                 return
 
-            # 使用回顧（⚠️ 你的 rich menu 用 cmd=review）
+            # 使用回顧
             if cmd == "review":
                 summary = build_usage_review_text(uid)
                 safe_reply(event, TextSendMessage(text=summary))
                 return
 
-            # 你想加的合作信箱（目前 rich menu 沒放也沒關係）
-            if cmd == "contact":
-                email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
-                ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
-                safe_reply(event, TextSendMessage(text=L(
-                    uid,
-                    f"📬 合作信箱：{email}\n\n📸 官方IG: {ig_url}",
-                    f"📬 Contact: {email}\n\n📸 IG: {ig_url}"
-                )))
-                return
-
-            # 沒對到就不回（避免噴錯）
             return
 
         # =========================
-        # 4️⃣ 位置查詢（一般）
+        # 4️⃣ Quick Reply：一般位置
         # =========================
         if data == "ask_location":
             mode = get_user_loc_mode(uid)
@@ -4783,8 +4784,8 @@ def handle_postback(event):
                 event,
                 make_location_quick_reply(
                     L(uid,
-                    "📍 請點下方『傳送我的位置』，我立刻幫你找廁所",
-                    "📍 Please share your location and I’ll find nearby toilets for you"),
+                      "📍 請點下方『傳送我的位置』，我立刻幫你找廁所",
+                      "📍 Please share your location and I’ll find nearby toilets for you"),
                     mode=mode,
                     uid=uid
                 )
@@ -4792,7 +4793,7 @@ def handle_postback(event):
             return
 
         # =========================
-        # 5️⃣ 位置查詢（AI）
+        # 5️⃣ Quick Reply：AI 位置
         # =========================
         if data == "ask_ai_location":
             set_user_loc_mode(uid, "ai")
@@ -4800,114 +4801,12 @@ def handle_postback(event):
                 event,
                 make_location_quick_reply(
                     L(uid,
-                    "📍 請傳送你的位置，我會用 AI 幫你挑附近最適合的廁所",
-                    "📍 Please share your location. I will use AI to pick the best nearby toilets."),
+                      "📍 請傳送你的位置，我會用 AI 幫你挑附近最適合的廁所",
+                      "📍 Please share your location. I will use AI to pick the best nearby toilets."),
                     mode="ai",
                     uid=uid
                 )
             )
-            return
-
-        # =========================
-        # 6️⃣ 加入最愛
-        # =========================
-        if data.startswith("add:"):
-            _, qname, lat, lon = data.split(":", 3)
-            name = unquote(qname)
-
-            toilet = {
-                "name": name,
-                "lat": float(lat),
-                "lon": float(lon),
-                "address": f"{lat},{lon}",
-                "distance": 0,
-                "type": "sheet"
-            }
-
-            add_to_favorites(uid, toilet)
-            safe_reply(event, TextSendMessage(text=L(uid, "added_fav_ok").format(name=name)))
-            return
-
-        # =========================
-        # 7️⃣ 移除最愛
-        # =========================
-        if data.startswith("remove_fav:"):
-            _, qname, lat, lon = data.split(":", 3)
-            name = unquote(qname)
-
-            success = remove_from_favorites(uid, name, lat, lon)
-            key = "removed_fav_ok" if success else "removed_fav_fail"
-            safe_reply(event, TextSendMessage(text=L(uid, key)))
-            return
-
-        # =========================
-        # 8️⃣ 確認刪除（最愛）
-        # =========================
-        if data.startswith("confirm_delete:"):
-            _, qname, qaddr, lat, lon = data.split(":", 4)
-            name = unquote(qname)
-
-            pending_delete_confirm[uid] = {
-                "mode": "favorite",
-                "name": name,
-                "lat": norm_coord(lat),
-                "lon": norm_coord(lon)
-            }
-
-            safe_reply(event, [
-                TextSendMessage(text=t("confirm_delete", uid).format(name=name)),
-                TextSendMessage(text=t("confirm_hint", uid))
-            ])
-            return
-
-        # =========================
-        # 9️⃣ 確認刪除（自己新增）
-        # =========================
-        if data.startswith("confirm_delete_my_toilet:"):
-            _, row_str = data.split(":", 1)
-
-            pending_delete_confirm[uid] = {
-                "mode": "sheet_row",
-                "row": int(row_str)
-            }
-
-            safe_reply(event, [
-                TextSendMessage(text=L(uid, "confirm_delete_my_toilet")),
-                TextSendMessage(text=L(uid, "confirm_hint"))
-            ])
-            return
-
-        # =========================
-        # 🔟 AI 回饋摘要（你原本的）
-        # =========================
-        if data.startswith("ai_summary:"):
-            try:
-                _, lat, lon = data.split(":", 2)
-            except ValueError:
-                safe_reply(event, TextSendMessage(text=t("ai_summary_format_error", uid)))
-                return
-
-            try:
-                base = PUBLIC_URL.rstrip("/") if PUBLIC_URL else ""
-                q_uid = quote(uid)
-                url = f"{base}/api/ai_feedback_summary/{lat}/{lon}?uid={q_uid}"
-
-                resp = requests.get(url, timeout=15)
-
-                if resp.status_code == 200:
-                    js = resp.json()
-                    if js.get("success") and js.get("summary"):
-                        msg = js["summary"]
-                    else:
-                        msg = js.get("message", t("ai_summary_unavailable", uid))
-                else:
-                    msg = t("ai_summary_busy", uid)
-
-            except Exception as e:
-                logging.error(f"AI summary postback error: {e}", exc_info=True)
-                msg = t("ai_summary_error", uid)
-
-            safe_reply(event, TextSendMessage(text=msg))
             return
 
     except Exception as e:
