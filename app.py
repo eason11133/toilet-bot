@@ -380,35 +380,86 @@ TEXTS.update({
         "zh": "請輸入『確認刪除』或『取消』",
         "en": "Please type “Confirm delete” or “Cancel”"
     }
+
+    ,
+    "busy_try_later": {
+        "zh": "系統忙線中，請稍後再試 🙏",
+        "en": "System is busy. Please try again later 🙏"
+    },
+    "lang_switch_fail": {
+        "zh": "❌ 切換語言失敗，請稍後再試",
+        "en": "❌ Failed to switch language. Please try again later."
+    }
 })
 
-def t(key, uid):
-    lang = get_user_lang(uid)
-    return TEXTS.get(key, {}).get(lang, TEXTS.get(key, {}).get("zh", ""))
 
-def L(uid, zh_or_key, en=None):
-    lang = get_user_lang(uid)
-
-    # key 模式（走 TEXTS）
-    if en is None:
-        if zh_or_key in TEXTS:
-            return TEXTS[zh_or_key].get(
-                lang,
-                TEXTS[zh_or_key].get("zh", "")
-            )
-        return zh_or_key  # fallback，不噴錯
-
-    # 舊版 zh / en 模式
-    return en if lang == "en" else zh_or_key
+# =========================
+# ✅ 統一語言/翻譯入口（唯一入口）
+# - LINE：用 uid 決定語言（get_user_lang）
+# - API：用 ?lang=en 決定語言（request.args）
+# - 舊函式 t/L/_api_L/_api_T 仍保留，但全部改走這裡
+# =========================
 
 def _api_lang():
     # API 沒有 LINE uid 時，用 querystring 控制語言：?lang=en
     lang = (request.args.get("lang") or "").strip().lower()
     return "en" if lang == "en" else "zh"
 
-def _api_L(zh, en):
-    return en if _api_lang() == "en" else zh
+def resolve_lang(uid=None, lang=None):
+    # 1) 明確指定 lang（最優先）
+    if (lang or "").lower() == "en":
+        return "en"
+    if (lang or "").lower() == "zh":
+        return "zh"
 
+    # 2) 有 uid → 走使用者語言
+    if uid:
+        try:
+            return "en" if get_user_lang(uid) == "en" else "zh"
+        except Exception:
+            return "zh"
+
+    # 3) 無 uid → 視為 API → 走 querystring
+    return _api_lang()
+
+def T(key_or_zh, uid=None, en=None, lang=None, **fmt):
+    """
+    ✅ 統一翻譯函式（全案唯一入口）
+    用法：
+    1) key 模式（推薦）：T("no_result", uid=uid)  → 從 TEXTS 抓 zh/en
+    2) zh/en 模式（相容舊碼）：T("附近沒有廁所", uid=uid, en="No toilets nearby")
+    3) API 模式：T("missing_params", lang=_api_lang())
+    4) 支援 format：T("added_fav_ok", uid=uid, name="xxx")
+    """
+    l = resolve_lang(uid=uid, lang=lang)
+
+    # key 模式：en is None，且 key 在 TEXTS
+    if en is None and isinstance(key_or_zh, str) and key_or_zh in TEXTS:
+        s = TEXTS[key_or_zh].get(l, TEXTS[key_or_zh].get("zh", "")) or ""
+    else:
+        # zh/en 模式（相容）
+        s = (en if l == "en" else key_or_zh) if en is not None else (key_or_zh or "")
+
+    # format（容錯）
+    try:
+        return s.format(**fmt)
+    except Exception:
+        return s
+
+# ---- 舊函式相容層（全部導到 T）----
+
+def t(key, uid):
+    return T(key, uid=uid)
+
+def L(uid, zh_or_key, en=None):
+    # 舊 L(uid, "key") 或 L(uid, "中文", "English") 都能用
+    return T(zh_or_key, uid=uid, en=en)
+
+def _api_L(zh, en):
+    # 舊 API 翻譯（相容）
+    return T(zh, lang=_api_lang(), en=en)
+
+# ✅ 把 API_TEXTS 併入 TEXTS（避免再多一套字典）
 API_TEXTS = {
     "missing_params": ("缺少參數", "Missing parameters"),
     "invalid_params": ("參數錯誤", "Invalid parameters"),
@@ -416,10 +467,14 @@ API_TEXTS = {
     "write_failed": ("寫入失敗", "Write failed"),
     "server_error": ("伺服器錯誤", "Server error"),
 }
+for k, (zh, en) in API_TEXTS.items():
+    if k not in TEXTS:
+        TEXTS[k] = {"zh": zh, "en": en}
 
 def _api_T(key: str):
-    zh, en = API_TEXTS.get(key, (key, key))
-    return _api_L(zh, en)
+    # 舊 _api_T（相容）
+    return T(key, lang=_api_lang())
+
 
 # === consent 背景排隊（429 時不回 500） ===
 _consent_q = []                    
@@ -4570,7 +4625,7 @@ def handle_location(event):
                             "contents": [
                                 {
                                     "type": "text",
-                                    "text": "🤖 AI 推薦分析",
+                                    "text": L(uid, "🤖 AI 推薦分析", "🤖 AI Recommendation"),
                                     "weight": "bold",
                                     "size": "lg",
                                     "wrap": True,
@@ -4614,7 +4669,7 @@ def handle_location(event):
 
     except Exception as e:
         logging.error(f"nearby error: {e}", exc_info=True)
-        safe_reply(event, TextSendMessage(text="系統忙線中，請稍後再試 🙏"))
+        safe_reply(event, TextSendMessage(text=L(uid, "系統忙線中，請稍後再試 🙏", "System is busy. Please try again later 🙏")))
     finally:
         _release_loc_slot()
 
@@ -4667,7 +4722,7 @@ def handle_postback(event):
             )
         except Exception as e:
             logging.error(f"切換語言失敗: {e}", exc_info=True)
-            safe_reply(event, TextSendMessage(text="❌ 切換語言失敗，請稍後再試"))
+            safe_reply(event, TextSendMessage(text=T("lang_switch_fail", uid=uid)))
         return
 
     if data == "set_lang:en":
