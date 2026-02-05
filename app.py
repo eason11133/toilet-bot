@@ -162,10 +162,8 @@ SHEETS_CACHE_MAX_ROWS = int(os.getenv("SHEETS_CACHE_MAX_ROWS", "20000"))
 
 _sheets_sem = threading.Semaphore(SHEETS_MAX_CONCURRENCY)
 _read_cache = {}            # key: (sheet_id, ws_title, op) -> {ts, val}
-_ENRICH_CACHE = {}
 _cache_lock = threading.Lock()
 _gsheet_lock = threading.Lock()
-_cache_lock = threading.Lock()
 _fallback_lock = threading.Lock()
 
 def _is_quota_or_retryable(exc: Exception) -> bool:
@@ -4635,6 +4633,12 @@ def handle_postback(event):
         return
 
     # =========================
+    # 1.5️⃣ Rich Menu 分頁切換（避免觸發 gate / 重複事件）
+    # =========================
+    if data in ("switch=more", "switch=main"):
+        return
+
+    # =========================
     # 2️⃣ 重複事件擋掉
     # =========================
     if is_duplicate_and_mark_event(event):
@@ -4647,7 +4651,7 @@ def handle_postback(event):
     if gate_msg:
         safe_reply(event, gate_msg)
         return
-
+    
     try:
         # ==========================================================
         # 3.5️⃣ Rich Menu 統一指令：cmd=xxxx
