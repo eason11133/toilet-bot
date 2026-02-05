@@ -4607,6 +4607,25 @@ def handle_postback(event):
     uid = event.source.user_id
 
     # =========================
+    # 0️⃣ 內嵌語言參數（讓 EN Rich Menu 的 cmd=xxxx 也能順便寫入語言）
+    #    例如：cmd=nearby&lang=en
+    # =========================
+    if "&" in data and "lang=" in data:
+        try:
+            from urllib.parse import parse_qs
+            qs = parse_qs(data, keep_blank_values=True)
+            _lang = (qs.get("lang") or [None])[0]
+            if _lang in ("en", "zh"):
+                set_user_lang(uid, _lang)
+
+            # 若同時帶 cmd，後續流程只保留 cmd=...
+            _cmd = (qs.get("cmd") or [None])[0]
+            if _cmd:
+                data = f"cmd={_cmd}"
+        except Exception:
+            pass
+
+    # =========================
     # 1️⃣ 語言切換（最優先）
     # =========================
     if data in ("lang=en", "lang=zh"):
