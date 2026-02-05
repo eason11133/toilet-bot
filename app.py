@@ -4607,25 +4607,30 @@ def handle_postback(event):
     uid = event.source.user_id
 
     # =========================
-    # 0️⃣ 內嵌語言參數（讓 EN Rich Menu 的 cmd=xxxx 也能順便寫入語言）
-    #    例如：cmd=nearby&lang=en
+    # 0️⃣ 解析 postback 參數（支援任何順序 / URL encode）
+    #    例：
+    #      cmd=nearby&lang=en
+    #      lang=en&cmd=nearby
+    #      cmd=nearby%26lang%3Den（被 encode）
     # =========================
-    if data.startswith("cmd=") and "&lang=" in data:
+    if ("&" in data) or data.startswith("cmd=") or data.startswith("lang="):
         try:
-            from urllib.parse import parse_qs
-            qs = parse_qs(data, keep_blank_values=True)
+            from urllib.parse import parse_qs, unquote
+            raw = data
+            decoded = unquote(raw)
+            # parse_qs 需要像 querystring 的格式
+            qs = parse_qs(decoded, keep_blank_values=True)
             _lang = (qs.get("lang") or [None])[0]
+            _cmd  = (qs.get("cmd")  or [None])[0]
+            # 1) 先寫入語言（如果有帶 lang）
             if _lang in ("en", "zh"):
                 set_user_lang(uid, _lang)
-
-            # 若同時帶 cmd，後續流程只保留 cmd=...
-            _cmd = (qs.get("cmd") or [None])[0]
+            # 2) 如果有 cmd，統一收斂成 cmd=xxx，讓你後面原本的 cmd 分派能命中
             if _cmd:
                 data = f"cmd={_cmd}"
-            else:
-                # fallback：至少把第一段 cmd=xxx 抽出來
-                data = "cmd=" + data.split("&", 1)[0].split("=", 1)[1]
+
         except Exception:
+            # 解析失敗就維持原樣，避免 handler 掛掉
             pass
 
     # =========================
@@ -4648,10 +4653,12 @@ def handle_postback(event):
 
     if data == "set_lang:en":
         set_user_lang(uid, "en")
+        safe_reply(event, TextSendMessage(text="✅ Language switched to English"))
         return
 
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
+        safe_reply(event, TextSendMessage(text="✅ 已切換為中文"))
         return
 
     # =========================
@@ -4679,8 +4686,7 @@ def handle_postback(event):
         # 3.5️⃣ Rich Menu 統一指令：cmd=xxxx
         # ==========================================================
         if data.startswith("cmd="):
-            cmd = data.split("=", 1)[1].strip()
-
+            cmd = data.split("=", 1)[1].strip().split("&", 1)[0]
             if cmd in ("noop_main", "noop_more"):
                 return
 
