@@ -1127,9 +1127,27 @@ def safe_reply(event, messages):
 
         # reply_token 無效或已過期 → 不再 fallback 到 push（避免狂刷）
         if "Invalid reply token" in msg_txt:
-            logging.warning(f"[safe_reply] invalid reply token; skip. err={msg_txt}")
-            return
+        # ✅ Render free 冷啟動常見：reply_token 過期 → 改用 push 補回覆
+            try:
+                uid = getattr(getattr(event, "source", None), "user_id", None)
 
+                # normalize messages: 單則/多則都轉成 list，且濾掉 None
+                if messages is None:
+                    return
+                if not isinstance(messages, list):
+                    messages = [messages]
+                messages = [m for m in messages if m is not None]
+                if not messages:
+                    return
+
+                if uid:
+                    line_bot_api.push_message(uid, messages)
+                    logging.warning(f"[safe_reply] invalid reply token -> pushed to uid={uid}")
+                else:
+                    logging.warning("[safe_reply] invalid reply token and no uid -> skip")
+            except Exception as e2:
+                logging.error(f"[safe_reply] push fallback failed: {e2}", exc_info=True)
+            return
         # 其他錯誤只記錄
         logging.warning(f"[safe_reply] reply_message failed (no push). err={msg_txt}")
 
@@ -1228,7 +1246,7 @@ def is_duplicate_and_mark_event(event) -> bool:
 def _too_old_to_reply(event, limit_seconds=None):
     try:
         if limit_seconds is None:
-            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "180"))
+            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "600"))
 
         evt_ms = int(getattr(event, "timestamp", 0))
         if evt_ms <= 0:
@@ -4625,6 +4643,7 @@ def handle_postback(event):
             # 1) 先寫入語言（如果有帶 lang）
             if _lang in ("en", "zh"):
                 set_user_lang(uid, _lang)
+
             # 2) 如果有 cmd，統一收斂成 cmd=xxx，讓你後面原本的 cmd 分派能命中
             if _cmd:
                 data = f"cmd={_cmd}"
