@@ -4610,7 +4610,7 @@ def handle_postback(event):
     # 0️⃣ 內嵌語言參數（讓 EN Rich Menu 的 cmd=xxxx 也能順便寫入語言）
     #    例如：cmd=nearby&lang=en
     # =========================
-    if "&" in data and "lang=" in data:
+    if data.startswith("cmd=") and "&lang=" in data:
         try:
             from urllib.parse import parse_qs
             qs = parse_qs(data, keep_blank_values=True)
@@ -4622,6 +4622,9 @@ def handle_postback(event):
             _cmd = (qs.get("cmd") or [None])[0]
             if _cmd:
                 data = f"cmd={_cmd}"
+            else:
+                # fallback：至少把第一段 cmd=xxx 抽出來
+                data = "cmd=" + data.split("&", 1)[0].split("=", 1)[1]
         except Exception:
             pass
 
