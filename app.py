@@ -21,6 +21,7 @@ from linebot.models import (
     QuickReply, QuickReplyButton, LocationAction, MessageAction,
     PostbackEvent, PostbackAction   
 )
+from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -42,27 +43,15 @@ except Exception:
     pd = None
 
 # === 全域設定 ===
-def _get_loc_sem():
-    """Lazy init semaphore to avoid NameError if _LOC_SEM is referenced before it's defined."""
-    sem = globals().get("_LOC_SEM")
-    if sem is None:
-        try:
-            n = int(os.getenv("LOC_MAX_CONCURRENCY", "2"))
-        except Exception:
-            n = 2
-        sem = threading.BoundedSemaphore(value=max(1, n))
-        globals()["_LOC_SEM"] = sem
-    return sem
-
 def _try_acquire_loc_slot() -> bool:
     try:
-        return _get_loc_sem().acquire(blocking=False)
+        return _LOC_SEM.acquire(blocking=False)
     except Exception:
         return False
 
 def _release_loc_slot():
     try:
-        _get_loc_sem().release()
+        _LOC_SEM.release()
     except Exception:
         pass
 
@@ -1211,20 +1200,30 @@ def is_redelivery(event) -> bool:
 LINE_REPLY_MAX = 5
 
 def safe_reply(event, messages):
+    """
+    ✅ 安全回覆：
+    - 優先使用 reply_message（符合 LINE 規則：reply_token 只能用一次）
+    - 若 reply_token 過期/無效（常見於冷啟動/重送），改用 push_message 補送
+    - 仍保留最多 5 則訊息限制，避免 LINE API 拒絕
+    """
+    # normalize messages to list
+    if messages is None:
+        return
+    if not isinstance(messages, list):
+        messages = [messages]
+    messages = [m for m in messages if m is not None]
+    if not messages:
+        return
+
+    # ✅ 最多 5 則，多的砍掉（或自行改成合併文字）
+    if len(messages) > LINE_REPLY_MAX:
+        logging.warning(f"[safe_reply] messages too many ({len(messages)}), truncating to {LINE_REPLY_MAX}.")
+        messages = messages[:LINE_REPLY_MAX]
+
+    # 嘗試 reply
     try:
-        tok = event.reply_token
-        if _is_token_used(tok):
-            logging.warning("[safe_reply] duplicate reply_token detected; skip sending.")
-            return
-
-        # ✅ 最多 5 則，多的砍掉（或自行改成合併文字）
-        if isinstance(messages, list) and len(messages) > LINE_REPLY_MAX:
-            logging.warning(f"[safe_reply] messages too many ({len(messages)}), truncating to {LINE_REPLY_MAX}.")
-            messages = messages[:LINE_REPLY_MAX]
-
-        line_bot_api.reply_message(tok, messages)
-        _mark_token_used(tok)
-
+        line_bot_api.reply_message(event.reply_token, messages)
+        return
     except LineBotApiError as e:
         # 解析錯誤訊息
         try:
@@ -1232,26 +1231,15 @@ def safe_reply(event, messages):
         except Exception:
             msg_txt = str(e)
 
-        # 重送（redelivery）一律不回覆（避免重複）
+        # 重送（redelivery）一律不做 push（避免重複刷）
         if is_redelivery(event):
-            logging.warning(f"[safe_reply] redelivery detected; skip. err={msg_txt}")
+            logging.warning(f"[safe_reply] redelivery detected; skip push. err={msg_txt}")
             return
 
-        # reply_token 無效或已過期 → 不再 fallback 到 push（避免狂刷）
+        # reply_token 無效或已過期 → 用 push 補回覆（避免使用者無回應）
         if "Invalid reply token" in msg_txt:
-        # ✅ Render free 冷啟動常見：reply_token 過期 → 改用 push 補回覆
             try:
                 uid = getattr(getattr(event, "source", None), "user_id", None)
-
-                # normalize messages: 單則/多則都轉成 list，且濾掉 None
-                if messages is None:
-                    return
-                if not isinstance(messages, list):
-                    messages = [messages]
-                messages = [m for m in messages if m is not None]
-                if not messages:
-                    return
-
                 if uid:
                     line_bot_api.push_message(uid, messages)
                     logging.warning(f"[safe_reply] invalid reply token -> pushed to uid={uid}")
@@ -1260,8 +1248,11 @@ def safe_reply(event, messages):
             except Exception as e2:
                 logging.error(f"[safe_reply] push fallback failed: {e2}", exc_info=True)
             return
+
         # 其他錯誤只記錄
-        logging.warning(f"[safe_reply] reply_message failed (no push). err={msg_txt}")
+        logging.warning(f"[safe_reply] reply_message failed. err={msg_txt}")
+    except Exception as ex:
+        logging.error(f"[safe_reply] unexpected error: {ex}", exc_info=True)
 
 # === 更精準的防重複（新） ===
 _DEDUPE_LOCK = threading.Lock()
@@ -1358,7 +1349,7 @@ def is_duplicate_and_mark_event(event) -> bool:
 def _too_old_to_reply(event, limit_seconds=None):
     try:
         if limit_seconds is None:
-            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "600"))
+            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "1800"))
 
         evt_ms = int(getattr(event, "timestamp", 0))
         if evt_ms <= 0:
@@ -3706,13 +3697,7 @@ def ai_usage_summary_page(uid):
 # === AI 回饋摘要 API（放在清潔度趨勢 API 的下面） ===
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 AI_KEY   = os.getenv("OPENAI_API_KEY", "")
-
-# OpenAI client（防呆：缺 key / 初始化失敗時一律設為 None，避免整個服務起不來）
-try:
-    client = OpenAI(api_key=AI_KEY) if AI_KEY else None
-except Exception as e:
-    logging.warning(f"OpenAI client init failed; AI features disabled. err={e}")
-    client = None
+client   = OpenAI(api_key=AI_KEY) if AI_KEY else None
 
 # --- AI 每日額度控制（方案 D：同一使用者每天最多觸發幾次 AI） ---
 AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT", "3"))  # 預設 3 次/人/天
@@ -5210,27 +5195,7 @@ def _append_toilet_row_safely(ws, row_values):
         raise
 
 def _get_db():
-    """Create a sqlite connection with safer defaults for concurrency."""
-    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-    try:
-        cur = conn.cursor()
-        # WAL 是 DB-level，但有些平台/檔案系統可能不支援；失敗就忽略
-        try:
-            cur.execute("PRAGMA journal_mode=WAL;")
-        except Exception:
-            pass
-        # busy_timeout 是 per-connection：每次 connect 都要設
-        try:
-            cur.execute("PRAGMA busy_timeout=3000;")
-        except Exception:
-            pass
-        try:
-            cur.execute("PRAGMA foreign_keys=ON;")
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return conn
+    return sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
 
 def _ensure_pending_table():
     conn = _get_db()
