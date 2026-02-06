@@ -563,7 +563,7 @@ def make_location_quick_reply(prompt_text, mode="normal", uid=None):
         items.append(
             QuickReplyButton(
                 action=PostbackAction(
-                    label=_L("AI 推薦附近廁所", "AI nearby recommendation"),
+                    label=_L("AI 推薦附近廁所", "AI nearby"),
                     data="ask_ai_location",
                     display_text=_L("切換成 AI 推薦模式", "Switch to AI mode")
                 )
@@ -574,7 +574,7 @@ def make_location_quick_reply(prompt_text, mode="normal", uid=None):
         items.append(
             QuickReplyButton(
                 action=PostbackAction(
-                    label=_L("切換回一般模式", "Switch to normal mode"),
+                    label=_L("切換回一般模式", "Normal mode"),
                     data="ask_location",
                     display_text=_L("切換回一般模式", "Switch to normal mode")
                 )
