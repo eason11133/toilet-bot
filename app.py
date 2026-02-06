@@ -13,6 +13,7 @@ from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for, Response
 from dotenv import load_dotenv
 from urllib.parse import quote, unquote, parse_qs
+import urllib.parse
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
@@ -881,14 +882,36 @@ def _parse_lat_lon(lat_s, lon_s):
 PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
 LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
 
-def _status_liff_url(lat=None, lon=None):
-    """回傳狀態回報 LIFF 頁面網址。若沒帶座標，讓 LIFF 自己取定位。"""
+def _status_liff_url(lat=None, lon=None, uid=None):
+    """回傳狀態回報 LIFF 頁面網址。
+
+    ✅ 重要：LIFF 網頁本身不會自動知道你在 LINE 裡切到哪個語言，所以我們在 URL 上帶：
+      - uid：讓後端可以查 get_user_lang(uid)
+      - lang：讓前端（或後端 redirect）可以直接用 ?lang=en 切語言
+    若沒帶座標，讓 LIFF 自己取定位。
+    """
     if not PUBLIC_URL:
         return None
+
     base = f"{PUBLIC_URL}/status_liff"
-    if lat is None or lon is None:
+
+    params = {}
+    # 讓 LIFF 能知道是誰（也方便後端做預設語言）
+    if uid:
+        params["uid"] = uid
+        try:
+            params["lang"] = "en" if get_user_lang(uid) == "en" else "zh"
+        except Exception:
+            params["lang"] = "zh"
+
+    if lat is not None and lon is not None:
+        params["lat"] = norm_coord(lat)
+        params["lon"] = norm_coord(lon)
+
+    if not params:
         return base
-    return f"{base}?lat={norm_coord(lat)}&lon={norm_coord(lon)}"
+    return base + "?" + urllib.parse.urlencode(params)
+
 
 # === 樓層推斷 ===
 def _floor_from_tags(tags: dict):
@@ -1199,6 +1222,11 @@ def is_redelivery(event) -> bool:
 
 LINE_REPLY_MAX = 5
 
+# push fallback 去重（避免重送 / 重試造成重複推播）
+_PUSH_DEDUPE = getattr(globals(), "_PUSH_DEDUPE", {})
+_PUSH_LOCK = threading.Lock()
+PUSH_FALLBACK_DEDUPE_WINDOW = int(os.getenv("PUSH_FALLBACK_DEDUPE_WINDOW", "180"))
+
 def safe_reply(event, messages):
     """
     ✅ 安全回覆：
@@ -1240,6 +1268,20 @@ def safe_reply(event, messages):
         if "Invalid reply token" in msg_txt:
             try:
                 uid = getattr(getattr(event, "source", None), "user_id", None)
+                # ✅ 先做「事件級」去重：同一事件就算重試多次，也只 push 一次
+                try:
+                    _, ek, _ = _event_type_and_key(event)  # type: ignore
+                except Exception:
+                    ek = None
+                now_ts = time.time()
+                if ek:
+                    with _PUSH_LOCK:
+                        last = _PUSH_DEDUPE.get(ek)
+                        if last is not None and (now_ts - last) < PUSH_FALLBACK_DEDUPE_WINDOW:
+                            logging.warning(f"[safe_reply] invalid reply token but already pushed recently; skip. key={ek}")
+                            return
+                        _PUSH_DEDUPE[ek] = now_ts
+
                 if uid:
                     line_bot_api.push_message(uid, messages)
                     logging.warning(f"[safe_reply] invalid reply token -> pushed to uid={uid}")
@@ -1258,9 +1300,9 @@ def safe_reply(event, messages):
 _DEDUPE_LOCK = threading.Lock()
 
 # 事件類型專屬時間窗（秒）— 可用環境變數調整
-TEXT_DEDUPE_WINDOW = int(os.getenv("TEXT_DEDUPE_WINDOW", "6"))
-LOC_DEDUPE_WINDOW  = int(os.getenv("LOC_DEDUPE_WINDOW",  "3"))
-PB_DEDUPE_WINDOW   = int(os.getenv("PB_DEDUPE_WINDOW",   "6"))
+TEXT_DEDUPE_WINDOW = int(os.getenv("TEXT_DEDUPE_WINDOW", "15"))
+LOC_DEDUPE_WINDOW  = int(os.getenv("LOC_DEDUPE_WINDOW",  "10"))
+PB_DEDUPE_WINDOW   = int(os.getenv("PB_DEDUPE_WINDOW",   "120"))
 
 # 定位事件短時間重複的距離閾值（公尺）
 LOC_DEDUPE_DISTANCE_M = float(os.getenv("LOC_DEDUPE_DISTANCE_M", "8"))
@@ -1272,41 +1314,68 @@ def _now():
     return time.time()
 
 def _purge_expired(now_ts: float):
-    """輕量清理：移除 10 秒前的舊記錄，避免 dict 無限成長"""
-    cutoff = now_ts - 10.0
+    """輕量清理：移除超過最大去重窗的舊記錄，避免 dict 無限成長"""
+    max_win = max(TEXT_DEDUPE_WINDOW, LOC_DEDUPE_WINDOW, PB_DEDUPE_WINDOW, 180)
+    cutoff = now_ts - float(max_win)
     for k, ts in list(_RECENT_EVENTS.items()):
         if ts < cutoff:
             _RECENT_EVENTS.pop(k, None)
 
 def _event_type_and_key(event):
-    """回傳 (etype, key, window_sec)，優先使用 LINE message.id（若有）"""
+    """回傳 (etype, key, window_sec)
+
+    ✅ 去重 key 優先順序：
+    1) webhook_event_id（若 SDK 有帶）
+    2) message.id（MessageEvent）
+    3) fallback：user_id + payload + timestamp（同一事件重送 timestamp 通常相同）
+    """
+    uid = getattr(getattr(event, "source", None), "user_id", "") or ""
+    ts = getattr(event, "timestamp", 0) or 0  # ms
+    weid = getattr(event, "webhook_event_id", None) or getattr(event, "webhookEventId", None)
+
+    # Message id
     mid = None
     try:
         mid = getattr(getattr(event, "message", None), "id", None)
     except Exception:
         pass
 
+    # Text
     if isinstance(getattr(event, "message", None), TextMessage):
         etype = "text"
         window = TEXT_DEDUPE_WINDOW
-        base = f"text|{event.source.user_id}|{(event.message.text or '').strip().lower()}"
-        key = f"mid:{mid}" if mid else base
+        txt = (getattr(event.message, "text", "") or "").strip().lower()
+        if weid:
+            key = f"weid:{weid}"
+        elif mid:
+            key = f"mid:{mid}"
+        else:
+            key = f"text|{uid}|{txt}|ts:{ts}"
         return etype, key, window
 
+    # Location
     if isinstance(getattr(event, "message", None), LocationMessage):
         etype = "loc"
         window = LOC_DEDUPE_WINDOW
         lat = getattr(event.message, "latitude", None)
         lon = getattr(event.message, "longitude", None)
-        base = f"loc|{event.source.user_id}|{norm_coord(lat)}:{norm_coord(lon)}"
-        key = f"mid:{mid}" if mid else base
+        base = f"loc|{uid}|{norm_coord(lat)}:{norm_coord(lon)}|ts:{ts}"
+        if weid:
+            key = f"weid:{weid}"
+        elif mid:
+            key = f"mid:{mid}"
+        else:
+            key = base
         return etype, key, window
 
     # Postback（沒有 message）
     etype = "pb"
     window = PB_DEDUPE_WINDOW
-    data = getattr(getattr(event, "postback", None), "data", "")
-    key = f"pb|{event.source.user_id}|{data}"
+    data = getattr(getattr(event, "postback", None), "data", "") or ""
+    if weid:
+        key = f"weid:{weid}"
+    else:
+        key = f"pb|{uid}|{data}|ts:{ts}"
     return etype, key, window
 
 def is_duplicate_and_mark_event(event) -> bool:
@@ -2758,11 +2827,45 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 # ==== 頁面 routes ====
 @app.route("/achievements_liff")
 def achievements_liff_page():
-    return render_template("achievements_liff.html", liff_id=LIFF_ID_STATUS, public_url=PUBLIC_URL)
+    uid = (request.args.get("uid") or "").strip()
+    lang = (request.args.get("lang") or "").strip().lower()
+    if uid and not lang:
+        try:
+            lang = "en" if get_user_lang(uid) == "en" else "zh"
+        except Exception:
+            lang = "zh"
+        qs = request.args.to_dict(flat=True)
+        qs["lang"] = lang
+        return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
+
+    return render_template(
+        "achievements_liff.html",
+        liff_id=LIFF_ID_STATUS,
+        public_url=PUBLIC_URL,
+        uid=uid,
+        lang=(lang if lang in ["en","zh"] else "zh")
+    )
 
 @app.route("/badges_liff")
 def badges_liff_page():
-    return render_template("badges_liff.html", liff_id=LIFF_ID_STATUS, public_url=PUBLIC_URL)
+    uid = (request.args.get("uid") or "").strip()
+    lang = (request.args.get("lang") or "").strip().lower()
+    if uid and not lang:
+        try:
+            lang = "en" if get_user_lang(uid) == "en" else "zh"
+        except Exception:
+            lang = "zh"
+        qs = request.args.to_dict(flat=True)
+        qs["lang"] = lang
+        return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
+
+    return render_template(
+        "badges_liff.html",
+        liff_id=LIFF_ID_STATUS,
+        public_url=PUBLIC_URL,
+        uid=uid,
+        lang=(lang if lang in ["en","zh"] else "zh")
+    )
 
 # ==== 小工具：讀取狀態表並彙總 ====
 def _read_status_rows():
@@ -3933,6 +4036,21 @@ def status_liff():
     liff_id = _get_liff_status_id()
     public_url = os.getenv("PUBLIC_URL", "").rstrip("/")
 
+    # ✅ 語言：LIFF 沒辦法自動知道你在聊天裡切的語言，所以用 querystring 帶 uid/lang
+    uid = (request.args.get("uid") or "").strip()
+    lang = (request.args.get("lang") or "").strip().lower()
+
+    # 如果有 uid 但沒帶 lang，就依資料庫記錄自動補上 lang，避免前端還要自己算
+    if uid and not lang:
+        try:
+            lang = "en" if get_user_lang(uid) == "en" else "zh"
+        except Exception:
+            lang = "zh"
+        # 保留原本的其他 querystring（如 lat/lon）
+        qs = request.args.to_dict(flat=True)
+        qs["lang"] = lang
+        return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
+
     if not liff_id:
         logging.error("LIFF_STATUS_ID / LIFF_ID_STATUS / LIFF_ID not set")
         return "LIFF ID not set", 500
@@ -3944,7 +4062,9 @@ def status_liff():
     return render_template(
         "status_liff.html",
         liff_id=liff_id,
-        public_url=public_url
+        public_url=public_url,
+        uid=uid,
+        lang=(lang if lang in ["en","zh"] else "zh")
     )
 
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
@@ -4643,17 +4763,17 @@ def handle_text(event):
         )))
 
     elif cmd == "status":
-        url = _status_liff_url()
+        url = _status_liff_url(uid=uid)
         safe_reply(event, TextSendMessage(text=L(uid, f"⚡ 開啟狀態回報：\n{url}", f"⚡ Open status report:\n{url}")))
         return
 
     elif cmd == "ach":
-        reply_url = f"{PUBLIC_URL}/achievements_liff"
+        reply_url = f"{PUBLIC_URL}/achievements_liff?uid={uid}&lang={get_user_lang(uid)}"
         safe_reply(event, TextSendMessage(text=L(uid, f"查看成就 👉 {reply_url}", f"View achievements 👉 {reply_url}")))
         return
 
     elif cmd == "badges":
-        reply_url = f"{PUBLIC_URL}/badges_liff"
+        reply_url = f"{PUBLIC_URL}/badges_liff?uid={uid}&lang={get_user_lang(uid)}"
         safe_reply(event, TextSendMessage(text=L(uid, f"查看徽章 👉 {reply_url}", f"View badges 👉 {reply_url}")))
         return
 
@@ -4976,7 +5096,7 @@ def handle_postback(event):
 
             # 狀態回報
             if cmd == "status":
-                url = _status_liff_url()
+                url = _status_liff_url(uid=uid)
                 safe_reply(event, TextSendMessage(text=L(
                     uid,
                     f"⚡ 開啟狀態回報：\n{url}",
@@ -4986,7 +5106,7 @@ def handle_postback(event):
 
             # 成就
             if cmd == "ach":
-                reply_url = f"{PUBLIC_URL}/achievements_liff"
+                reply_url = f"{PUBLIC_URL}/achievements_liff?uid={uid}&lang={get_user_lang(uid)}"
                 safe_reply(event, TextSendMessage(text=L(
                     uid,
                     f"查看成就 👉 {reply_url}",
@@ -4996,7 +5116,7 @@ def handle_postback(event):
 
             # 徽章
             if cmd == "badges":
-                reply_url = f"{PUBLIC_URL}/badges_liff"
+                reply_url = f"{PUBLIC_URL}/badges_liff?uid={uid}&lang={get_user_lang(uid)}"
                 safe_reply(event, TextSendMessage(text=L(
                     uid,
                     f"查看徽章 👉 {reply_url}",
