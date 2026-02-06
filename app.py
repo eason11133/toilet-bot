@@ -4743,43 +4743,52 @@ def handle_location(event):
 # === Postback ===
 @handler.add(PostbackEvent)
 def handle_postback(event):
-    data = (event.postback.data or "").strip()
     uid = event.source.user_id
+    data_raw = (event.postback.data or "").strip()
+
     # =========================
     # 0️⃣ 解析 postback 參數（支援任何順序 / URL encode）
-    #    同時支援你新版 richmenuswitch data:
+    #    支援：
     #      switch=more&lang=en
     #      switch=main&lang=zh
-    #    以及一般 postback:
     #      cmd=nearby&lang=en
     # =========================
+    decoded = data_raw
+    qs = {}
+    _lang = _cmd = _switch = None
+
     try:
-        raw = (event.postback.data or "").strip()
-        decoded = unquote(raw)
+        decoded = unquote(data_raw)
         qs = parse_qs(decoded, keep_blank_values=True)
 
         _lang   = (qs.get("lang")   or [None])[0]
         _cmd    = (qs.get("cmd")    or [None])[0]
         _switch = (qs.get("switch") or [None])[0]
-
-        # ✅ 先寫入語言（任何 postback 只要帶 lang 就先更新）
-        if _lang in ("en", "zh"):
-            set_user_lang(uid, _lang)
-
-        # ✅ 如果是切換分頁/選單（richmenuswitch），不要直接 return：
-        #    因為你要讓「切換到英文 menu」時也能更新語言（上面已 set_user_lang）
-        #    這裡直接結束 handler 就好（不走 gate、不觸發其他指令）
-        if _switch in ("more", "main"):
-            return
-
-        # ✅ 如果有 cmd，統一收斂成 cmd=xxx，讓下面分派能命中
-        if _cmd:
-            data = f"cmd={_cmd}"
-        else:
-            data = decoded  # 保留原字串（例如 set_lang:en 這種）
     except Exception:
-        # 解析失敗就維持原樣，避免 handler 掛掉
-        data = (event.postback.data or "").strip()
+        # 解析失敗就走 fallback（保留原字串）
+        qs = {}
+
+    # ✅ 任何 postback 只要帶 lang 就先更新語言（切 menu/按功能都算）
+    if _lang in ("en", "zh"):
+        try:
+            set_user_lang(uid, _lang)
+        except Exception:
+            pass
+
+    # ✅ richmenuswitch：只做「切換確認」，不要走 gate/不要觸發其它功能
+    #    （避免你覺得「沒切成功」其實只是 LINE UI 快取/後端沒回覆）
+    if _switch in ("more", "main"):
+        safe_reply(
+            event,
+            TextSendMessage(text=("✅ Menu switched" if get_user_lang(uid) == "en" else "✅ 已切換選單"))
+        )
+        return
+
+    # ✅ 如果有 cmd，統一收斂成 cmd=xxx（讓你下面原本 cmd 分派能命中）
+    if _cmd:
+        data = f"cmd={_cmd}"
+    else:
+        data = decoded  # 保留原字串（例如 lang=en / set_lang:en 這種）
 
     # =========================
     # 1️⃣ 語言切換（最優先）
