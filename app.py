@@ -57,6 +57,7 @@ def _release_loc_slot():
 
 # === reply_token 使用記錄（新增） ===
 _USED_REPLY_TOKENS = set()
+_USED_REPLY_LOCK = threading.Lock()
 _MAX_USED_TOKENS = 50000  # 防止集合無限成長
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
@@ -76,14 +77,24 @@ def show_loading(uid, seconds=10):
 
 def _mark_token_used(tok: str):
     try:
-        _USED_REPLY_TOKENS.add(tok)
-        if len(_USED_REPLY_TOKENS) > _MAX_USED_TOKENS:
-            _USED_REPLY_TOKENS.clear()  # 簡單清理
+        if not tok:
+            return
+        with _USED_REPLY_LOCK:
+            _USED_REPLY_TOKENS.add(tok)
+            if len(_USED_REPLY_TOKENS) > _MAX_USED_TOKENS:
+                _USED_REPLY_TOKENS.clear()  # 簡單清理
     except Exception:
         pass
 
+
 def _is_token_used(tok: str) -> bool:
-    return tok in _USED_REPLY_TOKENS
+    if not tok:
+        return False
+    try:
+        with _USED_REPLY_LOCK:
+            return tok in _USED_REPLY_TOKENS
+    except Exception:
+        return False
 
 def grid_coord(v, g=0.0005):
     """
@@ -143,6 +154,10 @@ NEARBY_LRU_SIZE     = int(os.getenv("NEARBY_LRU_SIZE", "300"))
 FEEDBACK_INDEX_TTL  = int(os.getenv("FEEDBACK_INDEX_TTL", "180"))  # 由 60 → 180
 STATUS_INDEX_TTL    = int(os.getenv("STATUS_INDEX_TTL", "180"))    # 由 60 → 180
 MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "4000"))     # 只讀尾端 N 列
+
+# === internal TTL aliases (single source of truth) ===
+_FEEDBACK_INDEX_TTL = int(os.getenv("FEEDBACK_INDEX_TTL_SEC", str(FEEDBACK_INDEX_TTL)))
+_STATUS_INDEX_TTL   = int(os.getenv("STATUS_INDEX_TTL_SEC",   str(STATUS_INDEX_TTL)))
 
 # ------ 將原本的 dict 換成 LRU（⚠️ 別在檔案其他地方再賦值覆蓋它們）------
 _ENRICH_CACHE = SimpleLRU(maxsize=ENRICH_LRU_SIZE)
@@ -703,6 +718,7 @@ def get_nearby_toilets(uid, lat, lon):
 DATA_DIR = os.path.join(os.getcwd(), "data")
 TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")
 FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")
+_FAV_LOCK = threading.Lock()
 os.makedirs(DATA_DIR, exist_ok=True)
 
 if not os.path.exists(FAVORITES_FILE_PATH):
@@ -737,10 +753,8 @@ status_ws = None
 _STATUS_NEAR_M = 35
 _STATUS_TTL_HOURS = 6
 _status_index_cache = {"ts": 0, "data": {}}
-_STATUS_INDEX_TTL = 60
-
-MAX_SHEET_ROWS = int(os.getenv("MAX_SHEET_ROWS", "4000")) 
-
+# _STATUS_INDEX_TTL is defined in global config section (see above)
+# MAX_SHEET_ROWS is defined in global config section (see above)
 def _a1_col(n: int) -> str:
     if n <= 0:
         return "A"
@@ -1127,22 +1141,36 @@ def haversine(lat1, lon1, lat2, lon2):
         logging.error(f"計算距離失敗: {e}")
         return 0
 
-# === 防重複 ===
+# === 防重複（簡單版：避免同一 webhook 在短時間內重複處理）===
 DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "10"))
-_RECENT_EVENTS = {}
+_DEDUPE_SIMPLE_LOCK = threading.Lock()
+_RECENT_EVENTS_SIMPLE = {}
 
 def is_duplicate_and_mark(key: str, window: int = DEDUPE_WINDOW) -> bool:
+    """簡單防重：同一 key 在 window 秒內視為重複。
+
+    這段邏輯保留給舊流程使用；下方另有更精準的事件去重（_event_type_and_key）。
+    """
     now = time.time()
-    ts = _RECENT_EVENTS.get(key)
-    if ts is not None and (now - ts) < window:
-        logging.info(f"🔁 skip duplicate: {key}")
-        return True
-    _RECENT_EVENTS[key] = now
-    if len(_RECENT_EVENTS) > 5000 or (len(_RECENT_EVENTS) > 1000):
-        for k, tstamp in list(_RECENT_EVENTS.items()):
-            if now - tstamp > window:
-                _RECENT_EVENTS.pop(k, None)
-    return False
+    if not key:
+        return False
+    try:
+        with _DEDUPE_SIMPLE_LOCK:
+            ts = _RECENT_EVENTS_SIMPLE.get(key)
+            if ts is not None and (now - ts) < window:
+                logging.info(f"🔁 skip duplicate: {key}")
+                return True
+            _RECENT_EVENTS_SIMPLE[key] = now
+            # 輕量清理，避免 dict 無限成長
+            if len(_RECENT_EVENTS_SIMPLE) > 5000:
+                cutoff = now - window
+                for k, tstamp in list(_RECENT_EVENTS_SIMPLE.items()):
+                    if tstamp < cutoff:
+                        _RECENT_EVENTS_SIMPLE.pop(k, None)
+        return False
+    except Exception:
+        return False
+
 
 def is_redelivery(event) -> bool:
     try:
@@ -1445,7 +1473,7 @@ def create_cache_db():
 # === SQLite 參數強化（新增） ===
 def tune_sqlite_for_concurrency():
     try:
-        conn = sqlite3.connect(CACHE_DB_PATH)
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
         cur = conn.cursor()
         # 啟用 WAL 提高多執行緒讀/寫並行能力
         cur.execute("PRAGMA journal_mode=WAL;")
@@ -1459,7 +1487,7 @@ def tune_sqlite_for_concurrency():
 
 # 確認快取是否有效
 def get_cached_data(query_key, ttl_sec=60*5):
-    conn = sqlite3.connect(CACHE_DB_PATH)
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT data, timestamp FROM sheets_cache WHERE query_key = ?", (query_key,))
     result = cursor.fetchone()
@@ -1473,7 +1501,7 @@ def get_cached_data(query_key, ttl_sec=60*5):
 
 # 儲存快取
 def save_cache(query_key, data):
-    conn = sqlite3.connect(CACHE_DB_PATH)
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
     INSERT OR REPLACE INTO sheets_cache (query_key, data, timestamp)
@@ -1802,34 +1830,53 @@ def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
     return merged
 
 # === 最愛管理 ===
+# favorites.txt 是純文字/CSV 檔，於多執行緒環境下需要鎖避免同時讀寫造成破檔
+# （例如同一時間多位使用者點收藏/取消收藏）
+_FAV_LOCK = threading.Lock()
+
 def add_to_favorites(uid, toilet):
     try:
-        lat_s = norm_coord(toilet['lat'])
-        lon_s = norm_coord(toilet['lon'])
-        with open(FAVORITES_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([uid, toilet['name'], lat_s, lon_s, toilet.get('address','')])
+        if not uid or not toilet:
+            return
+        lat_s = norm_coord(toilet.get("lat"))
+        lon_s = norm_coord(toilet.get("lon"))
+        name  = (toilet.get("name") or "").strip()
+        addr  = toilet.get("address", "") or ""
+        if not name:
+            return
+
+        with _FAV_LOCK:
+            with open(FAVORITES_FILE_PATH, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([uid, name, lat_s, lon_s, addr])
     except Exception as e:
         logging.error(f"加入最愛失敗: {e}")
 
 def remove_from_favorites(uid, name, lat, lon):
     try:
+        if not uid or not name:
+            return False
         lat_s = norm_coord(lat)
         lon_s = norm_coord(lon)
-        rows = []
-        changed = False
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) < 5:
-                    rows.append(row); continue
-                if not (row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s):
-                    rows.append(row)
-                else:
-                    changed = True
-        with open(FAVORITES_FILE_PATH, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerows(rows)
+
+        with _FAV_LOCK:
+            rows = []
+            changed = False
+            with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) < 5:
+                        rows.append(row)
+                        continue
+                    if not (row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s):
+                        rows.append(row)
+                    else:
+                        changed = True
+
+            if changed:
+                with open(FAVORITES_FILE_PATH, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(rows)
         return changed
     except Exception as e:
         logging.error(f"移除最愛失敗: {e}")
@@ -1837,26 +1884,29 @@ def remove_from_favorites(uid, name, lat, lon):
 
 def get_user_favorites(uid):
     favs = []
+    if not uid:
+        return favs
     try:
-        with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) < 5:
-                    continue
-                if row[0] == uid:
+        with _FAV_LOCK:
+            with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) < 5:
+                        continue
+                    if row[0] != uid:
+                        continue
                     favs.append({
+                        "user_id": row[0],
                         "name": row[1],
-                        "lat": float(row[2]),
-                        "lon": float(row[3]),
+                        "lat": row[2],
+                        "lon": row[3],
                         "address": row[4],
-                        "distance": 0,
-                        "type": "favorite"
                     })
+        return favs
     except Exception as e:
         logging.error(f"讀取最愛失敗: {e}")
-    return favs
+        return favs
 
-# === 地址轉經緯度 ===
 def geocode_address(address):
     try:
         ua_email = os.getenv("CONTACT_EMAIL", "school-toilet-bot@gmail.com")
@@ -2470,8 +2520,7 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 
 # === 指示燈索引 ===
 _feedback_index_cache = {"ts": 0, "data": {}}
-_FEEDBACK_INDEX_TTL = 60
-
+# _FEEDBACK_INDEX_TTL is defined in global config section (see above)
 def build_feedback_index():
     _ensure_sheets_ready()
     if feedback_sheet is None:
