@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <title>{{ toilet_name }} 廁所回饋表單</title>
+  <title id="t_title">{{ toilet_name }} 廁所回饋表單</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root{
@@ -45,11 +45,11 @@
   </style>
 </head>
 <body>
-  <h2>{{ toilet_name }}</h2>
-  <p class="addr">{{ address or "（無地址，使用座標）" }}</p>
-  <p class="coords">座標：{{ request.args.get('lat') }}，{{ request.args.get('lon') }}</p>
+  <h2 id="t_h2">{{ toilet_name }}</h2>
+  <p class="addr" id="t_addr">{{ address or "（無地址，使用座標）" }}</p>
+  <p class="coords" id="t_coords">座標：{{ request.args.get('lat') }}，{{ request.args.get('lon') }}</p>
 
-  <div class="notice">
+  <div class="notice" id="t_notice">
     評分填 <b>1–10 分</b>。系統會將其換算為模型使用的 <b>1–5 星</b>（1–2→1★、3–4→2★、5–6→3★、7–8→4★、9–10→5★），以產生更準的清潔度預測。
   </div>
 
@@ -60,58 +60,60 @@
     <input type="hidden" name="address" value="{{ address or '' }}">
     <input type="hidden" name="lat" value="{{ request.args.get('lat') }}">
     <input type="hidden" name="lon" value="{{ request.args.get('lon') }}">
+    <input type="hidden" name="lang" id="langInput" value="zh">
 
-    <label for="rating">清潔度評分（1–10）</label>
+    <label for="rating" id="t_lab_rating">清潔度評分（1–10）</label>
     <select name="rating" id="rating" required>
-      <option value="">請選擇</option>
+      <option value="" id="t_choose_1">請選擇</option>
       {% for i in range(1,11) %}
       <option value="{{ i }}">{{ i }}</option>
       {% endfor %}
     </select>
 
-    <label for="toilet_paper">是否有衛生紙</label>
+    <label for="toilet_paper" id="t_lab_paper">是否有衛生紙</label>
     <select name="toilet_paper" id="toilet_paper" required>
-      <option value="">請選擇</option>
-      <option value="有">有</option>
-      <option value="沒有">沒有</option>
-      <option value="沒注意">沒注意</option>
+      <option value="" id="t_choose_2">請選擇</option>
+      <option value="有" id="t_opt_yes_1">有</option>
+      <option value="沒有" id="t_opt_no_1">沒有</option>
+      <option value="沒注意" id="t_opt_na_1">沒注意</option>
     </select>
 
-    <label for="accessibility">是否有無障礙設施</label>
+    <label for="accessibility" id="t_lab_access">是否有無障礙設施</label>
     <select name="accessibility" id="accessibility" required>
-      <option value="">請選擇</option>
-      <option value="有">有</option>
-      <option value="沒有">沒有</option>
-      <option value="沒注意">沒注意</option>
+      <option value="" id="t_choose_3">請選擇</option>
+      <option value="有" id="t_opt_yes_2">有</option>
+      <option value="沒有" id="t_opt_no_2">沒有</option>
+      <option value="沒注意" id="t_opt_na_2">沒注意</option>
     </select>
 
-    <label for="time_of_use">使用時間（選填）</label>
+    <label for="time_of_use" id="t_lab_time">使用時間（選填）</label>
     <select name="time_of_use" id="time_of_use">
-      <option value="">請選擇</option>
-      <option value="上午">上午</option>
-      <option value="下午">下午</option>
-      <option value="傍晚">傍晚</option>
-      <option value="晚間">晚間</option>
+      <option value="" id="t_choose_4">請選擇</option>
+      <option value="上午" id="t_time_am">上午</option>
+      <option value="下午" id="t_time_pm">下午</option>
+      <option value="傍晚" id="t_time_evening">傍晚</option>
+      <option value="晚間" id="t_time_night">晚間</option>
     </select>
 
-    <!-- 新增：樓層 / 位置（提交欄位名為 floor_hint，後端已支援） -->
-    <label for="floor_hint">樓層 / 位置（選填）</label>
+    <!-- 新增：樓層 / 位置 -->
+    <label for="floor_hint" id="t_lab_floor">樓層 / 位置（選填）</label>
     <input type="text" name="floor_hint" id="floor_hint" placeholder="例：地面 / 地下1F / 2F / 屋頂">
-    <div class="chips" aria-hidden="true">
-      <button class="chip-btn" type="button" data-fill="地面">地面</button>
-      <button class="chip-btn" type="button" data-fill="地下">地下</button>
-      <button class="chip-btn" type="button" data-fill="地下1F">地下1F</button>
-      <button class="chip-btn" type="button" data-fill="1F">1F</button>
-      <button class="chip-btn" type="button" data-fill="2F">2F</button>
-      <button class="chip-btn" type="button" data-fill="3F">3F</button>
-      <button class="chip-btn" type="button" data-fill="屋頂">屋頂</button>
-    </div>
-    <div class="hint">＊若不確定，可留白；之後卡片會顯示「樓層未知」。</div>
 
-    <label for="comment">留言（選填）</label>
+    <div class="chips" aria-hidden="true">
+      <button class="chip-btn" type="button" data-fill="地面" id="t_chip_ground">地面</button>
+      <button class="chip-btn" type="button" data-fill="地下" id="t_chip_below">地下</button>
+      <button class="chip-btn" type="button" data-fill="地下1F" id="t_chip_b1">地下1F</button>
+      <button class="chip-btn" type="button" data-fill="1F" id="t_chip_1f">1F</button>
+      <button class="chip-btn" type="button" data-fill="2F" id="t_chip_2f">2F</button>
+      <button class="chip-btn" type="button" data-fill="3F" id="t_chip_3f">3F</button>
+      <button class="chip-btn" type="button" data-fill="屋頂" id="t_chip_roof">屋頂</button>
+    </div>
+    <div class="hint" id="t_hint_floor">＊若不確定，可留白；之後卡片會顯示「樓層未知」。</div>
+
+    <label for="comment" id="t_lab_comment">留言（選填）</label>
     <textarea name="comment" id="comment" rows="4" placeholder="可以分享你的感想或建議..."></textarea>
 
-    <div class="hint">＊本表單會連同座標（lat/lon）寫入 Google Sheets，做為唯一識別。</div>
+    <div class="hint" id="t_hint_sheet">＊本表單會連同座標（lat/lon）寫入 Google Sheets，做為唯一識別。</div>
     <div id="warn" class="warning">缺少必要欄位或座標，請返回卡片重新開啟表單。</div>
 
     <button type="submit" id="submitBtn">送出回饋</button>
@@ -120,6 +122,178 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
+    /** ===== i18n ===== */
+    const I18N = {
+      zh: {
+        title_suffix: " 廁所回饋表單",
+        addr_fallback: "（無地址，使用座標）",
+        coords_prefix: "座標：",
+        notice_html: "評分填 <b>1–10 分</b>。系統會將其換算為模型使用的 <b>1–5 星</b>（1–2→1★、3–4→2★、5–6→3★、7–8→4★、9–10→5★），以產生更準的清潔度預測。",
+        choose: "請選擇",
+        lab_rating: "清潔度評分（1–10）",
+        lab_paper: "是否有衛生紙",
+        lab_access: "是否有無障礙設施",
+        yes: "有",
+        no: "沒有",
+        na: "沒注意",
+        lab_time: "使用時間（選填）",
+        time_am: "上午",
+        time_pm: "下午",
+        time_evening: "傍晚",
+        time_night: "晚間",
+        lab_floor: "樓層 / 位置（選填）",
+        ph_floor: "例：地面 / 地下1F / 2F / 屋頂",
+        chip_ground: "地面",
+        chip_below: "地下",
+        chip_b1: "地下1F",
+        chip_1f: "1F",
+        chip_2f: "2F",
+        chip_3f: "3F",
+        chip_roof: "屋頂",
+        hint_floor: "＊若不確定，可留白；之後卡片會顯示「樓層未知」。",
+        lab_comment: "留言（選填）",
+        ph_comment: "可以分享你的感想或建議...",
+        hint_sheet: "＊本表單會連同座標（lat/lon）寫入 Google Sheets，做為唯一識別。",
+        warn_missing: "缺少必要欄位或座標，請確認。",
+        submitting: "送出中...",
+        submit: "送出回饋",
+        ok: "已送出，即將返回",
+        fail: "送出失敗，請稍後再試",
+        neterr: "網路異常，請稍後再試"
+      },
+      en: {
+        title_suffix: " Feedback Form",
+        addr_fallback: "(No address; using coordinates)",
+        coords_prefix: "Coords: ",
+        notice_html: "Rate <b>1–10</b>. We convert it to <b>1–5 stars</b> (1–2→1★, 3–4→2★, 5–6→3★, 7–8→4★, 9–10→5★) to improve cleanliness prediction.",
+        choose: "Select",
+        lab_rating: "Cleanliness (1–10)",
+        lab_paper: "Toilet paper available?",
+        lab_access: "Accessibility facilities?",
+        yes: "Yes",
+        no: "No",
+        na: "Not sure",
+        lab_time: "Time of use (optional)",
+        time_am: "Morning",
+        time_pm: "Afternoon",
+        time_evening: "Evening",
+        time_night: "Night",
+        lab_floor: "Floor / location (optional)",
+        ph_floor: "e.g., Ground / B1 / 2F / Roof",
+        chip_ground: "Ground",
+        chip_below: "Basement",
+        chip_b1: "B1",
+        chip_1f: "1F",
+        chip_2f: "2F",
+        chip_3f: "3F",
+        chip_roof: "Roof",
+        hint_floor: "* If unsure, leave blank; the card will show “Unknown floor”.",
+        lab_comment: "Comment (optional)",
+        ph_comment: "Share your thoughts or suggestions…",
+        hint_sheet: "* This form submits lat/lon to Google Sheets as the unique identifier.",
+        warn_missing: "Missing required fields or coordinates.",
+        submitting: "Submitting...",
+        submit: "Submit",
+        ok: "Submitted. Returning…",
+        fail: "Submit failed. Please try again.",
+        neterr: "Network error. Please try again."
+      }
+    };
+
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
+    }
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      return normLang(navigator.language || "zh");
+    }
+
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+
+    // 把 lang 帶回後端
+    const langInput = document.getElementById("langInput");
+    if (langInput) langInput.value = LANG;
+
+    // 套用靜態文字
+    (function(){
+      const toiletName = "{{ toilet_name }}";
+      document.title = toiletName + T.title_suffix;
+      const tTitle = document.getElementById("t_title");
+      if (tTitle) tTitle.textContent = toiletName + T.title_suffix;
+
+      const addrEl = document.getElementById("t_addr");
+      if (addrEl) {
+        const raw = "{{ address or '（無地址，使用座標）' }}";
+        addrEl.textContent = raw.replace("（無地址，使用座標）", T.addr_fallback);
+      }
+
+      const coordsEl = document.getElementById("t_coords");
+      if (coordsEl) coordsEl.textContent = T.coords_prefix + "{{ request.args.get('lat') }}，{{ request.args.get('lon') }}";
+
+      const noticeEl = document.getElementById("t_notice");
+      if (noticeEl) noticeEl.innerHTML = T.notice_html;
+
+      const setText = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+      setText("t_lab_rating", T.lab_rating);
+      setText("t_lab_paper", T.lab_paper);
+      setText("t_lab_access", T.lab_access);
+      setText("t_lab_time", T.lab_time);
+      setText("t_lab_floor", T.lab_floor);
+      setText("t_hint_floor", T.hint_floor);
+      setText("t_lab_comment", T.lab_comment);
+      setText("t_hint_sheet", T.hint_sheet);
+      setText("submitBtn", T.submit);
+
+      // choose
+      ["t_choose_1","t_choose_2","t_choose_3","t_choose_4"].forEach(id=>setText(id, T.choose));
+
+      // yes/no/na options (values keep original zh, display text changes)
+      setText("t_opt_yes_1", T.yes);
+      setText("t_opt_no_1", T.no);
+      setText("t_opt_na_1", T.na);
+      setText("t_opt_yes_2", T.yes);
+      setText("t_opt_no_2", T.no);
+      setText("t_opt_na_2", T.na);
+
+      // time options (values keep original zh, display text changes)
+      setText("t_time_am", T.time_am);
+      setText("t_time_pm", T.time_pm);
+      setText("t_time_evening", T.time_evening);
+      setText("t_time_night", T.time_night);
+
+      // floor placeholder & comment placeholder
+      const floor = document.getElementById("floor_hint");
+      if (floor) floor.placeholder = T.ph_floor;
+      const comment = document.getElementById("comment");
+      if (comment) comment.placeholder = T.ph_comment;
+
+      // chips (label)
+      setText("t_chip_ground", T.chip_ground);
+      setText("t_chip_below", T.chip_below);
+      setText("t_chip_b1", T.chip_b1);
+      setText("t_chip_1f", T.chip_1f);
+      setText("t_chip_2f", T.chip_2f);
+      setText("t_chip_3f", T.chip_3f);
+      setText("t_chip_roof", T.chip_roof);
+
+      // chips (data-fill): 用英文時，也把填入值改成英文
+      if (LANG === "en") {
+        document.getElementById("t_chip_ground").setAttribute("data-fill", "Ground");
+        document.getElementById("t_chip_below").setAttribute("data-fill", "Basement");
+        document.getElementById("t_chip_b1").setAttribute("data-fill", "B1");
+        document.getElementById("t_chip_1f").setAttribute("data-fill", "1F");
+        document.getElementById("t_chip_2f").setAttribute("data-fill", "2F");
+        document.getElementById("t_chip_3f").setAttribute("data-fill", "3F");
+        document.getElementById("t_chip_roof").setAttribute("data-fill", "Roof");
+      }
+    })();
+
     // chips 快速填入
     document.addEventListener('click', function(e){
       const btn = e.target.closest('.chip-btn');
@@ -128,7 +302,7 @@
       if(target) target.value = btn.getAttribute('data-fill') || '';
     });
 
-    // 基本前端檢查：必填與座標 + 以 fetch 送出，成功後嘗試關閉視窗/返回原畫面
+    // 基本前端檢查 + fetch 送出
     (function(){
       const form = document.getElementById('fbForm');
       const warn = document.getElementById('warn');
@@ -167,16 +341,19 @@
 
         if(!lat || !lon || !name || !rating || !paper || !acc){
           warn.style.display = 'block';
-          warn.textContent = '缺少必要欄位或座標，請確認。';
+          warn.textContent = T.warn_missing;
           window.scrollTo({ top: 0, behavior: 'smooth' });
           return false;
         }
 
         btn.disabled = true;
-        btn.textContent = '送出中...';
+        btn.textContent = T.submitting;
 
         try{
           const fd = new FormData(form);
+          // extra safety: ensure lang present
+          if (!fd.get("lang")) fd.set("lang", LANG);
+
           const resp = await fetch(form.action, {
             method: 'POST',
             body: fd,
@@ -185,18 +362,18 @@
           });
 
           if (resp.ok) {
-            showToast('已送出，即將返回');
+            showToast(T.ok);
             setTimeout(tryCloseOrBack, 500);
           } else {
-            showToast('送出失敗，請稍後再試', true);
+            showToast(T.fail, true);
             btn.disabled = false;
-            btn.textContent = '送出回饋';
+            btn.textContent = T.submit;
           }
         } catch(err){
           console.error(err);
-          showToast('網路異常，請稍後再試', true);
+          showToast(T.neterr, true);
           btn.disabled = false;
-          btn.textContent = '送出回饋';
+          btn.textContent = T.submit;
         }
       });
     })();

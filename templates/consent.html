@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>隱私同意 | 廁所幫手</title>
+  <title id="t_title">隱私同意 | 廁所幫手</title>
   <link rel="preconnect" href="https://static.line-scdn.net">
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
@@ -23,9 +23,10 @@
 </head>
 <body>
   <div class="card">
-    <div class="muted" style="margin-bottom:10px;">隱私與使用同意</div>
-    <h1>開始前，請先閱讀並同意</h1>
-    <div class="row muted">
+    <div class="muted" id="t_banner" style="margin-bottom:10px;">隱私與使用同意</div>
+    <h1 id="t_h1">開始前，請先閱讀並同意</h1>
+
+    <div class="row muted" id="t_policy">
       為了幫你找附近廁所與提供回饋，我們需要暫時處理你的 LINE 使用者識別 與（若你選擇「精確模式」）<b>位置資訊</b>。我們承諾：
       <ul>
         <li>僅用於查詢與功能使用，不做商業販售或不當分享</li>
@@ -45,7 +46,7 @@
     <div class="row">
       <label style="display:flex;gap:10px;align-items:flex-start;">
         <input id="agreeChk" type="checkbox" checked />
-        <span>我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
+        <span id="t_chk">我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
       </label>
     </div>
 
@@ -58,6 +59,96 @@
   </div>
 
   <script>
+    /** ===== i18n ===== */
+    const I18N = {
+      zh: {
+        title: "隱私同意 | 廁所幫手",
+        banner: "隱私與使用同意",
+        h1: "開始前，請先閱讀並同意",
+        policy_html: `為了幫你找附近廁所與提供回饋，我們需要暫時處理你的 LINE 使用者識別 與（若你選擇「精確模式」）<b>位置資訊</b>。我們承諾：
+          <ul>
+            <li>僅用於查詢與功能使用，不做商業販售或不當分享</li>
+            <li>位置只做即時查詢，不會永久儲存（隱私模式下僅使用近似網格）</li>
+            <li>你可隨時撤回同意，並要求刪除紀錄</li>
+          </ul>`,
+        hello_loading: "您好（讀取中…）",
+        hint_loading: "正在從 LINE 取得您的暱稱與 ID",
+        hint_connected: "已連線至 LINE 帳號",
+        chk_html: `我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。`,
+        ok: "同意並開始使用",
+        ok_sending: "送出中…",
+        ok_done: "已同意",
+        ok_external_done: "已記錄同意，請返回 LINE 聊天視窗繼續使用。",
+        no: "不同意",
+        no_msg: "你選擇不同意。部分功能將無法提供。請直接關閉此視窗回到 LINE。",
+        timeout: "讀取逾時，請在 LINE 內重新開啟或稍後再試",
+        timeout_tip: "若你是從外部瀏覽器開啟，請回到 LINE 聊天室，點機器人提供的按鈕開啟此頁。",
+        init_failed: "初始化失敗：",
+        submit_failed_prefix: "送出失敗：",
+        submit_failed_suffix: "。請稍後再試。"
+      },
+      en: {
+        title: "Privacy Consent | Restroom Helper",
+        banner: "Privacy & Consent",
+        h1: "Please read and agree before continuing",
+        policy_html: `To help you find nearby restrooms and collect feedback, we temporarily process your LINE user ID and, if you choose “Precise mode”, your <b>location</b>. We promise:
+          <ul>
+            <li>Used only to provide features; not sold or improperly shared</li>
+            <li>Location is used for real-time search only and not stored permanently (privacy mode uses approximate grids)</li>
+            <li>You can withdraw consent anytime and request deletion</li>
+          </ul>`,
+        hello_loading: "Hello (loading…)",
+        hint_loading: "Getting your display name and ID from LINE",
+        hint_connected: "Connected to your LINE account",
+        chk_html: `I have read and agree to the <a href="/privacy" target="_blank">Privacy Policy</a> and Terms of Use. I understand I can’t use the service without consent.`,
+        ok: "Agree & Start",
+        ok_sending: "Submitting…",
+        ok_done: "Agreed",
+        ok_external_done: "Consent recorded. Please return to LINE to continue.",
+        no: "Decline",
+        no_msg: "You declined. Some features will be unavailable. You can close this page and return to LINE.",
+        timeout: "Timed out. Please open this page inside LINE or try again.",
+        timeout_tip: "If you opened this in an external browser, go back to LINE and open it from the bot button.",
+        init_failed: "Initialization failed: ",
+        submit_failed_prefix: "Submit failed: ",
+        submit_failed_suffix: " Please try again later."
+      }
+    };
+
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
+    }
+
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+      return normLang(navigator.language || "zh");
+    }
+
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.title;
+
+    function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v; }
+    function setHTML(id, v){ const el=document.getElementById(id); if(el) el.innerHTML = v; }
+
+    setText("t_title", T.title);
+    setText("t_banner", T.banner);
+    setText("t_h1", T.h1);
+    setHTML("t_policy", T.policy_html);
+    setText("hello", T.hello_loading);
+    setText("ctxHint", T.hint_loading);
+    setHTML("t_chk", T.chk_html);
+    setText("okBtn", T.ok);
+    setText("noBtn", T.no);
+
+    /** ===== original ===== */
     const LIFF_ID = "2007674330-0XpoR2dW";
     const okBtn   = document.getElementById('okBtn');
     const noBtn   = document.getElementById('noBtn');
@@ -90,8 +181,8 @@
 
         // 顯示暱稱
         if (displayName) {
-          hello.textContent = displayName + " 您好";
-          ctxHint.textContent = "已連線至 LINE 帳號";
+          hello.textContent = displayName + (LANG === "en" ? "" : " 您好");
+          ctxHint.textContent = T.hint_connected;
         }
 
         // 來源型態：在 LINE 客戶端內 or 外部瀏覽器
@@ -102,13 +193,13 @@
         // 安全網：最多等 6 秒，還是沒有 userId 就顯示引導
         setTimeout(() => {
           if (!userId) {
-            ctxHint.textContent = "讀取逾時，請在 LINE 內重新開啟或稍後再試";
+            ctxHint.textContent = T.timeout;
             tips.style.display = "block";
-            tips.innerHTML = "若你是從外部瀏覽器開啟，請回到 LINE 聊天室，點機器人提供的按鈕開啟此頁。";
+            tips.innerHTML = T.timeout_tip;
           }
         }, 6000);
       } catch (e) {
-        ctxHint.textContent = "初始化失敗：" + (e.message || e);
+        ctxHint.textContent = T.init_failed + (e.message || e);
         tips.style.display = "block";
       }
     }
@@ -116,7 +207,7 @@
     okBtn.addEventListener('click', async () => {
       if (!agree.checked || !userId) return;
       okBtn.disabled = true;
-      okBtn.textContent = "送出中…";
+      okBtn.textContent = T.ok_sending;
       try {
         const res = await fetch("/api/consent", {
           method: "POST",
@@ -127,33 +218,34 @@
             displayName,
             sourceType,
             ua,
-            ts: new Date().toISOString()
+            ts: new Date().toISOString(),
+            lang: LANG
           })
         });
         const j = await res.json().catch(()=>({}));
         if (res.ok && j.ok !== false) {
-          okBtn.textContent = "已同意";
+          okBtn.textContent = T.ok_done;
           // 在 LINE 內可直接關閉
           if (liff.isInClient()) {
             setTimeout(() => liff.closeWindow(), 400);
           } else {
             tips.style.display = "block";
-            tips.innerHTML = "已記錄同意，請返回 LINE 聊天視窗繼續使用。";
+            tips.innerHTML = T.ok_external_done;
           }
         } else {
-          throw new Error(j.message || "同意寫入失敗");
+          throw new Error(j.message || "consent write failed");
         }
       } catch (e) {
         okBtn.disabled = false;
-        okBtn.textContent = "同意並開始使用";
+        okBtn.textContent = T.ok;
         tips.style.display = "block";
-        tips.innerHTML = "送出失敗：" + (e.message||e) + "。請稍後再試。";
+        tips.innerHTML = T.submit_failed_prefix + (e.message||e) + T.submit_failed_suffix;
       }
     });
 
     noBtn.addEventListener('click', () => {
       tips.style.display = "block";
-      tips.innerHTML = "你選擇不同意。部分功能將無法提供。請直接關閉此視窗回到 LINE。";
+      tips.innerHTML = T.no_msg;
       try { if (liff.isInClient()) liff.closeWindow(); } catch {}
     });
 

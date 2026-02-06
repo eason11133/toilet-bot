@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>回報附近廁所狀態</title>
+  <title id="t_title">回報附近廁所狀態</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:14px;line-height:1.6}
     .card{border:1px solid #e5e5e5;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
@@ -21,7 +21,7 @@
   <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
-  <h3>回報附近廁所狀態</h3>
+  <h3 id="t_h3">回報附近廁所狀態</h3>
 
   <div class="debug" id="debug">
     <div>LIFF_ID: <code id="dbg-liff"></code></div>
@@ -36,6 +36,86 @@
   <div id="list"></div>
 
   <script>
+    /** ===== i18n ===== */
+    const I18N = {
+      zh: {
+        title: "回報附近廁所狀態",
+        init: "初始化中…",
+        init_liff: "初始化 LIFF…",
+        locating: "定位中…",
+        loading: "載入附近廁所…",
+        none: "附近找不到廁所",
+        perm_denied: "定位失敗：使用者拒絕提供定位（code: 1）",
+        allow_then: "請允許定位後再試",
+        loc_failed_prefix: "定位失敗：",
+        loc_failed_short: "定位失敗",
+        try_again: "重新嘗試定位",
+        assist_retry: "你可以點「重新嘗試定位」，或在聊天室傳送位置後再開此頁。",
+        assist_denied: "或者：你也可以在傳送位置給機器人後，再回來點這個頁面（會自動帶入你剛剛傳的位置）。",
+        liff_id_missing: "LIFF_ID 未正確注入",
+        liff_failed: "LIFF 初始化失敗：",
+        geo_unsup: "瀏覽器不支援定位",
+        ios_tip: "iPhone：到「設定 → LINE → 位置」改為「使用 App 期間」後返回此頁再試。",
+        and_tip: "Android：長按 LINE App 圖示 → App 資訊 → 權限 → 位置 → 允許，回到此頁再試。",
+        other_tip: "請到手機的 LINE App 權限設定，允許「位置」後回到此頁再試。",
+        meters: " 公尺",
+        status_labels: ["有人排隊","缺衛生紙","暫停使用","恢復正常"],
+        status_buttons: ["🟡 有人排隊","🧻 缺衛生紙","⛔ 暫停使用","✅ 恢復正常"],
+        report_ok: "已回報：",
+        report_fail: "回報失敗，稍後再試",
+        neterr: "網路錯誤，稍後再試"
+      },
+      en: {
+        title: "Report Restroom Status",
+        init: "Initializing…",
+        init_liff: "Initializing LIFF…",
+        locating: "Getting location…",
+        loading: "Loading nearby restrooms…",
+        none: "No nearby restrooms found",
+        perm_denied: "Location failed: permission denied (code: 1)",
+        allow_then: "Please allow location access and try again",
+        loc_failed_prefix: "Location failed: ",
+        loc_failed_short: "Location failed",
+        try_again: "Try again",
+        assist_retry: "You can tap “Try again”, or send a location in chat and reopen this page.",
+        assist_denied: "Or send your location to the bot, then reopen this page (it will use the location you sent).",
+        liff_id_missing: "LIFF_ID not injected",
+        liff_failed: "LIFF init failed: ",
+        geo_unsup: "Geolocation not supported",
+        ios_tip: "iPhone: Settings → LINE → Location → While Using, then return and try again.",
+        and_tip: "Android: App info → Permissions → Location → Allow, then return and try again.",
+        other_tip: "Please allow Location permission for LINE, then return and try again.",
+        meters: " m",
+        status_labels: ["Queue","No paper","Closed","Back to normal"],
+        status_buttons: ["🟡 Queue","🧻 No paper","⛔ Closed","✅ Normal"],
+        report_ok: "Reported: ",
+        report_fail: "Report failed. Try again later.",
+        neterr: "Network error. Please try again."
+      }
+    };
+
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
+    }
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+      return normLang(navigator.language || "zh");
+    }
+
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.title;
+    document.getElementById("t_title").textContent = T.title;
+    document.getElementById("t_h3").textContent = T.title;
+
+    /** ===== original ===== */
     // 後端注入
     const LIFF_ID = "{{ liff_id }}";
     const PUBLIC_URL = "{{ public_url }}";
@@ -88,7 +168,7 @@
     async function getPos(){
       if(!isNaN(qsLat) && !isNaN(qsLon)) return {lat:qsLat, lon:qsLon};
       return new Promise((res, rej)=>{
-        if(!navigator.geolocation) return rej(new Error("瀏覽器不支援定位"));
+        if(!navigator.geolocation) return rej(new Error(T.geo_unsup));
         navigator.geolocation.getCurrentPosition(
           p=>res({lat:p.coords.latitude, lon:p.coords.longitude}),
           e=>rej(e), {enableHighAccuracy:true, timeout:10000}
@@ -98,7 +178,7 @@
 
     // --- API ---
     async function fetchCandidates(lat, lon){
-      const r = await fetch(`/api/status_candidates?lat=${lat}&lon=${lon}`);
+      const r = await fetch(`/api/status_candidates?lat=${lat}&lon=${lon}&lang=${encodeURIComponent(LANG)}`);
       return await r.json();
     }
 
@@ -107,20 +187,27 @@
       let user = { userId:"", displayName:"" };
       try { user = await liff.getProfile(); } catch(e) {}
       try {
-        const body = { lat, lon, status, user_id:user.userId||"", display_name:user.displayName||"", note:"" };
+        const body = {
+          lat, lon,
+          status,
+          user_id:user.userId||"",
+          display_name:user.displayName||"",
+          note:"",
+          lang: LANG
+        };
         const r = await fetch("/api/status_report", {
           method:"POST", headers:{ "Content-Type":"application/json" },
           body: JSON.stringify(body)
         });
         const j = await r.json();
         if(j.ok){
-          alert("已回報：" + status);
-          if (liff.isInClient()) liff.closeWindow();
+          alert(T.report_ok + status);
+          if (window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow();
         }else{
-          alert("回報失敗，稍後再試");
+          alert(T.report_fail);
         }
       } catch(e){
-        alert("網路錯誤，稍後再試");
+        alert(T.neterr);
       } finally {
         btns.forEach(b=>b.disabled = false);
       }
@@ -133,89 +220,88 @@
         const card=el("div",{class:"card"});
         const title=el("div",{class:"title"},[item.title]);
         const addr=el("div",{class:"muted"},[item.address || (item.lat+","+item.lon)]);
-        const dist=el("div",{class:"muted"},[Math.round(item.distance)+" 公尺"]);
+        const dist=el("div",{class:"muted"},[Math.round(item.distance)+T.meters]);
         const row=el("div",{class:"row"});
-        const btns=[
-          el("button",{},["🟡 有人排隊"]),
-          el("button",{},["🧻 缺衛生紙"]),
-          el("button",{},["⛔ 暫停使用"]),
-          el("button",{},["✅ 恢復正常"]),
+
+        const btnTexts = T.status_buttons;
+        const labels   = T.status_labels;
+
+        const btns = [
+          el("button",{},[btnTexts[0]]),
+          el("button",{},[btnTexts[1]]),
+          el("button",{},[btnTexts[2]]),
+          el("button",{},[btnTexts[3]]),
         ];
-        const labels=["有人排隊","缺衛生紙","暫停使用","恢復正常"];
+
         btns.forEach((b,i)=>{
           b.addEventListener("click",()=>reportStatus(item.lat,item.lon,labels[i],btns));
           row.appendChild(b);
         });
+
         card.appendChild(title); card.appendChild(addr); card.appendChild(dist); card.appendChild(row);
         root.appendChild(card);
       });
     }
 
     function explainPermission(os){
-      if (os === "ios") {
-        return "iPhone：到「設定 → LINE → 位置」改為「使用 App 期間」後返回此頁再試。";
-      } else if (os === "android") {
-        return "Android：長按 LINE App 圖示 → App 資訊 → 權限 → 位置 → 允許，回到此頁再試。";
-      }
-      return "請到手機的 LINE App 權限設定，允許「位置」後回到此頁再試。";
+      if (os === "ios") return T.ios_tip;
+      if (os === "android") return T.and_tip;
+      return T.other_tip;
     }
 
     async function startFlow(){
       const loading=document.getElementById("loading");
       setError(""); setAssist(""); setActions([]);
 
-      loading.textContent="定位中…";
+      loading.textContent = T.locating;
+
       try{
         const pos = await getPos();
 
-        loading.textContent="載入附近廁所…";
+        loading.textContent = T.loading;
         const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
+
         if(!ok || !candidates || !candidates.length){
-          loading.textContent = "附近找不到廁所";
+          loading.textContent = T.none;
           return;
         }
+
         loading.remove();
         render(candidates);
+
       }catch(e){
-        // 針對權限被拒絕（code=1）做友善提示
         const os = (window.liff && liff.getOS) ? liff.getOS() : "";
+
+        // 權限被拒絕（code=1）
         if (e && (e.code === 1 || String(e).toLowerCase().includes("denied"))) {
-          setError("定位失敗：使用者拒絕提供定位（code: 1）");
-          setAssist(`
-            ${explainPermission(os)}<br>
-            或者：你也可以在傳送位置給機器人後，再回來點這個頁面（會自動帶入你剛剛傳的位置）。
-          `);
-          setActions([
-            { text:"重新嘗試定位", primary:true, onClick: ()=>startFlow() }
-          ]);
-          loading.textContent = "請允許定位後再試";
+          setError(T.perm_denied);
+          setAssist(`${explainPermission(os)}<br>${T.assist_denied}`);
+          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow() }]);
+          loading.textContent = T.allow_then;
         } else {
-          setError("定位失敗：" + (e?.message || e));
-          setAssist("你可以點「重新嘗試定位」，或在聊天室傳送位置後再開此頁。");
-          setActions([
-            { text:"重新嘗試定位", primary:true, onClick: ()=>startFlow() }
-          ]);
-          loading.textContent = "定位失敗";
+          setError(T.loc_failed_prefix + (e?.message || e));
+          setAssist(T.assist_retry);
+          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow() }]);
+          loading.textContent = T.loc_failed_short;
         }
       }
     }
 
     async function main(){
       const loading=document.getElementById("loading");
-      loading.textContent="初始化 LIFF…";
+      loading.textContent = T.init_liff;
 
       try{
         if (LIFF_ID && LIFF_ID !== "{{ liff_id }}") {
           await liff.init({ liffId: LIFF_ID });
         } else {
-          setError("LIFF_ID 未正確注入");
+          setError(T.liff_id_missing);
         }
       }catch(e){
         // LIFF 失敗也允許繼續（用瀏覽器定位）
-        setError("LIFF 初始化失敗：" + (e?.message || e));
+        setError(T.liff_failed + (e?.message || e));
       }
 
-      // 啟動主流程（會自動處理帶參數或裝置定位）
       startFlow();
     }
     main();

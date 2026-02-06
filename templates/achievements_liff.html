@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>我的成就</title>
+  <title id="t_title">我的成就</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:16px;line-height:1.6}
     h2{margin:8px 0 12px}
@@ -22,13 +22,63 @@
   <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
-  <h2>我的成就</h2>
+  <h2 id="t_h2">我的成就</h2>
   <div class="debug" id="dbg" style="display:none"></div>
   <div id="loading">初始化中…</div>
   <div id="error" class="error"></div>
   <div class="grid" id="grid"></div>
 
 <script>
+/** ===== i18n ===== */
+const I18N = {
+  zh: {
+    title: "我的成就",
+    unlocked: "已解鎖",
+    locked: "尚未解鎖",
+    init: "初始化中…",
+    init_liff: "初始化 LIFF…",
+    loading: "讀取成就…",
+    load_failed: "讀取成就失敗："
+  },
+  en: {
+    title: "My Achievements",
+    unlocked: "Unlocked",
+    locked: "Locked",
+    init: "Initializing…",
+    init_liff: "Initializing LIFF…",
+    loading: "Loading achievements…",
+    load_failed: "Failed to load achievements: "
+  }
+};
+
+function normLang(x){
+  x = (x || "").toLowerCase();
+  if (x.startsWith("en")) return "en";
+  return "zh";
+}
+
+function getLang(){
+  const p = new URLSearchParams(location.search);
+  const q = p.get("lang");
+  if (q) return normLang(q);
+  try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+  return normLang(navigator.language || "zh");
+}
+
+const LANG = getLang();
+const T = I18N[LANG] || I18N.zh;
+
+document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+document.title = T.title;
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  const h2 = document.getElementById("t_h2");
+  if (h2) h2.textContent = T.title;
+  const loading = document.getElementById("loading");
+  if (loading) loading.textContent = T.init;
+});
+
+/** ===== original ===== */
 const LIFF_ID = "{{ liff_id }}";      // 後端注入（可用與狀態同一組）
 const PUBLIC_URL = "{{ public_url }}";
 
@@ -37,7 +87,8 @@ function card(a){
   const t=document.createElement("div"); t.className="title"; t.textContent=a.title;
   const d=document.createElement("div"); d.className="muted"; d.textContent=a.desc || "";
   const tag=document.createElement("span"); tag.className="tag " + (a.unlocked?"ok":"lock");
-  tag.textContent = a.unlocked ? "已解鎖" : "尚未解鎖";
+  tag.textContent = a.unlocked ? T.unlocked : T.locked;
+
   const bar=document.createElement("div"); bar.className="bar";
   if(a.progress!==undefined && a.goal){
     const span=document.createElement("span");
@@ -52,25 +103,33 @@ function card(a){
 function showErr(msg){document.getElementById("error").textContent=msg;}
 
 async function main(){
-  document.getElementById("loading").textContent="初始化 LIFF…";
+  document.getElementById("loading").textContent = T.init_liff;
+
   let userId="";
   try{
     if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
     const p = await liff.getProfile();
     userId = p.userId || "";
-  }catch(e){ /* 若在外部瀏覽器也可用，userId 可能取不到 */ }
+  }catch(e){
+    // 外部瀏覽器也可用，userId 可能取不到
+  }
 
-  document.getElementById("loading").textContent="讀取成就…";
+  document.getElementById("loading").textContent = T.loading;
+
   try{
-    const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+    const qs = userId
+      ? `?user_id=${encodeURIComponent(userId)}&lang=${encodeURIComponent(LANG)}`
+      : `?lang=${encodeURIComponent(LANG)}`;
+
     const r = await fetch(`/api/achievements${qs}`);
     const j = await r.json();
-    if(!j.ok) throw new Error(j.message || "讀取失敗");
+    if(!j.ok) throw new Error(j.message || "Load failed");
+
     document.getElementById("loading").remove();
     const grid=document.getElementById("grid");
     j.achievements.forEach(a=>grid.appendChild(card(a)));
   }catch(e){
-    showErr("讀取成就失敗：" + e.message);
+    showErr(T.load_failed + e.message);
   }
 }
 main();

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>我的徽章</title>
+  <title id="t_title">我的徽章</title>
   <style>
     :root { --gap: 12px; }
     body { font-family: system-ui,-apple-system,"Noto Sans TC",sans-serif; margin: 0; padding: 16px; background:#f7f7f7; }
@@ -36,15 +36,53 @@
   </style>
 </head>
 <body>
-  <h1>我的徽章</h1>
+  <h1 id="t_h1">我的徽章</h1>
   <div id="grid" class="grid" aria-live="polite"></div>
   <div id="legend" class="legend">灰色代表尚未解鎖</div>
   <div id="err" class="error" hidden></div>
 
   <script>
+    /** ===== i18n ===== */
+    const I18N = {
+      zh: {
+        title: "我的徽章",
+        legend: "灰色代表尚未解鎖",
+        load_failed: "載入失敗，請稍後再試"
+      },
+      en: {
+        title: "My Badges",
+        legend: "Gray = locked",
+        load_failed: "Failed to load. Please try again later."
+      }
+    };
+
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
+    }
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      return normLang(navigator.language || "zh");
+    }
+
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.title;
+
+    const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
+    setText("t_title", T.title);
+    setText("t_h1", T.title);
+    setText("legend", T.legend);
+
+    /** ===== original ===== */
     // 你可以用後端模板把 userId 注入，或從 LIFF 拿
     const params = new URLSearchParams(location.search);
-    const userId = params.get("user_id") || "";
+    const userId = params.get("user_id") || params.get("uid") || "";
 
     const grid = document.getElementById('grid');
     const errBox = document.getElementById('err');
@@ -62,11 +100,15 @@
     async function loadBadges(){
       renderSkeleton(10);
       try{
-        const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+        const qs = userId
+          ? `?user_id=${encodeURIComponent(userId)}&lang=${encodeURIComponent(LANG)}`
+          : `?lang=${encodeURIComponent(LANG)}`;
+
         const res = await fetch(`/api/badges${qs}`, {cache: "no-store"});
         if(!res.ok) throw new Error("Network error");
         const data = await res.json();
         if(!data.ok) throw new Error("API error");
+
         const items = data.badges || [];
         grid.innerHTML = items.map(b => `
           <div class="badge ${b.unlocked ? "" : "locked"}" role="group" aria-label="${b.name}">
@@ -76,7 +118,7 @@
         `).join("");
       }catch(e){
         errBox.hidden = false;
-        errBox.textContent = "載入失敗，請稍後再試";
+        errBox.textContent = T.load_failed;
       }
     }
 

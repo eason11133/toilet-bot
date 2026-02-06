@@ -3,19 +3,62 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI 使用回顧</title>
+  <title id="t_title">AI 使用回顧</title>
   <style>
     body { font-family: sans-serif; padding: 20px; line-height: 1.7; }
     .card {
-      border: 1px solid #ccc; border-radius: 10px; padding: 20px;
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      padding: 20px;
       background: #fafafa;
     }
   </style>
 </head>
 <body>
-  <h2>AI 使用回顧分析</h2>
+  <h2 id="t_h2">AI 使用回顧分析</h2>
   <div class="card">
     <pre style="white-space: pre-wrap;">{{ summary }}</pre>
   </div>
+
+  <script>
+    /** ===== i18n ===== */
+    const I18N = {
+      zh: {
+        title: "AI 使用回顧",
+        h2: "AI 使用回顧分析"
+      },
+      en: {
+        title: "AI Usage Review",
+        h2: "AI Usage Analysis"
+      }
+    };
+
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
+    }
+
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      return normLang(navigator.language || "zh");
+    }
+
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.title;
+
+    const setText = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
+
+    setText("t_title", T.title);
+    setText("t_h2", T.h2);
+  </script>
 </body>
 </html>
