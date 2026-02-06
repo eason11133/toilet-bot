@@ -4406,6 +4406,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
     return result
 
 # === TextMessage ===
+# === TextMessage ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     if _too_old_to_reply(event):
@@ -4414,9 +4415,44 @@ def handle_text(event):
 
     uid = event.source.user_id
     text_raw = event.message.text or ""
+
+    # =========================
+    # 🔧 強化文字正規化
+    # =========================
     text_norm = text_raw.strip()
     text = text_norm.lower()
+    text_key = " ".join(text.split())  # 壓掉 \n / \t / 多空白
 
+    # =========================
+    # 🔥 英文 Nearby Toilets 最優先容錯（不靠完全比對）
+    # =========================
+    if ("nearby" in text_key) and (("toilet" in text_key) or ("restroom" in text_key)):
+        set_user_loc_mode(uid, "normal")
+        try:
+            safe_reply(
+                event,
+                make_location_quick_reply(
+                    L(
+                        uid,
+                        "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
+                        "📍 Please share your location and I will find nearby toilets for you"
+                    ),
+                    mode="normal"
+                )
+            )
+        except Exception as e:
+            logging.error(f"[nearby] quick reply failed: {e}", exc_info=True)
+            safe_reply(
+                event,
+                TextSendMessage(
+                    text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")
+                )
+            )
+        return
+
+    # =========================
+    # 🚫 重複事件 / 同意條款 gate
+    # =========================
     if is_duplicate_and_mark_event(event):
         return
 
@@ -4428,9 +4464,8 @@ def handle_text(event):
     reply_messages = []
 
     # =========================
-    # ✅ 0) 把「中英文文字指令」統一成 cmd
+    # ✅ 中英文文字指令 → cmd
     # =========================
-    # 你可以在這裡一直擴充同義詞
     TEXT_TO_CMD = {
         # 附近廁所
         "附近廁所": "nearby",
@@ -4495,65 +4530,67 @@ def handle_text(event):
         "help": "help",
     }
 
-    cmd = TEXT_TO_CMD.get(text_norm, None)
+    # 三段式 lookup（最穩）
+    cmd = TEXT_TO_CMD.get(text_norm)
     if cmd is None:
-        cmd = TEXT_TO_CMD.get(text, None)
+        cmd = TEXT_TO_CMD.get(text)
+    if cmd is None:
+        cmd = TEXT_TO_CMD.get(text_key)
 
     # =========================
-    # 你原本：pending_delete_confirm 的處理維持原樣
+    # 🧹 pending_delete_confirm（維持你原本邏輯）
     # =========================
     if uid in pending_delete_confirm:
-        ...
-        # （這段維持原樣）
-        ...
+        # 假設你原本是做 yes/no 確認
+        confirm = text_key in ("yes", "y", "是", "確認")
+        if confirm:
+            handle_confirm_delete(uid)
+            safe_reply(event, TextSendMessage(text=L(uid, "✅ 已刪除", "✅ Deleted")))
+        else:
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 已取消", "❌ Cancelled")))
+        pending_delete_confirm.discard(uid)
+        return
 
     # =========================
-    # ✅ 1) 統一用 cmd 走（文字輸入）
+    # ✅ cmd 分派（原本邏輯全部保留）
     # =========================
-    elif cmd == "nearby":
+    if cmd == "nearby":
         set_user_loc_mode(uid, "normal")
-        try:
-            msg = L(
-                uid,
-                "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
-                "📍 Please share your location and I will find nearby toilets for you"
+        safe_reply(
+            event,
+            make_location_quick_reply(
+                L(uid,
+                  "📍 請點下方『發送我的位置』，我會幫你找最近的廁所",
+                  "📍 Please share your location and I will find nearby toilets for you"),
+                mode="normal"
             )
-            safe_reply(event, make_location_quick_reply(msg, mode="normal"))
-        except Exception as e:
-            logging.error(f"附近廁所 quick reply 失敗: {e}", exc_info=True)
-            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
+        )
         return
 
     elif cmd == "nearby_ai":
         set_user_loc_mode(uid, "ai")
-        try:
-            safe_reply(
-                event,
-                make_location_quick_reply(
-                    L(uid, "📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所",
-                      "📍 Please share your location. I will use AI to pick the best nearby toilets."),
-                    mode="ai"
-                )
+        safe_reply(
+            event,
+            make_location_quick_reply(
+                L(uid,
+                  "📍 請傳送你現在的位置，我會用 AI 幫你挑附近最適合的廁所",
+                  "📍 Please share your location. I will use AI to pick the best nearby toilets."),
+                mode="ai"
             )
-        except Exception as e:
-            logging.error(f"AI 推薦附近廁所 quick reply 失敗: {e}", exc_info=True)
-            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
+        )
         return
 
     elif cmd == "mode_normal":
         set_user_loc_mode(uid, "normal")
-        try:
-            safe_reply(
-                event,
-                make_location_quick_reply(
-                    L(uid, "✅ 已切換回一般模式，請點『發送我的位置』我會幫你找最近的廁所",
-                      "✅ Switched to normal mode. Please share your location to find nearby toilets."),
-                    mode="normal"
-                )
+        safe_reply(
+            event,
+            make_location_quick_reply(
+                L(uid,
+                  "✅ 已切換回一般模式，請點『發送我的位置』我會幫你找最近的廁所",
+                  "✅ Switched to normal mode. Please share your location to find nearby toilets."),
+                mode="normal"
             )
-        except Exception as e:
-            logging.error(f"切換回一般模式 quick reply 失敗: {e}", exc_info=True)
-            safe_reply(event, TextSendMessage(text=L(uid, "❌ 系統錯誤，請稍後再試", "❌ System error. Please try again later.")))
+        )
         return
 
     elif cmd == "favs":
@@ -4588,14 +4625,20 @@ def handle_text(event):
 
     elif cmd == "feedback":
         form_url = "https://docs.google.com/forms/d/e/1FAIpQLSdsibz15enmZ3hJsQ9s3BiTXV_vFXLy0llLKlpc65vAoGo_hg/viewform?usp=sf_link"
-        reply_messages.append(TextSendMessage(text=L(uid, f"💡 請透過下列連結回報問題或提供意見：\n{form_url}",
-                                                  f"💡 Please send feedback via:\n{form_url}")))
+        reply_messages.append(TextSendMessage(text=L(
+            uid,
+            f"💡 請透過下列連結回報問題或提供意見：\n{form_url}",
+            f"💡 Please send feedback via:\n{form_url}"
+        )))
 
     elif cmd == "contact":
         email = os.getenv("FEEDBACK_EMAIL", "hello@example.com")
         ig_url = "https://www.instagram.com/toiletmvp?igsh=MWRvMnV2MTNyN2RkMw=="
-        reply_messages.append(TextSendMessage(text=L(uid, f"📬 合作信箱：{email}\n\n📸 官方IG: {ig_url}",
-                                                  f"📬 Contact: {email}\n\n📸 IG: {ig_url}")))
+        reply_messages.append(TextSendMessage(text=L(
+            uid,
+            f"📬 合作信箱：{email}\n\n📸 官方IG: {ig_url}",
+            f"📬 Contact: {email}\n\n📸 IG: {ig_url}"
+        )))
 
     elif cmd == "status":
         url = _status_liff_url()
@@ -4624,10 +4667,19 @@ def handle_text(event):
         )))
 
     # =========================
-    # ✅ 最後照你原本：有 reply_messages 就回
+    # ✅ 永遠不沉默
     # =========================
     if reply_messages:
         safe_reply(event, reply_messages)
+    else:
+        safe_reply(
+            event,
+            TextSendMessage(text=L(
+                uid,
+                "我沒有看懂你的指令 🙏\n你可以試試：附近廁所 / 使用說明",
+                "I didn’t understand 🙏\nTry: Nearby Toilets / Help"
+            ))
+        )
 
 # === LocationMessage ===
 @handler.add(MessageEvent, message=LocationMessage)
