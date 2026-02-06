@@ -21,7 +21,6 @@ from linebot.models import (
     QuickReply, QuickReplyButton, LocationAction, MessageAction,
     PostbackEvent, PostbackAction   
 )
-from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -43,15 +42,27 @@ except Exception:
     pd = None
 
 # === 全域設定 ===
+def _get_loc_sem():
+    """Lazy init semaphore to avoid NameError if _LOC_SEM is referenced before it's defined."""
+    sem = globals().get("_LOC_SEM")
+    if sem is None:
+        try:
+            n = int(os.getenv("LOC_MAX_CONCURRENCY", "2"))
+        except Exception:
+            n = 2
+        sem = threading.BoundedSemaphore(value=max(1, n))
+        globals()["_LOC_SEM"] = sem
+    return sem
+
 def _try_acquire_loc_slot() -> bool:
     try:
-        return _LOC_SEM.acquire(blocking=False)
+        return _get_loc_sem().acquire(blocking=False)
     except Exception:
         return False
 
 def _release_loc_slot():
     try:
-        _LOC_SEM.release()
+        _get_loc_sem().release()
     except Exception:
         pass
 
@@ -3695,7 +3706,13 @@ def ai_usage_summary_page(uid):
 # === AI 回饋摘要 API（放在清潔度趨勢 API 的下面） ===
 AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 AI_KEY   = os.getenv("OPENAI_API_KEY", "")
-client   = OpenAI(api_key=AI_KEY) if AI_KEY else None
+
+# OpenAI client（防呆：缺 key / 初始化失敗時一律設為 None，避免整個服務起不來）
+try:
+    client = OpenAI(api_key=AI_KEY) if AI_KEY else None
+except Exception as e:
+    logging.warning(f"OpenAI client init failed; AI features disabled. err={e}")
+    client = None
 
 # --- AI 每日額度控制（方案 D：同一使用者每天最多觸發幾次 AI） ---
 AI_DAILY_LIMIT = int(os.getenv("AI_DAILY_LIMIT", "3"))  # 預設 3 次/人/天
@@ -5193,7 +5210,27 @@ def _append_toilet_row_safely(ws, row_values):
         raise
 
 def _get_db():
-    return sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+    """Create a sqlite connection with safer defaults for concurrency."""
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+    try:
+        cur = conn.cursor()
+        # WAL 是 DB-level，但有些平台/檔案系統可能不支援；失敗就忽略
+        try:
+            cur.execute("PRAGMA journal_mode=WAL;")
+        except Exception:
+            pass
+        # busy_timeout 是 per-connection：每次 connect 都要設
+        try:
+            cur.execute("PRAGMA busy_timeout=3000;")
+        except Exception:
+            pass
+        try:
+            cur.execute("PRAGMA foreign_keys=ON;")
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return conn
 
 def _ensure_pending_table():
     conn = _get_db()
