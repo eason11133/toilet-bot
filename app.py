@@ -12,7 +12,7 @@ from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
 from flask import Flask, request, abort, render_template, redirect, url_for, Response
 from dotenv import load_dotenv
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, parse_qs
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
@@ -137,6 +137,24 @@ def _in_bbox(lat, lon, clat, clon, radius_m):
         clat - dlat <= lat <= clat + dlat and
         clon - dlon <= lon <= clon + dlon
     )
+
+CMD_NEARBY = "nearby"
+CMD_HELP   = "help"
+
+def infer_cmd_from_text(text: str):
+    if not text:
+        return None
+    t = text.lower().strip()
+
+    # nearby toilets intent (fuzzy)
+    if (("nearby" in t and ("toilet" in t or "restroom" in t)) or
+        ("toilet" in t and "near" in t)):
+        return CMD_NEARBY
+
+    if t in ["help", "usage", "instructions"]:
+        return CMD_HELP
+
+    return None
 
 # ------ 統一設定（可用環境變數覆寫；若你已在別處定義，請以這裡為準）------
 
@@ -4727,34 +4745,41 @@ def handle_location(event):
 def handle_postback(event):
     data = (event.postback.data or "").strip()
     uid = event.source.user_id
-
     # =========================
     # 0️⃣ 解析 postback 參數（支援任何順序 / URL encode）
-    #    例：
+    #    同時支援你新版 richmenuswitch data:
+    #      switch=more&lang=en
+    #      switch=main&lang=zh
+    #    以及一般 postback:
     #      cmd=nearby&lang=en
-    #      lang=en&cmd=nearby
-    #      cmd=nearby%26lang%3Den（被 encode）
     # =========================
-    if ("&" in data) or data.startswith("cmd=") or data.startswith("lang="):
-        try:
-            from urllib.parse import parse_qs, unquote
-            raw = data
-            decoded = unquote(raw)
-            # parse_qs 需要像 querystring 的格式
-            qs = parse_qs(decoded, keep_blank_values=True)
-            _lang = (qs.get("lang") or [None])[0]
-            _cmd  = (qs.get("cmd")  or [None])[0]
-            # 1) 先寫入語言（如果有帶 lang）
-            if _lang in ("en", "zh"):
-                set_user_lang(uid, _lang)
+    try:
+        raw = (event.postback.data or "").strip()
+        decoded = unquote(raw)
+        qs = parse_qs(decoded, keep_blank_values=True)
 
-            # 2) 如果有 cmd，統一收斂成 cmd=xxx，讓你後面原本的 cmd 分派能命中
-            if _cmd:
-                data = f"cmd={_cmd}"
+        _lang   = (qs.get("lang")   or [None])[0]
+        _cmd    = (qs.get("cmd")    or [None])[0]
+        _switch = (qs.get("switch") or [None])[0]
 
-        except Exception:
-            # 解析失敗就維持原樣，避免 handler 掛掉
-            pass
+        # ✅ 先寫入語言（任何 postback 只要帶 lang 就先更新）
+        if _lang in ("en", "zh"):
+            set_user_lang(uid, _lang)
+
+        # ✅ 如果是切換分頁/選單（richmenuswitch），不要直接 return：
+        #    因為你要讓「切換到英文 menu」時也能更新語言（上面已 set_user_lang）
+        #    這裡直接結束 handler 就好（不走 gate、不觸發其他指令）
+        if _switch in ("more", "main"):
+            return
+
+        # ✅ 如果有 cmd，統一收斂成 cmd=xxx，讓下面分派能命中
+        if _cmd:
+            data = f"cmd={_cmd}"
+        else:
+            data = decoded  # 保留原字串（例如 set_lang:en 這種）
+    except Exception:
+        # 解析失敗就維持原樣，避免 handler 掛掉
+        data = (event.postback.data or "").strip()
 
     # =========================
     # 1️⃣ 語言切換（最優先）
@@ -4782,12 +4807,6 @@ def handle_postback(event):
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
         safe_reply(event, TextSendMessage(text="✅ 已切換為中文"))
-        return
-
-    # =========================
-    # 1.5️⃣ Rich Menu 分頁切換（避免觸發 gate / 重複事件）
-    # =========================
-    if data in ("switch=more", "switch=main"):
         return
 
     # =========================
