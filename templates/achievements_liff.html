@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title id="t_title">我的成就</title>
+  <title>我的成就</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:16px;line-height:1.6}
     h2{margin:8px 0 12px}
@@ -57,29 +57,61 @@ function normLang(x){
   return "zh";
 }
 
+/**
+ * 語言判定優先序：
+ * 1) URL ?lang=
+ * 2) LIFF 語言（如果可用）
+ * 3) 瀏覽器語言
+ */
 function getLang(){
-  const p = new URLSearchParams(location.search);
-  const q = p.get("lang");
-  if (q) return normLang(q);
-  try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
-  return normLang(navigator.language || "zh");
+  try{
+    const p = new URLSearchParams(location.search);
+    const q = p.get("lang");
+    if (q) return normLang(q);
+
+    try{
+      if (window.liff && typeof liff.getLanguage === "function"){
+        const l = liff.getLanguage();
+        if (l) return normLang(l);
+      }
+    }catch{}
+
+    return normLang(navigator.language || "zh");
+  }catch{
+    return normLang(navigator.language || "zh");
+  }
 }
 
-const LANG = getLang();
-const T = I18N[LANG] || I18N.zh;
+function ensureLangInUrl(lang){
+  try{
+    const p = new URLSearchParams(location.search);
+    if (p.get("lang")) return;
+    p.set("lang", lang);
+    const newUrl = location.pathname + "?" + p.toString() + location.hash;
+    history.replaceState({}, "", newUrl);
+  }catch{}
+}
 
-document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-document.title = T.title;
+function applyI18n(lang){
+  const T = I18N[lang] || I18N.zh;
+  document.documentElement.lang = (lang === "en") ? "en" : "zh-Hant";
+  document.title = T.title;
 
-document.addEventListener("DOMContentLoaded", ()=>{
   const h2 = document.getElementById("t_h2");
   if (h2) h2.textContent = T.title;
+
   const loading = document.getElementById("loading");
   if (loading) loading.textContent = T.init;
-});
+
+  return T;
+}
+
+let LANG = getLang();
+ensureLangInUrl(LANG);
+let T = applyI18n(LANG);
 
 /** ===== original ===== */
-const LIFF_ID = "{{ liff_id }}";      // 後端注入（可用與狀態同一組）
+const LIFF_ID = "{{ liff_id }}";      // 後端注入
 const PUBLIC_URL = "{{ public_url }}";
 
 function card(a){
@@ -106,10 +138,26 @@ async function main(){
   document.getElementById("loading").textContent = T.init_liff;
 
   let userId="";
+
+  // ✅ 先嘗試 init LIFF（在 LINE 內才一定可用）
   try{
-    if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
-    const p = await liff.getProfile();
-    userId = p.userId || "";
+    if (LIFF_ID && LIFF_ID !== "{{ liff_id }}"){
+      await liff.init({ liffId: LIFF_ID });
+    }
+
+    // ✅ LIFF init 後，再重新判定一次語言（有時 URL 沒帶 lang，但 LIFF 拿得到）
+    const newLang = getLang();
+    if (newLang !== LANG){
+      LANG = newLang;
+      ensureLangInUrl(LANG);
+      T = applyI18n(LANG);
+    }
+
+    // ✅ 只在 LIFF client 裡嘗試 getProfile（外部瀏覽器會失敗）
+    if (window.liff && typeof liff.isInClient === "function" && liff.isInClient()){
+      const p = await liff.getProfile();
+      userId = p.userId || "";
+    }
   }catch(e){
     // 外部瀏覽器也可用，userId 可能取不到
   }
@@ -127,9 +175,9 @@ async function main(){
 
     document.getElementById("loading").remove();
     const grid=document.getElementById("grid");
-    j.achievements.forEach(a=>grid.appendChild(card(a)));
+    (j.achievements || []).forEach(a=>grid.appendChild(card(a)));
   }catch(e){
-    showErr(T.load_failed + e.message);
+    showErr(T.load_failed + (e && e.message ? e.message : String(e)));
   }
 }
 main();

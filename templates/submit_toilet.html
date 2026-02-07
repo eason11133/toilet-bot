@@ -115,12 +115,22 @@
     return "zh";
   }
   function getLang(){
-    const p = new URLSearchParams(location.search);
-    const q = p.get("lang");
-    if (q) return normLang(q);
-    return normLang(navigator.language || "zh");
-  }
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      try { if (window.liff && typeof liff.getLanguage === "function") { const l = liff.getLanguage(); if (l) return normLang(l); } } catch {}
+      return normLang(navigator.language || "zh");
+    }
   const LANG = getLang();
+    // Keep lang in URL for consistent sharing/back-navigation
+    (function ensureLangInUrl(lang){
+      try{
+        const p = new URLSearchParams(location.search);
+        if (p.get("lang")) return;
+        p.set("lang", lang);
+        history.replaceState({}, "", location.pathname + "?" + p.toString());
+      }catch{}
+    })(LANG);
   const T = I18N[LANG] || I18N.zh;
   document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
 

@@ -423,6 +423,26 @@ TEXTS.update({
     "lang_switch_fail": {
         "zh": "❌ 切換語言失敗，請稍後再試",
         "en": "❌ Failed to switch language. Please try again later."
+    },
+    "menu_switched": {
+        "zh": "✅ 已切換選單",
+        "en": "✅ Menu switched"
+    },
+    "lang_switched_en": {
+        "zh": "✅ 已切換為英文",
+        "en": "✅ Language switched to English"
+    },
+    "lang_switched_zh": {
+        "zh": "✅ 已切換為中文",
+        "en": "✅ Language switched to Chinese"
+    },
+    "ai_summary_limit": {
+        "zh": "你今天的 AI 摘要次數已用完，明天再試試看 🙏",
+        "en": "You’ve reached today’s AI summary limit. Please try again tomorrow 🙏"
+    },
+    "help_text": {
+        "zh": "📌 使用說明：\n• 點『附近廁所』或直接傳位置\n• 你可以收藏最愛、留下回饋、查看 AI 摘要\n• 也可以切換到 AI 推薦模式",
+        "en": "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
     }
 })
 
@@ -4038,11 +4058,7 @@ def api_ai_feedback_summary(lat, lon):
         if not ok:
             return jsonify({
                 "success": True,
-                "summary": L(
-                    uid,
-                    "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
-                    "You’ve reached today’s AI summary limit. Please try again tomorrow 🙏"
-                ),
+                "summary": T("ai_summary_limit", uid=uid),
                 "data": matched,
                 "has_data": True,
                 "limit_reached": True
@@ -4866,11 +4882,7 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(text=summary))
 
     elif cmd == "help":
-        reply_messages.append(TextSendMessage(text=L(
-            uid,
-            "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
-            "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
-        )))
+        reply_messages.append(TextSendMessage(text=T("help_text", uid=uid)))
 
     # =========================
     # ✅ 永遠不沉默
@@ -5038,7 +5050,7 @@ def handle_postback(event):
     if _switch in ("more", "main"):
         safe_reply(
             event,
-            TextSendMessage(text=("✅ Menu switched" if get_user_lang(uid) == "en" else "✅ 已切換選單"))
+            TextSendMessage(text=T("menu_switched", uid=uid))
         )
         return
 
@@ -5058,7 +5070,7 @@ def handle_postback(event):
             safe_reply(
                 event,
                 TextSendMessage(
-                    text=("✅ Language switched to English" if lang == "en" else "✅ 已切換為中文")
+                    text=T("lang_switched_en", uid=uid) if lang == "en" else T("lang_switched_zh", uid=uid)
                 )
             )
         except Exception as e:
@@ -5068,12 +5080,12 @@ def handle_postback(event):
 
     if data == "set_lang:en":
         set_user_lang(uid, "en")
-        safe_reply(event, TextSendMessage(text="✅ Language switched to English"))
+        safe_reply(event, TextSendMessage(text=T("lang_switched_en", uid=uid)))
         return
 
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
-        safe_reply(event, TextSendMessage(text="✅ 已切換為中文"))
+        safe_reply(event, TextSendMessage(text=T("lang_switched_zh", uid=uid)))
         return
 
     # =========================
@@ -5135,11 +5147,7 @@ def handle_postback(event):
 
             # 使用說明
             if cmd == "help":
-                safe_reply(event, TextSendMessage(text=L(
-                    uid,
-                    "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
-                    "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
-                )))
+                safe_reply(event, TextSendMessage(text=T("help_text", uid=uid)))
                 return
 
             # 新增廁所

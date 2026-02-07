@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title id="t_title">隱私同意 | 廁所幫手</title>
+  <title>隱私同意 | 廁所幫手</title>
   <link rel="preconnect" href="https://static.line-scdn.net">
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
@@ -122,31 +122,69 @@
     }
 
     function getLang(){
-      const p = new URLSearchParams(location.search);
-      const q = p.get("lang");
-      if (q) return normLang(q);
-      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
-      return normLang(navigator.language || "zh");
+      try{
+        const p = new URLSearchParams(location.search);
+        const q = p.get("lang");
+        if (q) return normLang(q);
+
+        try{
+          if (window.liff && typeof liff.getLanguage === "function"){
+            const l = liff.getLanguage();
+            if (l) return normLang(l);
+          }
+        }catch{}
+
+        return normLang(navigator.language || "zh");
+      }catch{
+        return normLang(navigator.language || "zh");
+      }
     }
 
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
+    function ensureLangInUrl(lang){
+      try{
+        const p = new URLSearchParams(location.search);
+        if (p.get("lang")) return;
+        p.set("lang", lang);
+        const newUrl = location.pathname + "?" + p.toString() + location.hash;
+        history.replaceState({}, "", newUrl);
+      }catch{}
+    }
 
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
+    function appendLangToPrivacyLinks(lang){
+      try{
+        document.querySelectorAll('a[href^="/privacy"]').forEach(a=>{
+          const u = new URL(a.getAttribute("href"), location.origin);
+          if (!u.searchParams.get("lang")) u.searchParams.set("lang", lang);
+          a.setAttribute("href", u.pathname + "?" + u.searchParams.toString());
+        });
+      }catch{}
+    }
 
     function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v; }
     function setHTML(id, v){ const el=document.getElementById(id); if(el) el.innerHTML = v; }
 
-    setText("t_title", T.title);
-    setText("t_banner", T.banner);
-    setText("t_h1", T.h1);
-    setHTML("t_policy", T.policy_html);
-    setText("hello", T.hello_loading);
-    setText("ctxHint", T.hint_loading);
-    setHTML("t_chk", T.chk_html);
-    setText("okBtn", T.ok);
-    setText("noBtn", T.no);
+    function applyI18n(lang){
+      const T = I18N[lang] || I18N.zh;
+
+      document.documentElement.lang = (lang === "en") ? "en" : "zh-Hant";
+      document.title = T.title;
+
+      setText("t_banner", T.banner);
+      setText("t_h1", T.h1);
+      setHTML("t_policy", T.policy_html);
+      setText("hello", T.hello_loading);
+      setText("ctxHint", T.hint_loading);
+      setHTML("t_chk", T.chk_html);
+      setText("okBtn", T.ok);
+      setText("noBtn", T.no);
+
+      appendLangToPrivacyLinks(lang);
+      return T;
+    }
+
+    let LANG = getLang();
+    ensureLangInUrl(LANG);
+    let T = applyI18n(LANG);
 
     /** ===== original ===== */
     const LIFF_ID = "{{ liff_id }}";
@@ -170,27 +208,33 @@
     async function init() {
       try {
         await liff.init({ liffId: LIFF_ID });
-        // 若非 LINE 內打開也可以使用，但需要先登入以取得 profile
+
+        // ✅ LIFF init 後再判語言一次（避免 URL 沒帶 lang 但 LIFF 有）
+        const newLang = getLang();
+        if (newLang !== LANG){
+          LANG = newLang;
+          ensureLangInUrl(LANG);
+          T = applyI18n(LANG);
+        }
+
+        // 外部瀏覽器也可用，但需登入才拿得到 profile
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: window.location.href });
           return;
         }
-        const profile = await liff.getProfile(); // 會帶回 userId
+
+        const profile = await liff.getProfile();
         userId = (profile && profile.userId) || "";
         displayName = (profile && profile.displayName) || "";
 
-        // 顯示暱稱
         if (displayName) {
           hello.textContent = displayName + (LANG === "en" ? "" : " 您好");
           ctxHint.textContent = T.hint_connected;
         }
 
-        // 來源型態：在 LINE 客戶端內 or 外部瀏覽器
         sourceType = liff.isInClient() ? "line-client" : "external-browser";
-
         enableIfReady();
 
-        // 安全網：最多等 6 秒，還是沒有 userId 就顯示引導
         setTimeout(() => {
           if (!userId) {
             ctxHint.textContent = T.timeout;
@@ -199,7 +243,7 @@
           }
         }, 6000);
       } catch (e) {
-        ctxHint.textContent = T.init_failed + (e.message || e);
+        ctxHint.textContent = T.init_failed + (e && e.message ? e.message : String(e));
         tips.style.display = "block";
       }
     }
@@ -225,7 +269,6 @@
         const j = await res.json().catch(()=>({}));
         if (res.ok && j.ok !== false) {
           okBtn.textContent = T.ok_done;
-          // 在 LINE 內可直接關閉
           if (liff.isInClient()) {
             setTimeout(() => liff.closeWindow(), 400);
           } else {
@@ -239,7 +282,7 @@
         okBtn.disabled = false;
         okBtn.textContent = T.ok;
         tips.style.display = "block";
-        tips.innerHTML = T.submit_failed_prefix + (e.message||e) + T.submit_failed_suffix;
+        tips.innerHTML = T.submit_failed_prefix + (e && e.message ? e.message : String(e)) + T.submit_failed_suffix;
       }
     });
 
