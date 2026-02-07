@@ -27,6 +27,7 @@
     <div>LIFF_ID: <code id="dbg-liff"></code></div>
     <div>PUBLIC_URL: <code id="dbg-url"></code></div>
     <div>Query: <code id="dbg-q"></code></div>
+    <div>LANG: <code id="dbg-lang"></code></div>
   </div>
 
   <div id="loading">初始化中…</div>
@@ -99,30 +100,25 @@
       if (x.startsWith("en")) return "en";
       return "zh";
     }
-    function getLang(){
+    function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
-      if (q) return normLang(q);
-      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
-      return normLang(navigator.language || "zh");
+      return q ? normLang(q) : "";
+    }
+    function ensureLangInUrl(lang){
+      const p = new URLSearchParams(location.search);
+      if (p.get("lang")) return;
+      p.set("lang", lang);
+      history.replaceState({}, "", location.pathname + "?" + p.toString());
     }
 
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
-
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
-    document.getElementById("t_title").textContent = T.title;
-    document.getElementById("t_h3").textContent = T.title;
-
-    /** ===== original ===== */
     // 後端注入
-    const LIFF_ID = "{{ liff_id }}";
-    const PUBLIC_URL = "{{ public_url }}";
+    const LIFF_ID = "{{ liff_id|default('', true) }}";
+    const PUBLIC_URL = "{{ public_url|default('', true) }}";
 
     // Debug 顯示
-    document.getElementById("dbg-liff").textContent = LIFF_ID;
-    document.getElementById("dbg-url").textContent = PUBLIC_URL;
+    document.getElementById("dbg-liff").textContent = LIFF_ID || "(empty)";
+    document.getElementById("dbg-url").textContent = PUBLIC_URL || "(empty)";
     document.getElementById("dbg-q").textContent = location.search || "(none)";
 
     const qs = new URLSearchParams(location.search);
@@ -138,17 +134,12 @@
 
     // --- UI helpers ---
     function setError(text){
-      const box=document.getElementById("error");
-      box.textContent = text || "";
+      document.getElementById("error").textContent = text || "";
     }
     function setAssist(html){
       const a = document.getElementById("assist");
-      if (html) {
-        a.innerHTML = html;
-        a.style.display = "";
-      } else {
-        a.style.display = "none";
-      }
+      if (html) { a.innerHTML = html; a.style.display = ""; }
+      else { a.style.display = "none"; }
     }
     function setActions(btnDefs){
       const wrap = document.getElementById("actions");
@@ -164,8 +155,14 @@
       wrap.style.display="";
     }
 
+    function explainPermission(os, T){
+      if (os === "ios") return T.ios_tip;
+      if (os === "android") return T.and_tip;
+      return T.other_tip;
+    }
+
     // --- 定位 ---
-    async function getPos(){
+    async function getPos(T){
       if(!isNaN(qsLat) && !isNaN(qsLon)) return {lat:qsLat, lon:qsLon};
       return new Promise((res, rej)=>{
         if(!navigator.geolocation) return rej(new Error(T.geo_unsup));
@@ -177,15 +174,16 @@
     }
 
     // --- API ---
-    async function fetchCandidates(lat, lon){
+    async function fetchCandidates(lat, lon, LANG){
       const r = await fetch(`/api/status_candidates?lat=${lat}&lon=${lon}&lang=${encodeURIComponent(LANG)}`);
       return await r.json();
     }
 
-    async function reportStatus(lat, lon, status, btns){
+    async function reportStatus(lat, lon, status, btns, LANG, T){
       btns.forEach(b=>b.disabled = true);
       let user = { userId:"", displayName:"" };
-      try { user = await liff.getProfile(); } catch(e) {}
+      try { if (window.liff) user = await liff.getProfile(); } catch(e) {}
+
       try {
         const body = {
           lat, lon,
@@ -213,7 +211,7 @@
       }
     }
 
-    function render(list){
+    function render(list, LANG, T){
       const root=document.getElementById("list");
       root.innerHTML="";
       list.forEach(item=>{
@@ -234,7 +232,7 @@
         ];
 
         btns.forEach((b,i)=>{
-          b.addEventListener("click",()=>reportStatus(item.lat,item.lon,labels[i],btns));
+          b.addEventListener("click",()=>reportStatus(item.lat,item.lon,labels[i],btns, LANG, T));
           row.appendChild(b);
         });
 
@@ -243,23 +241,19 @@
       });
     }
 
-    function explainPermission(os){
-      if (os === "ios") return T.ios_tip;
-      if (os === "android") return T.and_tip;
-      return T.other_tip;
-    }
-
-    async function startFlow(){
+    async function startFlow(LANG, T){
       const loading=document.getElementById("loading");
       setError(""); setAssist(""); setActions([]);
 
       loading.textContent = T.locating;
 
       try{
-        const pos = await getPos();
+        const pos = await getPos(T);
 
         loading.textContent = T.loading;
-        const {ok, candidates} = await fetchCandidates(pos.lat, pos.lon);
+        const resp = await fetchCandidates(pos.lat, pos.lon, LANG);
+        const ok = !!resp.ok;
+        const candidates = resp.candidates || resp.data || resp.items || [];
 
         if(!ok || !candidates || !candidates.length){
           loading.textContent = T.none;
@@ -267,43 +261,77 @@
         }
 
         loading.remove();
-        render(candidates);
+        render(candidates, LANG, T);
 
       }catch(e){
         const os = (window.liff && liff.getOS) ? liff.getOS() : "";
 
-        // 權限被拒絕（code=1）
         if (e && (e.code === 1 || String(e).toLowerCase().includes("denied"))) {
           setError(T.perm_denied);
-          setAssist(`${explainPermission(os)}<br>${T.assist_denied}`);
-          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow() }]);
+          setAssist(`${explainPermission(os, T)}<br>${T.assist_denied}`);
+          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow(LANG, T) }]);
           loading.textContent = T.allow_then;
         } else {
           setError(T.loc_failed_prefix + (e?.message || e));
           setAssist(T.assist_retry);
-          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow() }]);
+          setActions([{ text: T.try_again, primary:true, onClick: ()=>startFlow(LANG, T) }]);
           loading.textContent = T.loc_failed_short;
         }
       }
     }
 
+    async function initLiffBestEffort(){
+      if (!window.liff || !LIFF_ID) return false;
+      try { await liff.init({ liffId: LIFF_ID }); return true; }
+      catch (e) { return false; }
+    }
+
+    async function detectLangAfterInit(){
+      // 1) URL
+      const q = getQueryLang();
+      if (q) return q;
+
+      // 2) LIFF（需要 init 後才準）
+      try {
+        if (window.liff && typeof liff.getLanguage === "function") {
+          const l = liff.getLanguage();
+          if (l) return normLang(l);
+        }
+      } catch {}
+
+      // 3) fallback
+      return normLang(navigator.language || "zh");
+    }
+
     async function main(){
       const loading=document.getElementById("loading");
-      loading.textContent = T.init_liff;
+      loading.textContent = I18N.zh.init_liff;
 
-      try{
-        if (LIFF_ID && LIFF_ID !== "{{ liff_id }}") {
-          await liff.init({ liffId: LIFF_ID });
-        } else {
-          setError(T.liff_id_missing);
-        }
-      }catch(e){
-        // LIFF 失敗也允許繼續（用瀏覽器定位）
-        setError(T.liff_failed + (e?.message || e));
-      }
+      // 先 init（成功最好，失敗也沒關係）
+      const inited = await initLiffBestEffort();
 
-      startFlow();
+      // 再決定語言（這時 liff.getLanguage 才比較準）
+      const LANG = await detectLangAfterInit();
+      ensureLangInUrl(LANG);
+
+      const T = I18N[LANG] || I18N.zh;
+
+      // 套用標題
+      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+      document.title = T.title;
+      document.getElementById("t_title").textContent = T.title;
+      document.getElementById("t_h3").textContent = T.title;
+      document.getElementById("dbg-lang").textContent = LANG;
+
+      loading.textContent = T.init;
+
+      // 如果 liff_id 根本沒注入，提示（但仍可繼續用瀏覽器定位）
+      if (!LIFF_ID) setError(T.liff_id_missing);
+      else if (!inited) setError(T.liff_failed + "(init error)");
+
+      await startFlow(LANG, T);
     }
+
     main();
   </script>
 </body>

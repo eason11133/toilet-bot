@@ -624,23 +624,47 @@ class _NoHealthzFilter(logging.Filter):
 # === 安全標頭與快取策略（新增） ===
 @app.after_request
 def add_security_headers(resp):
+    """安全標頭與快取策略
+    - 一般頁面：禁止被 iframe（XFO=DENY + frame-ancestors 'none'）
+    - LIFF/同意/回饋等頁面：需要在 LINE/LIFF WebView 裡開啟，必須放寬 frame-ancestors 與 script/connect 白名單
+    """
     try:
-        # 通用安全與快取政策
         resp.headers.setdefault("Cache-Control", "no-store")
         resp.headers.setdefault("Pragma", "no-cache")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-        resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
 
         path = (request.path or "").lower()
 
-        if path.startswith("/consent") or path.startswith("/api/consent"):
-            # 🔓 完全放寬 CSP，避免擋到 LIFF
-            resp.headers["Content-Security-Policy"] = (
-                "default-src * data: blob: filesystem: about: 'unsafe-inline' 'unsafe-eval';"
-            )
+        # 需要在 LIFF WebView / LINE 內嵌開啟的頁面（請依你的實際路由再增減）
+        is_liff_page = (
+            path.startswith("/status_liff")
+            or path.startswith("/toilet_feedback_by_coord")
+            or path.startswith("/feedback_form")
+            or path.startswith("/add")
+            or path.startswith("/consent")
+        )
+
+        if is_liff_page:
+            # ✅ LIFF 需要允許被 LINE/LIFF 內嵌
+            # X-Frame-Options 建議不要用 DENY（會擋 iframe / webview），改成 SAMEORIGIN（或乾脆不設）
+            resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+
+            # ✅ CSP：允許 LIFF SDK、Chart.js、以及 LIFF 可能用到的 API/連線
+            csp = [
+                "default-src 'self'",
+                "img-src 'self' data: https:",
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.line-scdn.net https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com",
+                "style-src 'self' 'unsafe-inline'",
+                "connect-src 'self' https: https://api.line.me https://access.line.me",
+                "font-src 'self' data: https:",
+                # 允許 LINE/LIFF 內嵌（如需也可加上特定 domain）
+                "frame-ancestors 'self' https://access.line.me https://liff.line.me",
+            ]
+            resp.headers["Content-Security-Policy"] = "; ".join(csp) + ";"
         else:
-            # ✅ 其他頁面：允許常見 CDN 載入 Chart.js；並加上 connect-src 以便 fetch
+            # ✅ 非 LIFF 頁面：更嚴格
+            resp.headers.setdefault("X-Frame-Options", "DENY")
             csp = [
                 "default-src 'self'",
                 "img-src 'self' data: https:",
@@ -650,7 +674,6 @@ def add_security_headers(resp):
                 "font-src 'self' data: https:",
                 "frame-ancestors 'none'",
             ]
-            # 用「直接指定」取代 setdefault，確保覆蓋舊值
             resp.headers["Content-Security-Policy"] = "; ".join(csp) + ";"
     except Exception as e:
         logging.debug(f"add_security_headers skipped: {e}")
@@ -723,6 +746,34 @@ def _base_url():
     except Exception:
         # 保底：至少不要噴錯
         return (PUBLIC_URL or "").rstrip("/")
+
+
+def _append_uid_lang(url: str, uid: str, lang: str = None, extra: dict = None) -> str:
+    """把 uid/lang 安全地加到 URL querystring（避免 LIFF 頁面拿不到語言）"""
+    try:
+        if not uid and not lang and not extra:
+            return url
+        parsed = urllib.parse.urlparse(url)
+        qs = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+        if uid:
+            qs.setdefault("uid", uid)
+        if lang:
+            qs.setdefault("lang", "en" if (lang or '').lower().startswith('en') else "zh")
+        if extra:
+            for k, v in extra.items():
+                if v is None:
+                    continue
+                qs.setdefault(str(k), str(v))
+        new_q = urllib.parse.urlencode(qs)
+        return urllib.parse.urlunparse(parsed._replace(query=new_q))
+    except Exception:
+        return url
+
+def _user_lang_q(uid: str) -> str:
+    try:
+        return "en" if get_user_lang(uid) == "en" else "zh"
+    except Exception:
+        return "zh"
 
 def get_nearby_toilets(uid, lat, lon):
     key = f"{lat},{lon}"
@@ -2498,7 +2549,12 @@ def submit_feedback():
             floor_hint
         ], value_input_option="USER_ENTERED")
 
-        return redirect(f"/toilet_feedback_by_coord/{lat}/{lon}")
+        uid = (request.args.get("uid") or "").strip()
+        lang = (request.args.get("lang") or "").strip().lower()
+        target = f"/toilet_feedback_by_coord/{lat}/{lon}"
+        if uid:
+            target = _append_uid_lang(target, uid, (lang if lang in ("en","zh") else _user_lang_q(uid)))
+        return redirect(target)
 
     except Exception as e:
         logging.error(f"❌ 提交回饋表單錯誤: {e}", exc_info=True)
@@ -3530,10 +3586,22 @@ def api_badges():
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
     _ensure_sheets_ready()
+
+    liff_id = _get_liff_status_id()
+    uid = (request.args.get("uid") or "").strip()
+    lang = (request.args.get("lang") or "").strip().lower()
+    if uid and not lang:
+        try:
+            lang = _user_lang_q(uid)
+        except Exception:
+            lang = "zh"
+        qs = request.args.to_dict(flat=True)
+        qs["lang"] = lang
+        return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
     if worksheet is None or feedback_sheet is None:
         return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                summary="（暫時無法連到雲端資料）",
-                               feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="")
+                               feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     try:
         address = "未知地址"
         rows = worksheet.get_all_values()
@@ -3546,7 +3614,7 @@ def toilet_feedback(toilet_name):
         if address == "未知地址":
             return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                    summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。",
-                                   feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="")
+                                   feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
 
         rows_fb = feedback_sheet.get_all_values()
         header = rows_fb[0]; data_fb = rows_fb[1:]
@@ -3554,7 +3622,7 @@ def toilet_feedback(toilet_name):
         if idx["address"] is None:
             return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                    summary="（表頭缺少『地址』欄位）", feedbacks=[], address=address,
-                                   avg_pred_score="未預測", lat="", lon="")
+                                   avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
 
         matched = [r for r in data_fb
                    if len(r) > idx["address"] and (r[idx["address"]] or "").strip() == address.strip()]
@@ -3595,7 +3663,7 @@ def toilet_feedback(toilet_name):
         return render_template("toilet_feedback.html",
                                toilet_name=toilet_name, summary=summary,
                                feedbacks=fbs, address=address,
-                               avg_pred_score=avg_pred_score, lat="", lon="")
+                               avg_pred_score=avg_pred_score, lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     except Exception as e:
         logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
         return "查詢失敗", 500
@@ -3604,12 +3672,27 @@ def toilet_feedback(toilet_name):
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
     _ensure_sheets_ready()
+
+    liff_id = _get_liff_status_id()
+
+    # ✅ 語言：優先用 querystring ?lang=，沒有就用資料庫記錄（需帶 uid）
+    uid = (request.args.get("uid") or "").strip()
+    lang = (request.args.get("lang") or "").strip().lower()
+    if uid and not lang:
+        try:
+            lang = _user_lang_q(uid)
+        except Exception:
+            lang = "zh"
+        qs = request.args.to_dict(flat=True)
+        qs["lang"] = lang
+        return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
     if feedback_sheet is None:
-        return render_template("toilet_feedback.html",
+            return render_template("toilet_feedback.html",
                                toilet_name=f"廁所（{lat}, {lon}）",
                                summary="（暫時無法連到雲端資料）",
                                feedbacks=[], address=f"{lat},{lon}",
-                               avg_pred_score="未預測", lat=lat, lon=lon)
+                               avg_pred_score="未預測", lat=lat, lon=lon,
+                               liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     try:
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
@@ -3645,7 +3728,8 @@ def toilet_feedback_by_coord(lat, lon):
             address=f"{lat},{lon}",
             avg_pred_score=avg_pred_score,
             lat=lat,
-            lon=lon
+            lon=lon,
+            liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh")
         )
     except Exception as e:
         logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
@@ -4263,7 +4347,7 @@ def create_toilet_flex_messages(toilets, uid=None):
         actions.append({
             "type": "uri",
             "label": L(uid, "查詢回饋", "View feedback"),
-            "uri": f"{base}/toilet_feedback_by_coord/{lat_s}/{lon_s}"
+            "uri": _append_uid_lang(f"{base}/toilet_feedback_by_coord/{lat_s}/{lon_s}", uid, _user_lang_q(uid))
         })
 
         addr_raw = toilet.get('address') or ""
@@ -4395,7 +4479,7 @@ def create_my_contrib_flex(uid):
             {
                 "type": "uri",
                 "label": L(uid, "查詢回饋（座標）", "View feedback (coord)"),
-                "uri": f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}"
+                "uri": _append_uid_lang(f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}", uid, _user_lang_q(uid))
             },
             {
                 "type": "uri",

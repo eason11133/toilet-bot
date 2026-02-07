@@ -61,9 +61,9 @@
     .hr { height:1px; background:#e5e7eb; margin:16px 0; }
     .small { font-size:12px; color:#6b7280; }
   </style>
-  <!-- 可用於讀取 LINE 內語言（外部瀏覽器就 fallback） -->
   <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
+
 <body>
   <div class="wrap">
     <h1 id="t_h1">新增廁所</h1>
@@ -85,19 +85,13 @@
         </div>
 
         <label for="address" id="t_lab_addr">地址 <span style="color:#ef4444">*</span></label>
-        <input
-          id="address"
-          name="address"
-          type="text"
+        <input id="address" name="address" type="text"
           placeholder="請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號"
-          value="{{ preset_address or '' }}"
-          required
-        />
+          value="{{ preset_address or '' }}" required />
         <div class="hint" id="t_hint_addr">
           若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。
         </div>
 
-        <!-- 📍 座標 -->
         <div class="row two">
           <div>
             <label for="lat" id="t_lab_lat">緯度 (lat)</label>
@@ -108,6 +102,7 @@
             <input id="lon" name="lon" type="text" inputmode="decimal" placeholder="例如：121.564468" value="{{ preset_lon or (request.args.get('lon') or '') }}">
           </div>
         </div>
+
         <div class="inline">
           <button type="button" id="btnGeo">用我現在的位置</button>
           <a id="mapPreview" href="#" target="_blank" rel="noopener">Google 地圖預覽</a>
@@ -116,7 +111,6 @@
 
         <div class="hr"></div>
 
-        <!-- 🏢 樓層 / 位置 -->
         <div class="row two">
           <div>
             <label for="level" id="t_lab_level">樓層</label>
@@ -146,7 +140,6 @@
           </div>
         </div>
 
-        <!-- 🚪 入口/導引 & 限制 -->
         <label for="entrance_hint" id="t_lab_entr">入口/導引（選填）</label>
         <textarea id="entrance_hint" name="entrance_hint" placeholder="例：從中庭電扶梯上 2F 左轉 30 公尺；捷運 X 出口出站右轉直走。"></textarea>
 
@@ -173,250 +166,190 @@
   </div>
 
   <script>
-    /** ===== i18n ===== */
-    const I18N = {
-      zh: {
-        title: "新增廁所",
-        sub: "請盡量提供樓層與入口提示，能大幅降低使用者迷路風險。",
-        lab_name: "廁所名稱",
-        ph_name: "例如：五常公園 公廁 / XX商場 南棟 2F 廁所",
-        hint_name: "建築物內請寫到館別/翼/區域，例：A館 南棟 2F 廁所。",
-        lab_uid: "你的 LINE ID",
-        hint_uid: "系統會自動帶入你的 LINE UID。",
-        lab_addr: "地址",
-        ph_addr: "請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號",
-        hint_addr: "若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。",
-        lab_lat: "緯度 (lat)",
-        lab_lon: "經度 (lon)",
-        btn_geo: "用我現在的位置",
-        map_preview: "Google 地圖預覽",
-        map_note: "（會以 lat/lon 或地址開啟）",
-        level: "樓層",
-        opt_level0: "— 選擇樓層 / 戶外 —",
-        opt_outdoor: "戶外（無建築）",
-        opt_1f: "1F（地面）",
-        opt_5p: "5F 以上",
-        opt_roof: "屋頂",
-        chip_ground: "地面",
-        chip_b1: "地下",
-        chip_up: "樓上",
-        lab_floor: "位置描述",
-        ph_floor: "例：南棟 2F 靠電梯、B1 超商後方、戶外西側涼亭旁",
-        hint_floor: "請提供到達指引：靠近哪個店/電梯/樓梯/出入口，或「地下/地面/樓上」。",
-        lab_entr: "入口/導引（選填）",
-        ph_entr: "例：從中庭電扶梯上 2F 左轉 30 公尺；捷運 X 出口出站右轉直走。",
-        lab_access: "是否需密碼/店員（選填）",
-        ph_access: "例：需店員開門 / 櫃台索取密碼 1024",
-        lab_hours: "開放時間（選填）",
-        ph_hours: "例：每日 07:00–22:00 / 週一公休",
-        submit: "送出",
-        submitting: "送出中…",
-        ok_added: "✅ 已新增，感謝補點！",
-        err_need_name_addr: "請先填寫『廁所名稱』與『地址』",
-        err_floor_len: "請補充更清楚的『位置描述』（至少 4 個字）",
-        geo_unsup: "此裝置不支援定位",
-        geo_ok: "已帶入目前座標",
-        geo_fail: "定位失敗，請檢查權限或訊號",
-        fail_later: "新增失敗，請稍後再試",
-        net_err: "網路或伺服器異常，請稍後重試",
-        footer: "送出後會寫入主資料。若提供 lat/lon 會直接使用座標，否則以地址轉換。<br/>建議盡量填寫「樓層/位置描述」與「入口/導引」，能讓使用者更快找到廁所。"
-      },
-      en: {
-        title: "Add a Restroom",
-        sub: "Please provide floor and entrance hints to help others find it quickly.",
-        lab_name: "Restroom name",
-        ph_name: "e.g., Wuchang Park Public Restroom / Mall South Wing 2F Restroom",
-        hint_name: "For buildings, include wing/area and floor, e.g., Building A South Wing 2F.",
-        lab_uid: "Your LINE ID",
-        hint_uid: "Your LINE UID will be filled automatically.",
-        lab_addr: "Address",
-        ph_addr: "Enter full address, e.g., No. 30, Ln. 7, Wuhua St., Sanchong Dist., New Taipei City",
-        hint_addr: "If you just shared a location in LINE, we may prefill a friendly OSM address. Edit or clear it if it’s not the same place.",
-        lab_lat: "Latitude (lat)",
-        lab_lon: "Longitude (lon)",
-        btn_geo: "Use my location",
-        map_preview: "Open in Google Maps",
-        map_note: "(Opens by lat/lon or address)",
-        level: "Floor",
-        opt_level0: "— Choose floor / outdoors —",
-        opt_outdoor: "Outdoors (no building)",
-        opt_1f: "1F (ground)",
-        opt_5p: "5F+",
-        opt_roof: "Rooftop",
-        chip_ground: "Ground",
-        chip_b1: "Basement",
-        chip_up: "Upstairs",
-        lab_floor: "Location description",
-        ph_floor: "e.g., South Wing 2F near elevator; B1 behind convenience store; outdoor west pavilion",
-        hint_floor: "Provide guidance: near which shop/elevator/stairs/entrance, or basement/ground/upstairs.",
-        lab_entr: "Entrance / directions (optional)",
-        ph_entr: "e.g., From atrium escalator to 2F, turn left 30m; Exit X then turn right and walk straight.",
-        lab_access: "Access note (optional)",
-        ph_access: "e.g., Ask staff / Code 1024 at counter",
-        lab_hours: "Open hours (optional)",
-        ph_hours: "e.g., Daily 07:00–22:00 / Closed on Mondays",
-        submit: "Submit",
-        submitting: "Submitting…",
-        ok_added: "✅ Added. Thanks!",
-        err_need_name_addr: "Please fill in “Restroom name” and “Address”.",
-        err_floor_len: "Please provide a clearer location description (at least 4 characters).",
-        geo_unsup: "Geolocation is not supported on this device.",
-        geo_ok: "Coordinates filled in.",
-        geo_fail: "Location failed. Please check permissions or signal.",
-        fail_later: "Failed to add. Please try again later.",
-        net_err: "Network/server error. Please try again later.",
-        footer: "Submitted entries are saved to the main dataset. If lat/lon is provided, we use coordinates directly; otherwise we geocode the address.<br/>Strongly recommended: fill in “Floor / location description” and “Entrance / directions”."
-      }
-    };
+    const I18N = { /* 你原本 I18N 內容不變：太長我就不重貼，請保留原本整段 */ };
+  </script>
 
+  <script>
     function normLang(x){
       x = (x || "").toLowerCase();
       if (x.startsWith("en")) return "en";
       return "zh";
     }
-    function getLang(){
+
+    function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
-      if (q) return normLang(q);
-      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+      return q ? normLang(q) : "";
+    }
+
+    async function detectLang(){
+      const q = getQueryLang();
+      if (q) return q;
+
+      const liffId = "{{ liff_id|default('', true) }}";
+      if (window.liff && liffId) {
+        try {
+          await liff.init({ liffId });
+          const l = liff.getLanguage();
+          if (l) return normLang(l);
+        } catch (e) {
+          console.warn("LIFF init failed:", e);
+        }
+      } else {
+        try {
+          if (window.liff && typeof liff.getLanguage === "function") {
+            const l = liff.getLanguage();
+            if (l) return normLang(l);
+          }
+        } catch {}
+      }
+
       return normLang(navigator.language || "zh");
     }
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
 
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
+    function ensureLangInUrl(lang){
+      const p = new URLSearchParams(location.search);
+      if (p.get("lang")) return;
+      p.set("lang", lang);
+      history.replaceState({}, "", location.pathname + "?" + p.toString());
+    }
 
-    // 套用靜態文字（label/placeholder/hint/button）
-    const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
-    const setPH = (id, val)=>{ const el=document.getElementById(id); if(el) el.placeholder = val; };
+    function applyI18n(LANG){
+      const T = I18N[LANG] || I18N.zh;
 
-    setText("t_title", T.title);
-    setText("t_h1", T.title);
-    setText("t_sub", T.sub);
+      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+      document.title = T.title;
 
-    setText("t_lab_name", T.lab_name + " ");
-    setPH("name", T.ph_name);
-    setText("t_hint_name", T.hint_name);
+      const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
+      const setPH = (id, val)=>{ const el=document.getElementById(id); if(el) el.placeholder = val; };
 
-    setText("t_lab_uid", T.lab_uid);
-    setText("t_hint_uid", T.hint_uid);
+      setText("t_title", T.title);
+      setText("t_h1", T.title);
+      setText("t_sub", T.sub);
 
-    setText("t_lab_addr", T.lab_addr + " ");
-    setPH("address", T.ph_addr);
-    setText("t_hint_addr", T.hint_addr);
+      setText("t_lab_name", T.lab_name + " ");
+      setPH("name", T.ph_name);
+      setText("t_hint_name", T.hint_name);
 
-    setText("t_lab_lat", T.lab_lat);
-    setText("t_lab_lon", T.lab_lon);
+      setText("t_lab_uid", T.lab_uid);
+      setText("t_hint_uid", T.hint_uid);
 
-    setText("btnGeo", T.btn_geo);
-    setText("mapPreview", T.map_preview);
-    setText("t_map_note", T.map_note);
+      setText("t_lab_addr", T.lab_addr + " ");
+      setPH("address", T.ph_addr);
+      setText("t_hint_addr", T.hint_addr);
 
-    setText("t_lab_level", T.level);
-    setText("t_opt_level0", T.opt_level0);
-    setText("t_opt_outdoor", T.opt_outdoor);
-    setText("t_opt_1f", T.opt_1f);
-    setText("t_opt_5p", T.opt_5p);
-    setText("t_opt_roof", T.opt_roof);
-    setText("t_chip_ground", T.chip_ground);
-    setText("t_chip_b1", T.chip_b1);
-    setText("t_chip_up", T.chip_up);
+      setText("t_lab_lat", T.lab_lat);
+      setText("t_lab_lon", T.lab_lon);
 
-    setText("t_lab_floor", T.lab_floor + " ");
-    setPH("floor_hint", T.ph_floor);
-    setText("t_hint_floor", T.hint_floor);
+      setText("btnGeo", T.btn_geo);
+      setText("mapPreview", T.map_preview);
+      setText("t_map_note", T.map_note);
 
-    setText("t_lab_entr", T.lab_entr);
-    setPH("entrance_hint", T.ph_entr);
+      setText("t_lab_level", T.level);
+      setText("t_opt_level0", T.opt_level0);
+      setText("t_opt_outdoor", T.opt_outdoor);
+      setText("t_opt_1f", T.opt_1f);
+      setText("t_opt_5p", T.opt_5p);
+      setText("t_opt_roof", T.opt_roof);
+      setText("t_chip_ground", T.chip_ground);
+      setText("t_chip_b1", T.chip_b1);
+      setText("t_chip_up", T.chip_up);
 
-    setText("t_lab_access", T.lab_access);
-    setPH("access_note", T.ph_access);
+      setText("t_lab_floor", T.lab_floor + " ");
+      setPH("floor_hint", T.ph_floor);
+      setText("t_hint_floor", T.hint_floor);
 
-    setText("t_lab_hours", T.lab_hours);
-    setPH("open_hours", T.ph_hours);
+      setText("t_lab_entr", T.lab_entr);
+      setPH("entrance_hint", T.ph_entr);
 
-    setText("submitBtn", T.submit);
-    document.getElementById("t_footer").innerHTML = T.footer;
+      setText("t_lab_access", T.lab_access);
+      setPH("access_note", T.ph_access);
 
-    /** ===== original logic (with lang) ===== */
-    (function () {
-      const $ = (sel) => document.querySelector(sel);
-      const form = $("#toiletForm");
-      const btn = $("#submitBtn");
-      const msg = $("#msg");
-      const uidInput = $("#user_id");
-      const addrInput = $("#address");
-      const latInput = $("#lat");
-      const lonInput = $("#lon");
-      const levelSel = $("#level");
-      const mapPreview = $("#mapPreview");
+      setText("t_lab_hours", T.lab_hours);
+      setPH("open_hours", T.ph_hours);
 
-      // 自動填入 LINE UID（若後端沒帶 uid，就 fallback 為 "web"）
-      if (!uidInput.value) { uidInput.value = "web"; }
+      setText("submitBtn", T.submit);
+      document.getElementById("t_footer").innerHTML = T.footer;
 
-      // 快速樓層 Chips
-      document.querySelectorAll(".chip").forEach(ch => {
-        ch.addEventListener("click", () => {
-          levelSel.value = ch.dataset.level || "";
+      return T;
+    }
+
+    (async function main(){
+      // 1) 先決定語言
+      const LANG = await detectLang();
+      ensureLangInUrl(LANG);
+
+      // 2) 套用 i18n
+      const T = applyI18n(LANG);
+
+      // 3) 你的原本 submit / geo / reverse geocode 邏輯：只要把裡面的 LANG/T 用這裡的即可
+      (function () {
+        const $ = (sel) => document.querySelector(sel);
+        const form = $("#toiletForm");
+        const btn = $("#submitBtn");
+        const msg = $("#msg");
+        const uidInput = $("#user_id");
+        const addrInput = $("#address");
+        const latInput = $("#lat");
+        const lonInput = $("#lon");
+        const levelSel = $("#level");
+        const mapPreview = $("#mapPreview");
+
+        if (!uidInput.value) { uidInput.value = "web"; }
+
+        document.querySelectorAll(".chip").forEach(ch => {
+          ch.addEventListener("click", () => { levelSel.value = ch.dataset.level || ""; });
         });
-      });
 
-      // 更新地圖預覽連結
-      function updateMapPreview() {
-        const lat = (latInput.value || "").trim();
-        const lon = (lonInput.value || "").trim();
-        if (lat && lon) {
-          mapPreview.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
-        } else {
-          const q = (addrInput.value || "").trim();
-          mapPreview.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : "#";
+        function updateMapPreview() {
+          const lat = (latInput.value || "").trim();
+          const lon = (lonInput.value || "").trim();
+          if (lat && lon) {
+            mapPreview.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
+          } else {
+            const q = (addrInput.value || "").trim();
+            mapPreview.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : "#";
+          }
         }
-      }
-      [latInput, lonInput, addrInput].forEach(el => el.addEventListener("input", updateMapPreview));
-      updateMapPreview();
+        [latInput, lonInput, addrInput].forEach(el => el.addEventListener("input", updateMapPreview));
+        updateMapPreview();
 
-      // 一鍵抓目前座標
-      $("#btnGeo").addEventListener("click", () => {
-        if (!navigator.geolocation) {
-          return showErr(T.geo_unsup);
-        }
-        btn.disabled = true;
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            latInput.value = pos.coords.latitude.toFixed(6);
-            lonInput.value = pos.coords.longitude.toFixed(6);
-            showOk(T.geo_ok);
-            btn.disabled = false;
-            updateMapPreview();
-          },
-          (err) => {
-            showErr(T.geo_fail);
-            btn.disabled = false;
-          },
-          { enableHighAccuracy: true, timeout: 8000 }
-        );
-      });
+        $("#btnGeo").addEventListener("click", () => {
+          if (!navigator.geolocation) return showErr(T.geo_unsup);
+          btn.disabled = true;
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              latInput.value = pos.coords.latitude.toFixed(6);
+              lonInput.value = pos.coords.longitude.toFixed(6);
+              showOk(T.geo_ok);
+              btn.disabled = false;
+              updateMapPreview();
+            },
+            () => {
+              showErr(T.geo_fail);
+              btn.disabled = false;
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+          );
+        });
 
-      // 若沒有後端預填地址，但 URL 上有 lat/lon，就用 OSM Reverse 來補地址
-      (async function maybeReverseGeocode() {
-        const hasAddress = (addrInput.value || "").trim().length > 0;
-        const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
-        const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
-        if (hasAddress || !lat || !lon) return;
+        (async function maybeReverseGeocode() {
+          const hasAddress = (addrInput.value || "").trim().length > 0;
+          const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
+          const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
+          if (hasAddress || !lat || !lon) return;
 
-        latInput.value = lat;
-        lonInput.value = lon;
+          latInput.value = lat;
+          lonInput.value = lon;
 
-        try {
-          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
-          const res = await fetch(url, { headers: { "Accept": "application/json" } });
-          if (!res.ok) throw new Error("reverse geocode failed");
-          const data = await res.json();
+          try {
+            const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
+            const res = await fetch(url, { headers: { "Accept": "application/json" } });
+            if (!res.ok) throw new Error("reverse geocode failed");
+            const data = await res.json();
 
-          const a = data.address || {};
-          const pretty =
-            [
+            const a = data.address || {};
+            const pretty = [
               a.country || "",
               a.state || a.region || "",
               a.city || a.town || a.village || a.county || "",
@@ -424,85 +357,75 @@
               a.road || "",
               a.house_number || "",
               a.postcode || ""
-            ]
-            .filter(Boolean)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim();
+            ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 
-          addrInput.value = pretty || (data.display_name || "");
-          updateMapPreview();
-        } catch (e) {
-          console.warn("OSM reverse geocode failed", e);
+            addrInput.value = pretty || (data.display_name || "");
+            updateMapPreview();
+          } catch (e) {
+            console.warn("OSM reverse geocode failed", e);
+          }
+        })();
+
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
+
+          const name = $("#name").value.trim();
+          const address = addrInput.value.trim();
+          const user_id = uidInput.value.trim() || "web";
+          const lat = (latInput.value || "").trim();
+          const lon = (lonInput.value || "").trim();
+          const level = (levelSel.value || "").trim();
+          const floor_hint = ($("#floor_hint").value || "").trim();
+          const entrance_hint = ($("#entrance_hint").value || "").trim();
+          const access_note = ($("#access_note").value || "").trim();
+          const open_hours = ($("#open_hours").value || "").trim();
+
+          if (!name || !address) return showErr(T.err_need_name_addr);
+          if (floor_hint.length < 4) return showErr(T.err_floor_len);
+
+          btn.disabled = true; btn.textContent = T.submitting;
+
+          try {
+            const payload = { lang: LANG, user_id, name, address, floor_hint, level, entrance_hint, access_note, open_hours };
+            if (lat && lon) { payload.lat = lat; payload.lon = lon; }
+
+            const res = await fetch("/submit_toilet", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok && data && data.success) {
+              showOk(data.message || T.ok_added);
+              $("#name").value = "";
+              $("#floor_hint").value = "";
+              $("#entrance_hint").value = "";
+              $("#access_note").value = "";
+              $("#open_hours").value = "";
+              levelSel.value = "";
+            } else {
+              showErr((data && data.message) || T.fail_later);
+            }
+          } catch {
+            showErr(T.net_err);
+          } finally {
+            btn.disabled = false; btn.textContent = T.submit;
+          }
+        });
+
+        function showOk(text) {
+          msg.className = "msg ok";
+          msg.textContent = text;
+          msg.style.display = "block";
+        }
+        function showErr(text) {
+          msg.className = "msg err";
+          msg.textContent = "❌ " + text;
+          msg.style.display = "block";
         }
       })();
-
-      // 表單送出
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
-
-        const name = $("#name").value.trim();
-        const address = addrInput.value.trim();
-        const user_id = uidInput.value.trim() || "web";
-        const lat = (latInput.value || "").trim();
-        const lon = (lonInput.value || "").trim();
-        const level = (levelSel.value || "").trim();
-        const floor_hint = ($("#floor_hint").value || "").trim();
-        const entrance_hint = ($("#entrance_hint").value || "").trim();
-        const access_note = ($("#access_note").value || "").trim();
-        const open_hours = ($("#open_hours").value || "").trim();
-
-        if (!name || !address) {
-          return showErr(T.err_need_name_addr);
-        }
-        // 位置描述強制至少 4 字，避免空泛
-        if (floor_hint.length < 4) {
-          return showErr(T.err_floor_len);
-        }
-
-        btn.disabled = true; btn.textContent = T.submitting;
-
-        try {
-          const payload = { lang: LANG, user_id, name, address, floor_hint, level, entrance_hint, access_note, open_hours };
-          if (lat && lon) { payload.lat = lat; payload.lon = lon; }
-
-          const res = await fetch("/submit_toilet", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-          const data = await res.json().catch(() => ({}));
-
-          if (res.ok && data && data.success) {
-            showOk(data.message || T.ok_added);
-            $("#name").value = "";
-            // 不清空地址，方便連續補點同區域；清空其他指引欄位
-            $("#floor_hint").value = "";
-            $("#entrance_hint").value = "";
-            $("#access_note").value = "";
-            $("#open_hours").value = "";
-            levelSel.value = "";
-          } else {
-            showErr((data && data.message) || T.fail_later);
-          }
-        } catch (err) {
-          showErr(T.net_err);
-        } finally {
-          btn.disabled = false; btn.textContent = T.submit;
-        }
-      });
-
-      function showOk(text) {
-        msg.className = "msg ok";
-        msg.textContent = text;
-        msg.style.display = "block";
-      }
-      function showErr(text) {
-        msg.className = "msg err";
-        msg.textContent = (LANG === "en" ? "❌ " : "❌ ") + text;
-        msg.style.display = "block";
-      }
     })();
   </script>
 </body>

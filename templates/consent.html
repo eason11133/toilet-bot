@@ -26,14 +26,7 @@
     <div class="muted" id="t_banner" style="margin-bottom:10px;">隱私與使用同意</div>
     <h1 id="t_h1">開始前，請先閱讀並同意</h1>
 
-    <div class="row muted" id="t_policy">
-      為了幫你找附近廁所與提供回饋，我們需要暫時處理你的 LINE 使用者識別 與（若你選擇「精確模式」）<b>位置資訊</b>。我們承諾：
-      <ul>
-        <li>僅用於查詢與功能使用，不做商業販售或不當分享</li>
-        <li>位置只做即時查詢，不會永久儲存（隱私模式下僅使用近似網格）</li>
-        <li>你可隨時撤回同意，並要求刪除紀錄</li>
-      </ul>
-    </div>
+    <div class="row muted" id="t_policy"></div>
 
     <div class="row me">
       <div class="dot"></div>
@@ -46,7 +39,7 @@
     <div class="row">
       <label style="display:flex;gap:10px;align-items:flex-start;">
         <input id="agreeChk" type="checkbox" checked />
-        <span id="t_chk">我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
+        <span id="t_chk"></span>
       </label>
     </div>
 
@@ -74,7 +67,7 @@
         hello_loading: "您好（讀取中…）",
         hint_loading: "正在從 LINE 取得您的暱稱與 ID",
         hint_connected: "已連線至 LINE 帳號",
-        chk_html: `我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。`,
+        chk_html: `我已閱讀並同意《<a id="policyLink" href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。`,
         ok: "同意並開始使用",
         ok_sending: "送出中…",
         ok_done: "已同意",
@@ -100,7 +93,7 @@
         hello_loading: "Hello (loading…)",
         hint_loading: "Getting your display name and ID from LINE",
         hint_connected: "Connected to your LINE account",
-        chk_html: `I have read and agree to the <a href="/privacy" target="_blank">Privacy Policy</a> and Terms of Use. I understand I can’t use the service without consent.`,
+        chk_html: `I have read and agree to the <a id="policyLink" href="/privacy" target="_blank">Privacy Policy</a> and Terms of Use. I understand I can’t use the service without consent.`,
         ok: "Agree & Start",
         ok_sending: "Submitting…",
         ok_done: "Agreed",
@@ -115,41 +108,44 @@
       }
     };
 
+    // 你原本硬編 LIFF_ID，我保留；若你想後端注入也可改成 {{ liff_id }}
+    const LIFF_ID = "2007674330-0XpoR2dW";
+
     function normLang(x){
       x = (x || "").toLowerCase();
       if (x.startsWith("en")) return "en";
       return "zh";
     }
-
-    function getLang(){
+    function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
-      if (q) return normLang(q);
-      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
-      return normLang(navigator.language || "zh");
+      return q ? normLang(q) : "";
+    }
+    function ensureLangInUrl(lang){
+      const p = new URLSearchParams(location.search);
+      if (p.get("lang")) return;
+      p.set("lang", lang);
+      history.replaceState({}, "", location.pathname + "?" + p.toString());
     }
 
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
+    async function detectLangAfterInit(){
+      const q = getQueryLang();
+      if (q) return q;
 
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
+      try {
+        if (window.liff && typeof liff.getLanguage === "function") {
+          const l = liff.getLanguage();
+          if (l) return normLang(l);
+        }
+      } catch {}
+
+      return normLang(navigator.language || "zh");
+    }
 
     function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v; }
     function setHTML(id, v){ const el=document.getElementById(id); if(el) el.innerHTML = v; }
 
-    setText("t_title", T.title);
-    setText("t_banner", T.banner);
-    setText("t_h1", T.h1);
-    setHTML("t_policy", T.policy_html);
-    setText("hello", T.hello_loading);
-    setText("ctxHint", T.hint_loading);
-    setHTML("t_chk", T.chk_html);
-    setText("okBtn", T.ok);
-    setText("noBtn", T.no);
-
-    /** ===== original ===== */
-    const LIFF_ID = "2007674330-0XpoR2dW";
+    /** ===== original elements ===== */
     const okBtn   = document.getElementById('okBtn');
     const noBtn   = document.getElementById('noBtn');
     const agree   = document.getElementById('agreeChk');
@@ -162,35 +158,64 @@
     let sourceType = "line";
     let ua = navigator.userAgent;
 
+    let LANG = "zh";
+    let T = I18N.zh;
+
     function enableIfReady() {
       okBtn.disabled = !(agree.checked && userId);
     }
     agree.addEventListener('change', enableIfReady);
 
-    async function init() {
+    function applyI18n(){
+      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+      document.title = T.title;
+
+      setText("t_title", T.title);
+      setText("t_banner", T.banner);
+      setText("t_h1", T.h1);
+      setHTML("t_policy", T.policy_html);
+      setText("hello", T.hello_loading);
+      setText("ctxHint", T.hint_loading);
+      setHTML("t_chk", T.chk_html);
+      setText("okBtn", T.ok);
+      setText("noBtn", T.no);
+
+      // 讓 privacy 也跟著 lang
+      const link = document.getElementById("policyLink");
+      if (link) {
+        const u = new URL(link.getAttribute("href"), location.origin);
+        u.searchParams.set("lang", LANG);
+        link.setAttribute("href", u.pathname + "?" + u.searchParams.toString());
+      }
+    }
+
+    async function init(){
       try {
         await liff.init({ liffId: LIFF_ID });
-        // 若非 LINE 內打開也可以使用，但需要先登入以取得 profile
+
+        // ✅ init 完再決定語言（這樣跟 LINE 切換才會準）
+        LANG = await detectLangAfterInit();
+        T = I18N[LANG] || I18N.zh;
+        ensureLangInUrl(LANG);
+        applyI18n();
+
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: window.location.href });
           return;
         }
-        const profile = await liff.getProfile(); // 會帶回 userId
+
+        const profile = await liff.getProfile();
         userId = (profile && profile.userId) || "";
         displayName = (profile && profile.displayName) || "";
 
-        // 顯示暱稱
         if (displayName) {
           hello.textContent = displayName + (LANG === "en" ? "" : " 您好");
           ctxHint.textContent = T.hint_connected;
         }
 
-        // 來源型態：在 LINE 客戶端內 or 外部瀏覽器
         sourceType = liff.isInClient() ? "line-client" : "external-browser";
-
         enableIfReady();
 
-        // 安全網：最多等 6 秒，還是沒有 userId 就顯示引導
         setTimeout(() => {
           if (!userId) {
             ctxHint.textContent = T.timeout;
@@ -198,7 +223,14 @@
             tips.innerHTML = T.timeout_tip;
           }
         }, 6000);
+
       } catch (e) {
+        // init 失敗也把 i18n 套上（用 query/navigator）
+        LANG = getQueryLang() || normLang(navigator.language || "zh");
+        T = I18N[LANG] || I18N.zh;
+        ensureLangInUrl(LANG);
+        applyI18n();
+
         ctxHint.textContent = T.init_failed + (e.message || e);
         tips.style.display = "block";
       }
@@ -225,7 +257,6 @@
         const j = await res.json().catch(()=>({}));
         if (res.ok && j.ok !== false) {
           okBtn.textContent = T.ok_done;
-          // 在 LINE 內可直接關閉
           if (liff.isInClient()) {
             setTimeout(() => liff.closeWindow(), 400);
           } else {
@@ -248,6 +279,11 @@
       tips.innerHTML = T.no_msg;
       try { if (liff.isInClient()) liff.closeWindow(); } catch {}
     });
+
+    // 先用預設套一次（避免白屏），真正語言會在 init 後覆蓋
+    LANG = getQueryLang() || "zh";
+    T = I18N[LANG] || I18N.zh;
+    applyI18n();
 
     init();
   </script>

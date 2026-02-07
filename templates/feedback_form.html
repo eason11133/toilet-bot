@@ -36,13 +36,15 @@
     }
     .toast.error{background:#b00020}
 
-    /* 快速選項 chips */
     .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
     .chip-btn{
       background:#eef2f7;border:1px solid #d0d7de;border-radius:999px;padding:6px 10px;cursor:pointer;font-size:13px
     }
     .chip-btn:hover{background:#e3e9f2}
   </style>
+
+  <!-- ✅ 加上 LIFF，讓語言可跟 LINE 一致 -->
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
   <h2 id="t_h2">{{ toilet_name }}</h2>
@@ -53,9 +55,7 @@
     評分填 <b>1–10 分</b>。系統會將其換算為模型使用的 <b>1–5 星</b>（1–2→1★、3–4→2★、5–6→3★、7–8→4★、9–10→5★），以產生更準的清潔度預測。
   </div>
 
-  <!-- 帶座標（由 Flex 連結的 querystring 注入） -->
   <form id="fbForm" action="{{ url_for('submit_feedback') }}" method="POST" novalidate>
-    <!-- 必填：名稱/地址/座標 -->
     <input type="hidden" name="name" value="{{ toilet_name }}">
     <input type="hidden" name="address" value="{{ address or '' }}">
     <input type="hidden" name="lat" value="{{ request.args.get('lat') }}">
@@ -95,7 +95,6 @@
       <option value="晚間" id="t_time_night">晚間</option>
     </select>
 
-    <!-- 新增：樓層 / 位置 -->
     <label for="floor_hint" id="t_lab_floor">樓層 / 位置（選填）</label>
     <input type="text" name="floor_hint" id="floor_hint" placeholder="例：地面 / 地下1F / 2F / 屋頂">
 
@@ -200,28 +199,52 @@
       }
     };
 
+    const LIFF_ID = "{{ liff_id|default('', true) }}";
+
     function normLang(x){
       x = (x || "").toLowerCase();
       if (x.startsWith("en")) return "en";
       return "zh";
     }
-    function getLang(){
+    function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
-      if (q) return normLang(q);
+      return q ? normLang(q) : "";
+    }
+    function ensureLangInUrl(lang){
+      const p = new URLSearchParams(location.search);
+      if (p.get("lang")) return;
+      p.set("lang", lang);
+      history.replaceState({}, "", location.pathname + "?" + p.toString());
+    }
+
+    async function initLiffBestEffort(){
+      if (!window.liff || !LIFF_ID) return false;
+      try { await liff.init({ liffId: LIFF_ID }); return true; }
+      catch { return false; }
+    }
+
+    async function detectLangAfterInit(){
+      const q = getQueryLang();
+      if (q) return q;
+
+      try {
+        if (window.liff && typeof liff.getLanguage === "function") {
+          const l = liff.getLanguage();
+          if (l) return normLang(l);
+        }
+      } catch {}
+
       return normLang(navigator.language || "zh");
     }
 
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    function applyI18n(LANG){
+      const T = I18N[LANG] || I18N.zh;
+      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
 
-    // 把 lang 帶回後端
-    const langInput = document.getElementById("langInput");
-    if (langInput) langInput.value = LANG;
+      const langInput = document.getElementById("langInput");
+      if (langInput) langInput.value = LANG;
 
-    // 套用靜態文字
-    (function(){
       const toiletName = "{{ toilet_name }}";
       document.title = toiletName + T.title_suffix;
       const tTitle = document.getElementById("t_title");
@@ -250,10 +273,8 @@
       setText("t_hint_sheet", T.hint_sheet);
       setText("submitBtn", T.submit);
 
-      // choose
       ["t_choose_1","t_choose_2","t_choose_3","t_choose_4"].forEach(id=>setText(id, T.choose));
 
-      // yes/no/na options (values keep original zh, display text changes)
       setText("t_opt_yes_1", T.yes);
       setText("t_opt_no_1", T.no);
       setText("t_opt_na_1", T.na);
@@ -261,19 +282,16 @@
       setText("t_opt_no_2", T.no);
       setText("t_opt_na_2", T.na);
 
-      // time options (values keep original zh, display text changes)
       setText("t_time_am", T.time_am);
       setText("t_time_pm", T.time_pm);
       setText("t_time_evening", T.time_evening);
       setText("t_time_night", T.time_night);
 
-      // floor placeholder & comment placeholder
       const floor = document.getElementById("floor_hint");
       if (floor) floor.placeholder = T.ph_floor;
       const comment = document.getElementById("comment");
       if (comment) comment.placeholder = T.ph_comment;
 
-      // chips (label)
       setText("t_chip_ground", T.chip_ground);
       setText("t_chip_below", T.chip_below);
       setText("t_chip_b1", T.chip_b1);
@@ -282,7 +300,7 @@
       setText("t_chip_3f", T.chip_3f);
       setText("t_chip_roof", T.chip_roof);
 
-      // chips (data-fill): 用英文時，也把填入值改成英文
+      // chips 填入值：英文模式改成英文（你原本的需求保留）
       if (LANG === "en") {
         document.getElementById("t_chip_ground").setAttribute("data-fill", "Ground");
         document.getElementById("t_chip_below").setAttribute("data-fill", "Basement");
@@ -292,90 +310,98 @@
         document.getElementById("t_chip_3f").setAttribute("data-fill", "3F");
         document.getElementById("t_chip_roof").setAttribute("data-fill", "Roof");
       }
-    })();
 
-    // chips 快速填入
-    document.addEventListener('click', function(e){
-      const btn = e.target.closest('.chip-btn');
-      if(!btn) return;
-      const target = document.getElementById('floor_hint');
-      if(target) target.value = btn.getAttribute('data-fill') || '';
-    });
+      return T;
+    }
 
-    // 基本前端檢查 + fetch 送出
-    (function(){
-      const form = document.getElementById('fbForm');
-      const warn = document.getElementById('warn');
-      const btn  = document.getElementById('submitBtn');
-      const toast = document.getElementById('toast');
+    (async function boot(){
+      await initLiffBestEffort();              // ✅ 先 init（成功最好，失敗也不影響）
+      const LANG = await detectLangAfterInit(); // ✅ 再取語言
+      ensureLangInUrl(LANG);                   // ✅ 固化 ?lang=
+      const T = applyI18n(LANG);
 
-      function showToast(msg, isErr=false){
-        toast.textContent = msg;
-        toast.classList.toggle('error', !!isErr);
-        toast.style.display = 'block';
-        setTimeout(()=>toast.style.display='none', 2000);
-      }
+      // chips 快速填入（功能不變）
+      document.addEventListener('click', function(e){
+        const btn = e.target.closest('.chip-btn');
+        if(!btn) return;
+        const target = document.getElementById('floor_hint');
+        if(target) target.value = btn.getAttribute('data-fill') || '';
+      });
 
-      function tryCloseOrBack(){
-        try {
-          if (window.opener && window.opener.postMessage) {
-            window.opener.postMessage({type:'toilet-feedback-submitted'}, '*');
-          }
-        } catch(e){}
+      // 原本送出功能（照舊，只是改成使用 T/LANG 來顯示）
+      (function(){
+        const form = document.getElementById('fbForm');
+        const warn = document.getElementById('warn');
+        const btn  = document.getElementById('submitBtn');
+        const toast = document.getElementById('toast');
 
-        try { window.close(); } catch(e) {}
-        if (history.length > 1) { history.back(); return; }
-        try { location.replace('about:blank'); setTimeout(()=>{ try { window.close(); } catch(e){} }, 50); } catch(e){}
-      }
-
-      form.addEventListener('submit', async function(e){
-        e.preventDefault();
-        warn.style.display = 'none';
-
-        const lat = (form.lat.value || '').trim();
-        const lon = (form.lon.value || '').trim();
-        const name = (form.name.value || '').trim();
-        const rating = (form.rating.value || '').trim();
-        const paper = (form.toilet_paper.value || '').trim();
-        const acc = (form.accessibility.value || '').trim();
-
-        if(!lat || !lon || !name || !rating || !paper || !acc){
-          warn.style.display = 'block';
-          warn.textContent = T.warn_missing;
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-          return false;
+        function showToast(msg, isErr=false){
+          toast.textContent = msg;
+          toast.classList.toggle('error', !!isErr);
+          toast.style.display = 'block';
+          setTimeout(()=>toast.style.display='none', 2000);
         }
 
-        btn.disabled = true;
-        btn.textContent = T.submitting;
+        function tryCloseOrBack(){
+          try {
+            if (window.opener && window.opener.postMessage) {
+              window.opener.postMessage({type:'toilet-feedback-submitted'}, '*');
+            }
+          } catch(e){}
 
-        try{
-          const fd = new FormData(form);
-          // extra safety: ensure lang present
-          if (!fd.get("lang")) fd.set("lang", LANG);
+          try { window.close(); } catch(e) {}
+          if (history.length > 1) { history.back(); return; }
+          try { location.replace('about:blank'); setTimeout(()=>{ try { window.close(); } catch(e){} }, 50); } catch(e){}
+        }
 
-          const resp = await fetch(form.action, {
-            method: 'POST',
-            body: fd,
-            redirect: 'follow',
-            credentials: 'same-origin'
-          });
+        form.addEventListener('submit', async function(e){
+          e.preventDefault();
+          warn.style.display = 'none';
 
-          if (resp.ok) {
-            showToast(T.ok);
-            setTimeout(tryCloseOrBack, 500);
-          } else {
-            showToast(T.fail, true);
+          const lat = (form.lat.value || '').trim();
+          const lon = (form.lon.value || '').trim();
+          const name = (form.name.value || '').trim();
+          const rating = (form.rating.value || '').trim();
+          const paper = (form.toilet_paper.value || '').trim();
+          const acc = (form.accessibility.value || '').trim();
+
+          if(!lat || !lon || !name || !rating || !paper || !acc){
+            warn.style.display = 'block';
+            warn.textContent = T.warn_missing;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            return false;
+          }
+
+          btn.disabled = true;
+          btn.textContent = T.submitting;
+
+          try{
+            const fd = new FormData(form);
+            if (!fd.get("lang")) fd.set("lang", LANG);
+
+            const resp = await fetch(form.action, {
+              method: 'POST',
+              body: fd,
+              redirect: 'follow',
+              credentials: 'same-origin'
+            });
+
+            if (resp.ok) {
+              showToast(T.ok);
+              setTimeout(tryCloseOrBack, 500);
+            } else {
+              showToast(T.fail, true);
+              btn.disabled = false;
+              btn.textContent = T.submit;
+            }
+          } catch(err){
+            console.error(err);
+            showToast(T.neterr, true);
             btn.disabled = false;
             btn.textContent = T.submit;
           }
-        } catch(err){
-          console.error(err);
-          showToast(T.neterr, true);
-          btn.disabled = false;
-          btn.textContent = T.submit;
-        }
-      });
+        });
+      })();
     })();
   </script>
 </body>

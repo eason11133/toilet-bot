@@ -8,25 +8,10 @@
     :root { --gap: 12px; }
     body { font-family: system-ui,-apple-system,"Noto Sans TC",sans-serif; margin: 0; padding: 16px; background:#f7f7f7; }
     h1 { font-size: 20px; margin: 0 0 12px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: var(--gap);
-    }
-    @media (min-width: 480px) {
-      .grid { grid-template-columns: repeat(4, minmax(0,1fr)); }
-    }
-    .badge {
-      background: #fff;
-      border-radius: 16px;
-      padding: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,.08);
-      display:flex; flex-direction:column; align-items:center; gap:8px;
-    }
-    .badge img {
-      width: 72px; height:72px; object-fit: contain;
-      transition: filter .2s ease, opacity .2s ease;
-    }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: var(--gap); }
+    @media (min-width: 480px) { .grid { grid-template-columns: repeat(4, minmax(0,1fr)); } }
+    .badge { background: #fff; border-radius: 16px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display:flex; flex-direction:column; align-items:center; gap:8px; }
+    .badge img { width: 72px; height:72px; object-fit: contain; transition: filter .2s ease, opacity .2s ease; }
     .badge.locked img { filter: grayscale(1) contrast(.85) opacity(.6); }
     .badge .name { font-size: 13px; line-height:1.2; text-align:center; color:#222; }
     .badge.locked .name { color:#777; }
@@ -34,6 +19,9 @@
     .error { color:#b00020; margin: 8px 2px; font-size: 13px; }
     .skeleton { background:#eee; height: 16px; width: 60%; border-radius:8px; margin: 6px auto 0; }
   </style>
+
+  <!-- ✅ 讓語言跟 LINE 一致 -->
+  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
   <h1 id="t_h1">我的徽章</h1>
@@ -44,45 +32,38 @@
   <script>
     /** ===== i18n ===== */
     const I18N = {
-      zh: {
-        title: "我的徽章",
-        legend: "灰色代表尚未解鎖",
-        load_failed: "載入失敗，請稍後再試"
-      },
-      en: {
-        title: "My Badges",
-        legend: "Gray = locked",
-        load_failed: "Failed to load. Please try again later."
-      }
+      zh: { title: "我的徽章", legend: "灰色代表尚未解鎖", load_failed: "載入失敗，請稍後再試" },
+      en: { title: "My Badges", legend: "Gray = locked", load_failed: "Failed to load. Please try again later." }
     };
+
+    const LIFF_ID = "{{ liff_id|default('', true) }}"; // ✅ 建議後端注入；沒有也不會壞
 
     function normLang(x){
       x = (x || "").toLowerCase();
       if (x.startsWith("en")) return "en";
       return "zh";
     }
-    function getLang(){
+    function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
-      if (q) return normLang(q);
+      return q ? normLang(q) : "";
+    }
+    function ensureLangInUrl(lang){
+      const p = new URLSearchParams(location.search);
+      if (p.get("lang")) return;
+      p.set("lang", lang);
+      history.replaceState({}, "", location.pathname + "?" + p.toString());
+    }
+    async function initLiffBestEffort(){
+      if (!window.liff || !LIFF_ID) return false;
+      try { await liff.init({ liffId: LIFF_ID }); return true; } catch { return false; }
+    }
+    async function detectLangAfterInit(){
+      const q = getQueryLang();
+      if (q) return q;
+      try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
       return normLang(navigator.language || "zh");
     }
-
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
-
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
-
-    const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
-    setText("t_title", T.title);
-    setText("t_h1", T.title);
-    setText("legend", T.legend);
-
-    /** ===== original ===== */
-    // 你可以用後端模板把 userId 注入，或從 LIFF 拿
-    const params = new URLSearchParams(location.search);
-    const userId = params.get("user_id") || params.get("uid") || "";
 
     const grid = document.getElementById('grid');
     const errBox = document.getElementById('err');
@@ -97,14 +78,14 @@
       }
     }
 
-    async function loadBadges(){
+    async function loadBadges(userId, LANG, T){
       renderSkeleton(10);
       try{
         const qs = userId
           ? `?user_id=${encodeURIComponent(userId)}&lang=${encodeURIComponent(LANG)}`
           : `?lang=${encodeURIComponent(LANG)}`;
 
-        const res = await fetch(`/api/badges${qs}`, {cache: "no-store"});
+        const res = await fetch(`/api/badges${qs}`, {cache:"no-store"});
         if(!res.ok) throw new Error("Network error");
         const data = await res.json();
         if(!data.ok) throw new Error("API error");
@@ -122,7 +103,37 @@
       }
     }
 
-    loadBadges();
+    (async function boot(){
+      // 1) init liff
+      await initLiffBestEffort();
+
+      // 2) decide lang (after init)
+      const LANG = await detectLangAfterInit();
+      ensureLangInUrl(LANG);
+      const T = I18N[LANG] || I18N.zh;
+
+      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+      document.title = T.title;
+      document.getElementById("t_title").textContent = T.title;
+      document.getElementById("t_h1").textContent = T.title;
+      document.getElementById("legend").textContent = T.legend;
+
+      // 3) userId: query first, else liff profile
+      const params = new URLSearchParams(location.search);
+      let userId = params.get("user_id") || params.get("uid") || "";
+      if (!userId) {
+        try {
+          if (window.liff && liff.isLoggedIn && !liff.isLoggedIn()) {
+            // badges 通常不一定要強制登入；不登入就走匿名
+          } else if (window.liff && liff.getProfile) {
+            const p = await liff.getProfile();
+            userId = (p && p.userId) || "";
+          }
+        } catch {}
+      }
+
+      await loadBadges(userId, LANG, T);
+    })();
   </script>
 </body>
 </html>
