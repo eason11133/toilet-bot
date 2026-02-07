@@ -423,26 +423,6 @@ TEXTS.update({
     "lang_switch_fail": {
         "zh": "❌ 切換語言失敗，請稍後再試",
         "en": "❌ Failed to switch language. Please try again later."
-    },
-    "menu_switched": {
-        "zh": "✅ 已切換選單",
-        "en": "✅ Menu switched"
-    },
-    "lang_switched_en": {
-        "zh": "✅ 已切換為英文",
-        "en": "✅ Language switched to English"
-    },
-    "lang_switched_zh": {
-        "zh": "✅ 已切換為中文",
-        "en": "✅ Language switched to Chinese"
-    },
-    "ai_summary_limit": {
-        "zh": "你今天的 AI 摘要次數已用完，明天再試試看 🙏",
-        "en": "You’ve reached today’s AI summary limit. Please try again tomorrow 🙏"
-    },
-    "help_text": {
-        "zh": "📌 使用說明：\n• 點『附近廁所』或直接傳位置\n• 你可以收藏最愛、留下回饋、查看 AI 摘要\n• 也可以切換到 AI 推薦模式",
-        "en": "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
     }
 })
 
@@ -1300,12 +1280,11 @@ PUSH_FALLBACK_DEDUPE_WINDOW = int(os.getenv("PUSH_FALLBACK_DEDUPE_WINDOW", "180"
 
 def safe_reply(event, messages):
     """
-    ✅ 安全回覆：
-    - 優先使用 reply_message（符合 LINE 規則：reply_token 只能用一次）
-    - 若 reply_token 過期/無效（常見於冷啟動/重送），改用 push_message 補送
-    - 仍保留最多 5 則訊息限制，避免 LINE API 拒絕
+    ✅ 安全回覆（零 push 版本）：
+    - 只使用 reply_message 回覆（不做 push fallback），避免額外消耗月額度與避免 429 洗版
+    - 若 reply_token 無效/過期/不存在：直接略過（只記錄 log）
+    - 保留最多 5 則訊息限制，避免 LINE API 拒絕
     """
-    # normalize messages to list
     if messages is None:
         return
     if not isinstance(messages, list):
@@ -1314,14 +1293,19 @@ def safe_reply(event, messages):
     if not messages:
         return
 
-    # ✅ 最多 5 則，多的砍掉（或自行改成合併文字）
+    # LINE 規則：一次 reply 最多 5 則
     if len(messages) > LINE_REPLY_MAX:
         logging.warning(f"[safe_reply] messages too many ({len(messages)}), truncating to {LINE_REPLY_MAX}.")
         messages = messages[:LINE_REPLY_MAX]
 
-    # 嘗試 reply
+    # 沒有 reply_token（或事件不支援 reply）就不送，避免用 push
+    reply_token = getattr(event, "reply_token", None)
+    if not reply_token:
+        logging.warning("[safe_reply] no reply_token; skip (push disabled).")
+        return
+
     try:
-        line_bot_api.reply_message(event.reply_token, messages)
+        line_bot_api.reply_message(reply_token, messages)
         return
     except LineBotApiError as e:
         # 解析錯誤訊息
@@ -1330,44 +1314,20 @@ def safe_reply(event, messages):
         except Exception:
             msg_txt = str(e)
 
-        # 重送（redelivery）一律不做 push（避免重複刷）
-        if is_redelivery(event):
-            logging.warning(f"[safe_reply] redelivery detected; skip push. err={msg_txt}")
-            return
-
-        # reply_token 無效或已過期 → 用 push 補回覆（避免使用者無回應）
+        # reply_token 無效/過期：不做 push，直接跳過
         if "Invalid reply token" in msg_txt:
-            try:
-                uid = getattr(getattr(event, "source", None), "user_id", None)
-                # ✅ 先做「事件級」去重：同一事件就算重試多次，也只 push 一次
-                try:
-                    _, ek, _ = _event_type_and_key(event)  # type: ignore
-                except Exception:
-                    ek = None
-                now_ts = time.time()
-                if ek:
-                    with _PUSH_LOCK:
-                        last = _PUSH_DEDUPE.get(ek)
-                        if last is not None and (now_ts - last) < PUSH_FALLBACK_DEDUPE_WINDOW:
-                            logging.warning(f"[safe_reply] invalid reply token but already pushed recently; skip. key={ek}")
-                            return
-                        _PUSH_DEDUPE[ek] = now_ts
-
-                if uid:
-                    line_bot_api.push_message(uid, messages)
-                    logging.warning(f"[safe_reply] invalid reply token -> pushed to uid={uid}")
-                else:
-                    logging.warning("[safe_reply] invalid reply token and no uid -> skip")
-            except Exception as e2:
-                logging.error(f"[safe_reply] push fallback failed: {e2}", exc_info=True)
+            logging.warning(f"[safe_reply] invalid reply token; skip (push disabled). err={msg_txt}")
             return
 
-        # 其他錯誤只記錄
-        logging.warning(f"[safe_reply] reply_message failed. err={msg_txt}")
+        # 月額度/限流/其他：只記錄，不重試、不 fallback
+        logging.warning(f"[safe_reply] reply_message failed; skip (push disabled). err={msg_txt}")
+        return
     except Exception as ex:
         logging.error(f"[safe_reply] unexpected error: {ex}", exc_info=True)
+        return
 
 # === 更精準的防重複（新） ===
+
 _DEDUPE_LOCK = threading.Lock()
 
 # 事件類型專屬時間窗（秒）— 可用環境變數調整
@@ -3130,12 +3090,11 @@ ACHIEVEMENT_RULES = {
 @app.route("/api/achievements")
 def api_achievements():
     uid = request.args.get("user_id", "").strip()
+    lang = resolve_lang(uid=uid, lang=request.args.get("lang"))
+
     stats = _stats_for_user(uid)
     total = int(stats.get("total", 0) or 0)
     by = stats.get("by_status", {}) or {}
-
-    # ✅ 語言只查一次（不要放在迴圈內）
-    lang = get_user_lang(uid)
 
     out = []
     for cfg in BADGE_CONFIG:
@@ -3154,9 +3113,16 @@ def api_achievements():
 
         goal = int(rule["goal"] or 0)
 
+        # ✅ title 也做 i18n（避免只有 UI 變、內容還是中文）
+        name = cfg.get("name") or {}
+        if isinstance(name, dict):
+            title = name.get(lang) or name.get("zh") or ""
+        else:
+            title = str(name)
+
         out.append({
             "key": key,
-            "title": cfg["name"],  # 和徽章名稱一致
+            "title": title,
             "desc": (rule["desc"]["en"] if lang == "en" else rule["desc"]["zh"]),
             "goal": goal,
             "progress": progress,
@@ -3574,29 +3540,41 @@ def _badge_rules(uid: str):
     }
 
 # --- 圖像/名稱設定（把 icon 檔放進 /static/badges/，檔名可依你實際素材調整）---
+# --- 圖像/名稱設定（把 icon 檔放進 /static/badges/，檔名可依你實際素材調整）---
+# ✅ name 改為 {zh,en}，讓「徽章/成就」標題也能跟著語言切換（避免只有 UI 變、內容還是中文）
 BADGE_CONFIG = [
-    {"key":"first",               "name":"新手報到",     "icon":"/static/badges/first.png"},
-    {"key":"helper10",            "name":"勤勞小幫手",   "icon":"/static/badges/helper10.png"},
-    {"key":"pro_reporter",        "name":"資深回報員",   "icon":"/static/badges/pro_reporter.png"},
-    {"key":"helper50",            "name":"超級幫手",     "icon":"/static/badges/helper50.png"},
-    {"key":"tissue_guard",        "name":"紙巾守護者",   "icon":"/static/badges/tissue_guard.png"},
-    {"key":"tissue_master",       "name":"紙巾總管",     "icon":"/static/badges/tissue_master.png"},
-    {"key":"queue_scout",         "name":"排隊偵查員",   "icon":"/static/badges/queue_scout.png"},
-    {"key":"queue_commander",     "name":"排隊指揮官",   "icon":"/static/badges/queue_commander.png"},
-    {"key":"maintenance_watcher", "name":"維運守護者",   "icon":"/static/badges/maintenance_watcher.png"},
-    {"key":"good_news",           "name":"好消息分享員", "icon":"/static/badges/good_news.png"},
+    {"key":"first",               "name":{"zh":"新手報到",     "en":"First Report"},          "icon":"/static/badges/first.png"},
+    {"key":"helper10",            "name":{"zh":"勤勞小幫手",   "en":"Helpful Reporter"},      "icon":"/static/badges/helper10.png"},
+    {"key":"pro_reporter",        "name":{"zh":"資深回報員",   "en":"Pro Reporter"},          "icon":"/static/badges/pro_reporter.png"},
+    {"key":"helper50",            "name":{"zh":"超級幫手",     "en":"Super Helper"},          "icon":"/static/badges/helper50.png"},
+    {"key":"tissue_guard",        "name":{"zh":"紙巾守護者",   "en":"Tissue Guardian"},       "icon":"/static/badges/tissue_guard.png"},
+    {"key":"tissue_master",       "name":{"zh":"紙巾總管",     "en":"Tissue Manager"},        "icon":"/static/badges/tissue_master.png"},
+    {"key":"queue_scout",         "name":{"zh":"排隊偵查員",   "en":"Queue Scout"},           "icon":"/static/badges/queue_scout.png"},
+    {"key":"queue_commander",     "name":{"zh":"排隊指揮官",   "en":"Queue Commander"},       "icon":"/static/badges/queue_commander.png"},
+    {"key":"maintenance_watcher", "name":{"zh":"維運守護者",   "en":"Maintenance Watcher"},   "icon":"/static/badges/maintenance_watcher.png"},
+    {"key":"good_news",           "name":{"zh":"好消息分享員", "en":"Good News Messenger"},   "icon":"/static/badges/good_news.png"},
 ]
+
+# --- 取代原本的 /api/badges 路由 ---
 
 # --- 取代原本的 /api/badges 路由 ---
 @app.route("/api/badges")
 def api_badges():
     uid = request.args.get("user_id", "").strip()
+    lang = resolve_lang(uid=uid, lang=request.args.get("lang"))
+
     unlocked_map = _badge_rules(uid)
     items = []
     for b in BADGE_CONFIG:
+        name = b.get("name") or {}
+        if isinstance(name, dict):
+            display_name = name.get(lang) or name.get("zh") or ""
+        else:
+            display_name = str(name)
+
         items.append({
             "key": b["key"],
-            "name": b["name"],
+            "name": display_name,
             "icon": b["icon"],
             "unlocked": bool(unlocked_map.get(b["key"], False)),
         })
@@ -3621,7 +3599,7 @@ def toilet_feedback(toilet_name):
     if worksheet is None or feedback_sheet is None:
         return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                summary="（暫時無法連到雲端資料）",
-                               feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
+                               feedbacks=[], address="", avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     try:
         address = "未知地址"
         rows = worksheet.get_all_values()
@@ -3634,7 +3612,7 @@ def toilet_feedback(toilet_name):
         if address == "未知地址":
             return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                    summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。",
-                                   feedbacks=[], address="", avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
+                                   feedbacks=[], address="", avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
 
         rows_fb = feedback_sheet.get_all_values()
         header = rows_fb[0]; data_fb = rows_fb[1:]
@@ -3642,7 +3620,7 @@ def toilet_feedback(toilet_name):
         if idx["address"] is None:
             return render_template("toilet_feedback.html", toilet_name=toilet_name,
                                    summary="（表頭缺少『地址』欄位）", feedbacks=[], address=address,
-                                   avg_pred_score="未預測", lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
+                                   avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
 
         matched = [r for r in data_fb
                    if len(r) > idx["address"] and (r[idx["address"]] or "").strip() == address.strip()]
@@ -3711,7 +3689,7 @@ def toilet_feedback_by_coord(lat, lon):
                                toilet_name=f"廁所（{lat}, {lon}）",
                                summary="（暫時無法連到雲端資料）",
                                feedbacks=[], address=f"{lat},{lon}",
-                               avg_pred_score="未預測", lat=lat, lon=lon,
+                               avg_pred_score=("N/A" if lang=="en" else "未預測"), lat=lat, lon=lon,
                                liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     try:
         name = f"廁所（{lat}, {lon}）"
@@ -3965,10 +3943,7 @@ def api_ai_feedback_summary(lat, lon):
             }), 500
 
         # === 語言判斷 ===
-        try:
-            lang = get_user_lang(uid)
-        except Exception:
-            lang = "zh"
+        lang = resolve_lang(uid=uid, lang=request.args.get("lang"))
 
         # ✅ 讓 system 也跟語言一致（避免混語）
         lang_rule = "請使用繁體中文回答。" if lang != "en" else "Please answer in English."
@@ -3993,11 +3968,7 @@ def api_ai_feedback_summary(lat, lon):
         if not header or not data:
             return jsonify({
                 "success": True,
-                "summary": L(
-                    uid,
-                    "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
-                    "No feedback yet. You can leave a review using the button below 🙏"
-                ),
+                "summary": "",  # 讓前端依 lang 顯示自己的 no_data 文案，避免混語
                 "data": [],
                 "has_data": False
             }), 200
@@ -4037,11 +4008,7 @@ def api_ai_feedback_summary(lat, lon):
         if not matched:
             return jsonify({
                 "success": True,
-                "summary": L(
-                    uid,
-                    "目前還沒有任何回饋資料，可以點下面的按鈕來幫忙留一筆回饋 🙏",
-                    "No feedback yet. You can leave a review using the button below 🙏"
-                ),
+                "summary": "",  # 讓前端依 lang 顯示自己的 no_data 文案，避免混語
                 "data": [],
                 "has_data": False
             }), 200
@@ -4058,7 +4025,11 @@ def api_ai_feedback_summary(lat, lon):
         if not ok:
             return jsonify({
                 "success": True,
-                "summary": T("ai_summary_limit", uid=uid),
+                "summary": L(
+                    uid,
+                    "今天 AI 摘要查詢次數已達上限，明天再來看看最新的分析吧 🙏",
+                    "You’ve reached today’s AI summary limit. Please try again tomorrow 🙏"
+                ),
                 "data": matched,
                 "has_data": True,
                 "limit_reached": True
@@ -4882,7 +4853,11 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(text=summary))
 
     elif cmd == "help":
-        reply_messages.append(TextSendMessage(text=T("help_text", uid=uid)))
+        reply_messages.append(TextSendMessage(text=L(
+            uid,
+            "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
+            "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
+        )))
 
     # =========================
     # ✅ 永遠不沉默
@@ -5037,20 +5012,20 @@ def handle_postback(event):
     except Exception:
         # 解析失敗就走 fallback（保留原字串）
         qs = {}
-
-    # ✅ 任何 postback 只要帶 lang 就先更新語言（切 menu/按功能都算）
-    if _lang in ("en", "zh"):
-        try:
-            set_user_lang(uid, _lang)
-        except Exception:
-            pass
+    # ✅ 只在『切換語言/切換選單』時更新語言；避免一般功能 postback 夾帶 lang 把語言又切回去
 
     # ✅ richmenuswitch：只做「切換確認」，不要走 gate/不要觸發其它功能
     #    （避免你覺得「沒切成功」其實只是 LINE UI 快取/後端沒回覆）
     if _switch in ("more", "main"):
+        # 若切換選單時有帶 lang，才更新使用者語言
+        if _lang in ("en", "zh"):
+            try:
+                set_user_lang(uid, _lang)
+            except Exception:
+                pass
         safe_reply(
             event,
-            TextSendMessage(text=T("menu_switched", uid=uid))
+            TextSendMessage(text=("✅ Menu switched" if get_user_lang(uid) == "en" else "✅ 已切換選單"))
         )
         return
 
@@ -5070,7 +5045,7 @@ def handle_postback(event):
             safe_reply(
                 event,
                 TextSendMessage(
-                    text=T("lang_switched_en", uid=uid) if lang == "en" else T("lang_switched_zh", uid=uid)
+                    text=("✅ Language switched to English" if lang == "en" else "✅ 已切換為中文")
                 )
             )
         except Exception as e:
@@ -5080,12 +5055,12 @@ def handle_postback(event):
 
     if data == "set_lang:en":
         set_user_lang(uid, "en")
-        safe_reply(event, TextSendMessage(text=T("lang_switched_en", uid=uid)))
+        safe_reply(event, TextSendMessage(text="✅ Language switched to English"))
         return
 
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
-        safe_reply(event, TextSendMessage(text=T("lang_switched_zh", uid=uid)))
+        safe_reply(event, TextSendMessage(text="✅ 已切換為中文"))
         return
 
     # =========================
@@ -5147,7 +5122,11 @@ def handle_postback(event):
 
             # 使用說明
             if cmd == "help":
-                safe_reply(event, TextSendMessage(text=T("help_text", uid=uid)))
+                safe_reply(event, TextSendMessage(text=L(
+                    uid,
+                    "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
+                    "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
+                )))
                 return
 
             # 新增廁所
