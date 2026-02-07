@@ -3687,7 +3687,7 @@ def toilet_feedback_by_coord(lat, lon):
         qs["lang"] = lang
         return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
     if feedback_sheet is None:
-            return render_template("toilet_feedback.html",
+        return render_template("toilet_feedback.html",
                                toilet_name=f"廁所（{lat}, {lon}）",
                                summary="（暫時無法連到雲端資料）",
                                feedbacks=[], address=f"{lat},{lon}",
