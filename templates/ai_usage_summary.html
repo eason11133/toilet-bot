@@ -6,9 +6,13 @@
   <title id="t_title">AI 使用回顧</title>
   <style>
     body { font-family: sans-serif; padding: 20px; line-height: 1.7; }
-    .card { border: 1px solid #ccc; border-radius: 10px; padding: 20px; background: #fafafa; }
+    .card {
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      padding: 20px;
+      background: #fafafa;
+    }
   </style>
-  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
   <h2 id="t_h2">AI 使用回顧分析</h2>
@@ -17,41 +21,44 @@
   </div>
 
   <script>
+    /** ===== i18n ===== */
     const I18N = {
-      zh: { title: "AI 使用回顧", h2: "AI 使用回顧分析" },
-      en: { title: "AI Usage Review", h2: "AI Usage Analysis" }
+      zh: {
+        title: "AI 使用回顧",
+        h2: "AI 使用回顧分析"
+      },
+      en: {
+        title: "AI Usage Review",
+        h2: "AI Usage Analysis"
+      }
     };
-    const LIFF_ID = "{{ liff_id|default('', true) }}";
 
-    function normLang(x){ x=(x||"").toLowerCase(); return x.startsWith("en")?"en":"zh"; }
-    function getQueryLang(){ const p=new URLSearchParams(location.search); const q=p.get("lang"); return q?normLang(q):""; }
-    function ensureLangInUrl(lang){
-      const p=new URLSearchParams(location.search);
-      if(p.get("lang")) return;
-      p.set("lang", lang);
-      history.replaceState({}, "", location.pathname + "?" + p.toString());
-    }
-    async function initLiffBestEffort(){
-      if(!window.liff || !LIFF_ID) return false;
-      try{ await liff.init({liffId:LIFF_ID}); return true; }catch{ return false; }
-    }
-    async function detectLangAfterInit(){
-      const q=getQueryLang(); if(q) return q;
-      try{ if(window.liff && typeof liff.getLanguage==="function") return normLang(liff.getLanguage()); }catch{}
-      return normLang(navigator.language||"zh");
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
     }
 
-    (async function boot(){
-      await initLiffBestEffort();
-      const LANG = await detectLangAfterInit();
-      ensureLangInUrl(LANG);
-      const T = I18N[LANG] || I18N.zh;
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      return normLang(navigator.language || "zh");
+    }
 
-      document.documentElement.lang = (LANG==="en")?"en":"zh-Hant";
-      document.title = T.title;
-      document.getElementById("t_title").textContent = T.title;
-      document.getElementById("t_h2").textContent = T.h2;
-    })();
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
+
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.title;
+
+    const setText = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
+
+    setText("t_title", T.title);
+    setText("t_h2", T.h2);
   </script>
 </body>
 </html>

@@ -316,7 +316,6 @@
 
       const T = I18N[LANG] || I18N.zh;
 
-      // 套用標題
       document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
       document.title = T.title;
       document.getElementById("t_title").textContent = T.title;

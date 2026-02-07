@@ -5,11 +5,25 @@
   <title id="t_title">AI 回饋摘要</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 16px; line-height: 1.6; }
-    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .btn { display: inline-block; padding: 8px 12px; border-radius: 6px; text-decoration: none; border: 1px solid #007bff; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 16px;
+      line-height: 1.6;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 8px 12px;
+      border-radius: 6px;
+      text-decoration: none;
+      border: 1px solid #007bff;
+    }
   </style>
-  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
   <h2 id="t_h2">AI 回饋摘要</h2>
@@ -27,96 +41,95 @@
   </div>
 
   <script>
+    /** ===== i18n ===== */
     const I18N = {
       zh: {
-        h2:"AI 回饋摘要", p1:"這是根據使用者對這間廁所的回饋，由 AI 自動整理的摘要。",
-        h3:"幫忙留下你的回饋 🙌", p2:"如果你剛剛有使用這間廁所，可以點下面的按鈕填寫回饋，讓資料更完整。",
-        btn:"前往回饋表單", loading:"載入中⋯⋯", failed:"讀取失敗，請稍後再試。",
-        no_data:"目前還沒有任何回饋資料。", no_summary:"目前沒有可用的摘要內容。", sys_err:"系統錯誤，請稍後再試。"
+        h2: "AI 回饋摘要",
+        p1: "這是根據使用者對這間廁所的回饋，由 AI 自動整理的摘要。",
+        h3: "幫忙留下你的回饋 🙌",
+        p2: "如果你剛剛有使用這間廁所，可以點下面的按鈕填寫回饋，讓資料更完整。",
+        btn: "前往回饋表單",
+        loading: "載入中⋯⋯",
+        failed: "讀取失敗，請稍後再試。",
+        no_data: "目前還沒有任何回饋資料。",
+        no_summary: "目前沒有可用的摘要內容。",
+        sys_err: "系統錯誤，請稍後再試。"
       },
       en: {
-        h2:"AI Feedback Summary", p1:"This is an AI-generated summary based on users' feedback for this restroom.",
-        h3:"Leave your feedback 🙌", p2:"If you just used this restroom, please submit feedback to improve the data.",
-        btn:"Open feedback form", loading:"Loading…", failed:"Failed to load. Please try again later.",
-        no_data:"No feedback yet.", no_summary:"No summary available.", sys_err:"System error. Please try again later."
+        h2: "AI Feedback Summary",
+        p1: "This is an AI-generated summary based on users' feedback for this restroom.",
+        h3: "Leave your feedback 🙌",
+        p2: "If you just used this restroom, please submit feedback to improve the data.",
+        btn: "Open feedback form",
+        loading: "Loading…",
+        failed: "Failed to load. Please try again later.",
+        no_data: "No feedback yet.",
+        no_summary: "No summary available.",
+        sys_err: "System error. Please try again later."
       }
     };
-    const LIFF_ID = "{{ liff_id|default('', true) }}";
 
-    function normLang(x){ x=(x||"").toLowerCase(); return x.startsWith("en")?"en":"zh"; }
-    function getQueryLang(){ const p=new URLSearchParams(location.search); const q=p.get("lang"); return q?normLang(q):""; }
-    function ensureLangInUrl(lang){
-      const p=new URLSearchParams(location.search);
-      if(p.get("lang")) return;
-      p.set("lang", lang);
-      history.replaceState({}, "", location.pathname + "?" + p.toString());
+    function normLang(x){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("en")) return "en";
+      return "zh";
     }
-    async function initLiffBestEffort(){
-      if(!window.liff || !LIFF_ID) return false;
-      try{ await liff.init({liffId:LIFF_ID}); return true; }catch{ return false; }
+    function getLang(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("lang");
+      if (q) return normLang(q);
+      return normLang(navigator.language || "zh");
     }
-    async function detectLangAfterInit(){
-      const q=getQueryLang(); if(q) return q;
-      try{ if(window.liff && typeof liff.getLanguage==="function") return normLang(liff.getLanguage()); }catch{}
-      return normLang(navigator.language||"zh");
-    }
+    const LANG = getLang();
+    const T = I18N[LANG] || I18N.zh;
 
-    (async function boot(){
-      await initLiffBestEffort();
-      const LANG = await detectLangAfterInit();
-      ensureLangInUrl(LANG);
-      const T = I18N[LANG] || I18N.zh;
+    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+    document.title = T.h2;
 
-      document.documentElement.lang = (LANG==="en")?"en":"zh-Hant";
-      document.title = T.h2;
+    // 套用靜態文字
+    const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
+    setText("t_title", T.h2);
+    setText("t_h2", T.h2);
+    setText("t_p1", T.p1);
+    setText("t_h3", T.h3);
+    setText("t_p2", T.p2);
+    setText("t_btn", T.btn);
+    setText("status", T.loading);
 
-      const setText=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
-      setText("t_title", T.h2);
-      setText("t_h2", T.h2);
-      setText("t_p1", T.p1);
-      setText("t_h3", T.h3);
-      setText("t_p2", T.p2);
-      setText("t_btn", T.btn);
-      setText("status", T.loading);
+    /** ===== data fetch ===== */
+    let apiUrl = "{{ api_url }}";
+    try {
+      // 若 apiUrl 沒帶 lang，就補上
+      const u = new URL(apiUrl, location.origin);
+      if (!u.searchParams.get("lang")) u.searchParams.set("lang", LANG);
+      apiUrl = u.toString();
+    } catch {}
 
-      // ✅ feedback_url 也補 lang（避免跳下一頁又變中文）
-      try{
-        const a=document.getElementById("t_btn");
-        const u=new URL(a.getAttribute("href"), location.origin);
-        if(!u.searchParams.get("lang")) u.searchParams.set("lang", LANG);
-        a.setAttribute("href", u.pathname + "?" + u.searchParams.toString());
-      }catch{}
+    fetch(apiUrl)
+      .then(r => r.json())
+      .then(data => {
+        const statusEl = document.getElementById("status");
+        const textEl   = document.getElementById("summary-text");
 
-      // data fetch
-      let apiUrl = "{{ api_url }}";
-      try {
-        const u = new URL(apiUrl, location.origin);
-        u.searchParams.set("lang", LANG);
-        apiUrl = u.toString();
-      } catch {}
+        if (!data.success) {
+          statusEl.textContent = T.failed;
+          return;
+        }
 
-      fetch(apiUrl)
-        .then(r => r.json())
-        .then(data => {
-          const statusEl = document.getElementById("status");
-          const textEl   = document.getElementById("summary-text");
-
-          if (!data.success) { statusEl.textContent = T.failed; return; }
-
-          if (!data.has_data) {
-            statusEl.textContent = "";
-            textEl.textContent = data.summary || T.no_data;
-            return;
-          }
-
+        // has_data = False 代表沒有任何回饋 → 顯示文字就好，不呼叫 AI
+        if (!data.has_data) {
           statusEl.textContent = "";
-          textEl.textContent = data.summary || T.no_summary;
-        })
-        .catch(err => {
-          console.error(err);
-          document.getElementById("status").textContent = T.sys_err;
-        });
-    })();
+          textEl.textContent = data.summary || T.no_data;
+          return;
+        }
+
+        statusEl.textContent = "";
+        textEl.textContent = data.summary || T.no_summary;
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("status").textContent = T.sys_err;
+      });
   </script>
 </body>
 </html>

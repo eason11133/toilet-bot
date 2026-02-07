@@ -1,101 +1,157 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title id="t_title">隱私權政策 | 廁所幫手</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans TC",Arial;
-         line-height:1.7; margin:0; background:#0b1320; color:#e6f0ff}
-    .wrap{max-width:860px; margin:0 auto; padding:24px}
-    h1{font-size:1.6rem; margin:0 0 12px}
-    h2{font-size:1.2rem; margin:22px 0 8px}
-    p,li{color:#c9d6ea}
-    a{color:#8cc8ff}
-    .card{background:#0e1a2b;border:1px solid #1f2b41;border-radius:14px;padding:20px}
-    .muted{color:#9fb0cb}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#f7f7f7;color:#111}
+    .wrap{max-width:860px;margin:24px auto;padding:0 14px}
+    .card{background:hsl(0, 0%, 100%);border:1px solid #e7e7e7;border-radius:14px;padding:18px 18px 8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    h1{font-size:22px;margin:0 0 10px}
+    h2{font-size:16px;margin:18px 0 6px}
+    p,li{line-height:1.7}
+    .muted{color:#666;font-size:13px}
+    a{color:#1457d9}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
+      <div class="muted" id="t_updated">最後更新：2026-02-07</div>
       <h1 id="t_h1">隱私權政策</h1>
-      <p class="muted"><span id="t_last">最後更新：</span><span id="d"></span></p>
 
-      <h2 id="t_h2_1">我們蒐集哪些資料</h2>
-      <ul id="t_ul_1">
-        <li>LINE 使用者識別（用於辨識是否已同意、我的最愛/貢獻歸屬）。</li>
-        <li>位置資訊：僅在你主動傳送「位置訊息」或於 LIFF「隱私模式」同意後，以即時查詢附近廁所。</li>
-        <li>回饋內容（評分、是否有衛生紙/無障礙、留言等）。</li>
-      </ul>
-
-      <h2 id="t_h2_2">我們如何使用</h2>
-      <ul id="t_ul_2">
-        <li>提供附近廁所與導航、彙整回饋分數與趨勢。</li>
-        <li>改善服務品質與除錯（僅統計性使用）。</li>
-      </ul>
-
-      <h2 id="t_h2_3">我們如何保存</h2>
-      <ul id="t_ul_3">
-        <li>回饋與評分儲存在 Google Sheets；僅授權的系統帳號可存取。</li>
-        <li>位置為即時使用，不做長期保存；隱私模式下僅存近似網格或不存坐標。</li>
-      </ul>
-
-      <h2 id="t_h2_4">分享與第三方</h2>
-      <ul id="t_ul_4">
-        <li>不出售個資；不對外揭露可識別個人之資訊。</li>
-        <li>必要時依法律或主管機關要求提供。</li>
-      </ul>
-
-      <h2 id="t_h2_5">你的權利</h2>
-      <ul id="t_ul_5">
-        <li>你可隨時撤回同意；撤回後將無法使用需要同意的功能。</li>
-        <li>你可要求查詢或刪除你在本服務的紀錄：請透過 LINE 官方帳號傳送「資料刪除」。</li>
-      </ul>
-
-      <h2 id="t_h2_6">聯絡方式</h2>
-      <p id="t_contact">
-        如有隱私疑問，請聯絡：<a href="mailto:you@example.com">you@example.com</a>
+      <p id="t_intro">
+        我們重視你的隱私。本服務（「廁所幫手」）會在提供功能所必需的範圍內，處理你的資料。
       </p>
+
+      <h2 id="t_h2_1">我們會收集什麼</h2>
+      <ul id="t_list_1">
+        <li>LINE 使用者識別（userId）與暱稱（displayName）</li>
+        <li>你選擇分享的位置資訊（僅用於即時查詢；隱私模式下會做近似網格化）</li>
+        <li>你提交的廁所回饋（分數、是否有衛生紙、無障礙設施、留言等）</li>
+      </ul>
+
+      <h2 id="t_h2_2">我們怎麼使用</h2>
+      <ul id="t_list_2">
+        <li>提供附近廁所查詢與導航</li>
+        <li>整合回饋資料以產生清潔度預測與趨勢</li>
+        <li>計算成就/徽章（僅用於遊戲化體驗）</li>
+      </ul>
+
+      <h2 id="t_h2_3">資料保存</h2>
+      <p id="t_retention">
+        位置資訊僅用於即時查詢，不會永久儲存。回饋資料會儲存於 Google Sheets 作為模型與服務品質改善用途。
+      </p>
+
+      <h2 id="t_h2_4">你的權利</h2>
+      <ul id="t_list_4">
+        <li>你可以隨時撤回同意並停止使用服務</li>
+        <li>你可以要求刪除你的回饋紀錄（我們會以 userId 進行查找）</li>
+      </ul>
+
+      <h2 id="t_h2_5">聯絡我們</h2>
+      <p id="t_contact">若你有任何疑問或刪除請求，請聯絡：{{ contact_email or "you@example.com" }}</p>
     </div>
   </div>
 
-  <script>
-    document.getElementById('d').textContent = new Date().toISOString().slice(0,10);
+<script>
+const I18N = {
+  zh: {
+    title: "隱私權政策 | 廁所幫手",
+    updated: "最後更新：2026-02-07",
+    h1: "隱私權政策",
+    intro: "我們重視你的隱私。本服務（「廁所幫手」）會在提供功能所必需的範圍內，處理你的資料。",
+    h2_1: "我們會收集什麼",
+    list_1: [
+      "LINE 使用者識別（userId）與暱稱（displayName）",
+      "你選擇分享的位置資訊（僅用於即時查詢；隱私模式下會做近似網格化）",
+      "你提交的廁所回饋（分數、是否有衛生紙、無障礙設施、留言等）"
+    ],
+    h2_2: "我們怎麼使用",
+    list_2: [
+      "提供附近廁所查詢與導航",
+      "整合回饋資料以產生清潔度預測與趨勢",
+      "計算成就/徽章（僅用於遊戲化體驗）"
+    ],
+    h2_3: "資料保存",
+    retention: "位置資訊僅用於即時查詢，不會永久儲存。回饋資料會儲存於 Google Sheets 作為模型與服務品質改善用途。",
+    h2_4: "你的權利",
+    list_4: [
+      "你可以隨時撤回同意並停止使用服務",
+      "你可以要求刪除你的回饋紀錄（我們會以 userId 進行查找）"
+    ],
+    h2_5: "聯絡我們",
+    contact_prefix: "若你有任何疑問或刪除請求，請聯絡："
+  },
+  en: {
+    title: "Privacy Policy | Restroom Helper",
+    updated: "Last updated: 2026-02-07",
+    h1: "Privacy Policy",
+    intro: "We value your privacy. This service (“Restroom Helper”) processes your data only as needed to provide features.",
+    h2_1: "What we collect",
+    list_1: [
+      "LINE identifiers (userId) and display name (displayName)",
+      "Location data you choose to share (used only for real-time search; privacy mode uses approximate grids)",
+      "Feedback you submit (rating, toilet paper, accessibility, comments, etc.)"
+    ],
+    h2_2: "How we use it",
+    list_2: [
+      "Provide nearby restroom search and navigation",
+      "Aggregate feedback to generate cleanliness predictions and trends",
+      "Compute achievements/badges (gamification only)"
+    ],
+    h2_3: "Data retention",
+    retention: "Location data is used for real-time search only and is not stored permanently. Feedback is stored in Google Sheets to improve the model and service quality.",
+    h2_4: "Your rights",
+    list_4: [
+      "You can withdraw consent anytime and stop using the service",
+      "You can request deletion of your feedback records (we will locate them by userId)"
+    ],
+    h2_5: "Contact",
+    contact_prefix: "If you have questions or deletion requests, contact: "
+  }
+};
 
-    const I18N = { /* 你原本 I18N 內容整段保留不變 */ };
+function normLang(x){
+  x = (x || "").toLowerCase();
+  if (x.startsWith("en")) return "en";
+  return "zh";
+}
+function getLang(){
+  const p = new URLSearchParams(location.search);
+  const q = p.get("lang");
+  if (q) return normLang(q);
+  return normLang(navigator.language || "zh");
+}
+const LANG = getLang();
+const T = I18N[LANG] || I18N.zh;
 
-    function normLang(x){
-      x = (x || "").toLowerCase();
-      if (x.startsWith("en")) return "en";
-      return "zh";
-    }
-    function getLang(){
-      const p = new URLSearchParams(location.search);
-      const q = p.get("lang");
-      if (q) return normLang(q);
-      return normLang(navigator.language || "zh");
-    }
+document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+document.title = T.title;
 
-    const LANG = getLang();
-    const T = I18N[LANG] || I18N.zh;
+function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent=v; }
+function setList(id, arr){
+  const ul = document.getElementById(id);
+  if(!ul) return;
+  ul.innerHTML = arr.map(x=>`<li>${x}</li>`).join("");
+}
 
-    document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-    document.title = T.title;
+setText("t_title", T.title);
+setText("t_updated", T.updated);
+setText("t_h1", T.h1);
+setText("t_intro", T.intro);
+setText("t_h2_1", T.h2_1); setList("t_list_1", T.list_1);
+setText("t_h2_2", T.h2_2); setList("t_list_2", T.list_2);
+setText("t_h2_3", T.h2_3); setText("t_retention", T.retention);
+setText("t_h2_4", T.h2_4); setList("t_list_4", T.list_4);
+setText("t_h2_5", T.h2_5);
 
-    const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
-    const setHTML = (id, val)=>{ const el=document.getElementById(id); if(el) el.innerHTML = val; };
-
-    setText("t_title", T.title);
-    setText("t_h1", T.h1);
-    setText("t_last", T.last);
-
-    setText("t_h2_1", T.h2_1); setHTML("t_ul_1", T.ul_1);
-    setText("t_h2_2", T.h2_2); setHTML("t_ul_2", T.ul_2);
-    setText("t_h2_3", T.h2_3); setHTML("t_ul_3", T.ul_3);
-    setText("t_h2_4", T.h2_4); setHTML("t_ul_4", T.ul_4);
-    setText("t_h2_5", T.h2_5); setHTML("t_ul_5", T.ul_5);
-    setText("t_h2_6", T.h2_6); setHTML("t_contact", T.contact_html);
-  </script>
+const contactEl = document.getElementById("t_contact");
+if (contactEl) {
+  const email = "{{ contact_email or 'you@example.com' }}";
+  contactEl.textContent = T.contact_prefix + email;
+}
+</script>
 </body>
 </html>

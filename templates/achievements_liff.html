@@ -29,33 +29,60 @@
   <div class="grid" id="grid"></div>
 
 <script>
+/** ===== i18n ===== */
 const I18N = {
-  zh: { title:"我的成就", unlocked:"已解鎖", locked:"尚未解鎖", init:"初始化中…", init_liff:"初始化 LIFF…", loading:"讀取成就…", load_failed:"讀取成就失敗：" },
-  en: { title:"My Achievements", unlocked:"Unlocked", locked:"Locked", init:"Initializing…", init_liff:"Initializing LIFF…", loading:"Loading achievements…", load_failed:"Failed to load achievements: " }
+  zh: {
+    title: "我的成就",
+    unlocked: "已解鎖",
+    locked: "尚未解鎖",
+    init: "初始化中…",
+    init_liff: "初始化 LIFF…",
+    loading: "讀取成就…",
+    load_failed: "讀取成就失敗："
+  },
+  en: {
+    title: "My Achievements",
+    unlocked: "Unlocked",
+    locked: "Locked",
+    init: "Initializing…",
+    init_liff: "Initializing LIFF…",
+    loading: "Loading achievements…",
+    load_failed: "Failed to load achievements: "
+  }
 };
 
-const LIFF_ID = "{{ liff_id|default('', true) }}";
-const PUBLIC_URL = "{{ public_url|default('', true) }}";
-
-function normLang(x){ x=(x||"").toLowerCase(); return x.startsWith("en")?"en":"zh"; }
-function getQueryLang(){ const p=new URLSearchParams(location.search); const q=p.get("lang"); return q?normLang(q):""; }
-function ensureLangInUrl(lang){
-  const p=new URLSearchParams(location.search);
-  if(p.get("lang")) return;
-  p.set("lang", lang);
-  history.replaceState({}, "", location.pathname + "?" + p.toString());
-}
-async function initLiffBestEffort(){
-  if(!window.liff || !LIFF_ID) return false;
-  try{ await liff.init({liffId:LIFF_ID}); return true; }catch{ return false; }
-}
-async function detectLangAfterInit(){
-  const q=getQueryLang(); if(q) return q;
-  try{ if(window.liff && typeof liff.getLanguage==="function") return normLang(liff.getLanguage()); }catch{}
-  return normLang(navigator.language||"zh");
+function normLang(x){
+  x = (x || "").toLowerCase();
+  if (x.startsWith("en")) return "en";
+  return "zh";
 }
 
-function card(a, T){
+function getLang(){
+  const p = new URLSearchParams(location.search);
+  const q = p.get("lang");
+  if (q) return normLang(q);
+  try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+  return normLang(navigator.language || "zh");
+}
+
+const LANG = getLang();
+const T = I18N[LANG] || I18N.zh;
+
+document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+document.title = T.title;
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  const h2 = document.getElementById("t_h2");
+  if (h2) h2.textContent = T.title;
+  const loading = document.getElementById("loading");
+  if (loading) loading.textContent = T.init;
+});
+
+/** ===== original ===== */
+const LIFF_ID = "{{ liff_id }}";      // 後端注入（可用與狀態同一組）
+const PUBLIC_URL = "{{ public_url }}";
+
+function card(a){
   const wrap=document.createElement("div"); wrap.className="card";
   const t=document.createElement("div"); t.className="title"; t.textContent=a.title;
   const d=document.createElement("div"); d.className="muted"; d.textContent=a.desc || "";
@@ -73,36 +100,21 @@ function card(a, T){
   return wrap;
 }
 
-function showErr(msg){ document.getElementById("error").textContent = msg; }
+function showErr(msg){document.getElementById("error").textContent=msg;}
 
-(async function main(){
-  const loadingEl = document.getElementById("loading");
-  loadingEl.textContent = I18N.zh.init_liff;
+async function main(){
+  document.getElementById("loading").textContent = T.init_liff;
 
-  // ✅ 先 init，再取 lang（修正點）
-  await initLiffBestEffort();
-  const LANG = await detectLangAfterInit();
-  ensureLangInUrl(LANG);
-  const T = I18N[LANG] || I18N.zh;
-
-  document.documentElement.lang = (LANG==="en")?"en":"zh-Hant";
-  document.title = T.title;
-  const h2 = document.getElementById("t_h2");
-  if (h2) h2.textContent = T.title;
-
-  loadingEl.textContent = T.loading;
-
-  let userId = "";
+  let userId="";
   try{
-    if (window.liff && liff.getProfile) {
-      if (liff.isLoggedIn && !liff.isLoggedIn()) {
-        // 外部瀏覽器可匿名瀏覽成就（如果你 API 允許）
-      } else {
-        const p = await liff.getProfile();
-        userId = (p && p.userId) || "";
-      }
-    }
-  }catch(e){}
+    if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
+    const p = await liff.getProfile();
+    userId = p.userId || "";
+  }catch(e){
+    // 外部瀏覽器也可用，userId 可能取不到
+  }
+
+  document.getElementById("loading").textContent = T.loading;
 
   try{
     const qs = userId
@@ -113,13 +125,14 @@ function showErr(msg){ document.getElementById("error").textContent = msg; }
     const j = await r.json();
     if(!j.ok) throw new Error(j.message || "Load failed");
 
-    loadingEl.remove();
+    document.getElementById("loading").remove();
     const grid=document.getElementById("grid");
-    (j.achievements || []).forEach(a => grid.appendChild(card(a, T)));
+    j.achievements.forEach(a=>grid.appendChild(card(a)));
   }catch(e){
-    showErr(T.load_failed + (e.message || e));
+    showErr(T.load_failed + e.message);
   }
-})();
+}
+main();
 </script>
 </body>
 </html>

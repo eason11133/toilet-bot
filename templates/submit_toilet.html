@@ -1,432 +1,215 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title id="t_title">新增廁所</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    :root {
-      --bg: #f4f6f8;
-      --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --primary: #3498db;
-      --primary-hover: #2980b9;
-      --ok: #16a34a;
-      --err: #dc2626;
-      --shadow: 0 2px 6px rgba(0,0,0,.08);
-      --radius: 12px;
-      --chip:#eff6ff;
-      --chip-b:#93c5fd;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 24px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-    }
-    .wrap { max-width: 820px; margin: 0 auto; }
-    h1 { font-size: 28px; margin: 0 0 10px; letter-spacing: .5px; }
-    p.sub { margin: 0 0 18px; color: var(--muted); }
-    .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
-    label { display: block; margin: 14px 0 6px; font-weight: 600; }
-    input[type="text"], textarea, select {
-      width: 100%; padding: 10px 12px;
-      border: 1px solid #d1d5db; border-radius: 10px;
-      font-size: 16px; background: #fff;
-    }
-    textarea { resize: vertical; min-height: 80px; }
-    .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
-    .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
-    @media (min-width: 720px) { .row.two { grid-template-columns: 1fr 1fr; } .row.three { grid-template-columns: 1fr 1fr 1fr; } }
-    button {
-      margin-top: 18px;
-      background: var(--primary); color: #fff;
-      border: none; border-radius: 10px;
-      padding: 12px 18px; font-size: 16px;
-      cursor: pointer;
-    }
-    button:hover { background: var(--primary-hover); }
-    button[disabled] { opacity: .6; cursor: not-allowed; }
-    .msg { margin-top: 14px; padding: 10px 12px; border-radius: 10px; display: none; }
-    .msg.ok { background: #ecfdf5; color: var(--ok); display: block; }
-    .msg.err { background: #fef2f2; color: var(--err); display: block; }
-    .footer-note { margin-top: 16px; color: var(--muted); font-size: 13px; }
-    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
-    .chip { background:var(--chip); border:1px solid var(--chip-b); color:#1d4ed8; padding:6px 10px; border-radius:999px; font-size:13px; cursor:pointer; }
-    .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .inline a { color:#2563eb; text-decoration: none; }
-    .inline a:hover { text-decoration: underline; }
-    .hr { height:1px; background:#e5e7eb; margin:16px 0; }
-    .small { font-size:12px; color:#6b7280; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,"Noto Sans TC",sans-serif;margin:0;background:#f7f7f7;color:#111}
+    .wrap{max-width:720px;margin:18px auto;padding:0 14px}
+    h1{font-size:28px;margin:10px 0 6px}
+    .muted{color:#667085;line-height:1.6}
+    .card{background:#fff;border:1px solid #e6e9ef;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    label{display:block;margin-top:12px;font-weight:700}
+    input,textarea{width:100%;box-sizing:border-box;padding:10px 12px;margin-top:6px;border:1px solid #d0d7de;border-radius:10px}
+    textarea{resize:vertical}
+    .btn{margin-top:14px;background:#3578e5;color:#fff;border:none;border-radius:12px;padding:12px 16px;font-weight:700;cursor:pointer}
+    .btn:disabled{opacity:.55;cursor:not-allowed}
+    .note{font-size:13px;color:#667085;margin-top:6px}
+    .toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#1a7f37;color:#fff;padding:10px 14px;border-radius:10px;display:none;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+    .toast.err{background:#b00020}
   </style>
-  <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
-
 <body>
   <div class="wrap">
     <h1 id="t_h1">新增廁所</h1>
-    <p class="sub" id="t_sub">請盡量提供樓層與入口提示，能大幅降低使用者迷路風險。</p>
+    <div class="muted" id="t_intro">請盡量提供樓層與入口提示，能大幅降低使用者迷路風險。</div>
 
     <div class="card">
-      <form id="toiletForm" autocomplete="on">
-        <div class="row two">
-          <div>
-            <label for="name" id="t_lab_name">廁所名稱 <span style="color:#ef4444">*</span></label>
-            <input id="name" name="name" type="text" placeholder="例如：五常公園 公廁 / XX商場 南棟 2F 廁所" required />
-            <div class="hint" id="t_hint_name">建築物內請寫到館別/翼/區域，例：A館 南棟 2F 廁所。</div>
-          </div>
-          <div>
-            <label for="user_id" id="t_lab_uid">你的 LINE ID</label>
-            <input id="user_id" name="user_id" type="text" value="{{ request.args.get('uid','web') }}" readonly />
-            <div class="hint" id="t_hint_uid">系統會自動帶入你的 LINE UID。</div>
-          </div>
-        </div>
+      <label id="t_name_lab">廁所名稱 *</label>
+      <input id="name" placeholder="例如：五常公園 公廁 / XX商場" required/>
+      <div class="note" id="t_name_note">建築物內請寫到館別/翼/區域，例如：A館南棟 2F 廁所。</div>
 
-        <label for="address" id="t_lab_addr">地址 <span style="color:#ef4444">*</span></label>
-        <input id="address" name="address" type="text"
-          placeholder="請輸入完整地址，例如：新北市 三重區 五華街 7巷 30號"
-          value="{{ preset_address or '' }}" required />
-        <div class="hint" id="t_hint_addr">
-          若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。
-        </div>
+      <label id="t_uid_lab">你的 LINE ID</label>
+      <input id="uid" placeholder="(auto)" readonly />
+      <div class="note" id="t_uid_note">系統會自動帶入你的 LINE UID。</div>
 
-        <div class="row two">
-          <div>
-            <label for="lat" id="t_lab_lat">緯度 (lat)</label>
-            <input id="lat" name="lat" type="text" inputmode="decimal" placeholder="例如：25.033964" value="{{ preset_lat or (request.args.get('lat') or '') }}">
-          </div>
-          <div>
-            <label for="lon" id="t_lab_lon">經度 (lon)</label>
-            <input id="lon" name="lon" type="text" inputmode="decimal" placeholder="例如：121.564468" value="{{ preset_lon or (request.args.get('lon') or '') }}">
-          </div>
-        </div>
+      <label id="t_addr_lab">地址 *</label>
+      <input id="address" placeholder="請輸入完整地址，例如：新北市..." required/>
+      <div class="note" id="t_addr_note">若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。</div>
 
-        <div class="inline">
-          <button type="button" id="btnGeo">用我現在的位置</button>
-          <a id="mapPreview" href="#" target="_blank" rel="noopener">Google 地圖預覽</a>
-          <span class="small" id="t_map_note">（會以 lat/lon 或地址開啟）</span>
-        </div>
+      <label id="t_lat_lab">緯度 (lat) *</label>
+      <input id="lat" placeholder="25.xxxx" required/>
 
-        <div class="hr"></div>
+      <label id="t_lon_lab">經度 (lon) *</label>
+      <input id="lon" placeholder="121.xxxx" required/>
 
-        <div class="row two">
-          <div>
-            <label for="level" id="t_lab_level">樓層</label>
-            <select id="level" name="level">
-              <option value="" id="t_opt_level0">— 選擇樓層 / 戶外 —</option>
-              <option value="戶外（無建築）" id="t_opt_outdoor">戶外（無建築）</option>
-              <option value="B3">B3</option>
-              <option value="B2">B2</option>
-              <option value="B1">B1</option>
-              <option value="1F" id="t_opt_1f">1F（地面）</option>
-              <option value="2F">2F</option>
-              <option value="3F">3F</option>
-              <option value="4F">4F</option>
-              <option value="5F+" id="t_opt_5p">5F 以上</option>
-              <option value="屋頂" id="t_opt_roof">屋頂</option>
-            </select>
-            <div class="chips" aria-hidden="true">
-              <span class="chip" data-level="1F" id="t_chip_ground">地面</span>
-              <span class="chip" data-level="B1" id="t_chip_b1">地下</span>
-              <span class="chip" data-level="2F" id="t_chip_up">樓上</span>
-            </div>
-          </div>
-          <div>
-            <label for="floor_hint" id="t_lab_floor">位置描述 <span style="color:#ef4444">*</span></label>
-            <input id="floor_hint" name="floor_hint" type="text" placeholder="例：南棟 2F 靠電梯、B1 超商後方、戶外西側涼亭旁" required />
-            <div class="hint" id="t_hint_floor">請提供到達指引：靠近哪個店/電梯/樓梯/出入口，或「地下/地面/樓上」。</div>
-          </div>
-        </div>
+      <label id="t_floor_lab">樓層 / 位置（選填）</label>
+      <input id="floor_hint" placeholder="例：地下1F / 2F / 入口旁"/>
 
-        <label for="entrance_hint" id="t_lab_entr">入口/導引（選填）</label>
-        <textarea id="entrance_hint" name="entrance_hint" placeholder="例：從中庭電扶梯上 2F 左轉 30 公尺；捷運 X 出口出站右轉直走。"></textarea>
+      <label id="t_ent_lab">入口提示（選填）</label>
+      <textarea id="entrance_hint" rows="3" placeholder="例：從北側大門進入右轉，靠近電梯旁"></textarea>
 
-        <div class="row two">
-          <div>
-            <label for="access_note" id="t_lab_access">是否需密碼/店員（選填）</label>
-            <input id="access_note" name="access_note" type="text" placeholder="例：需店員開門 / 櫃台索取密碼 1024" />
-          </div>
-          <div>
-            <label for="open_hours" id="t_lab_hours">開放時間（選填）</label>
-            <input id="open_hours" name="open_hours" type="text" placeholder="例：每日 07:00–22:00 / 週一公休" />
-          </div>
-        </div>
-
-        <button type="submit" id="submitBtn">送出</button>
-        <div id="msg" class="msg"></div>
-
-        <div class="footer-note" id="t_footer">
-          送出後會寫入主資料。若提供 lat/lon 會直接使用座標，否則以地址轉換。<br/>
-          建議盡量填寫「樓層/位置描述」與「入口/導引」，能讓使用者更快找到廁所。
-        </div>
-      </form>
+      <button class="btn" id="btn">送出</button>
+      <div class="note" id="t_priv_note">送出代表你同意我們用於改善服務；可隨時要求刪除。</div>
     </div>
   </div>
 
-  <script>
-    const I18N = { /* 你原本 I18N 內容不變：太長我就不重貼，請保留原本整段 */ };
-  </script>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script>
-    function normLang(x){
-      x = (x || "").toLowerCase();
-      if (x.startsWith("en")) return "en";
-      return "zh";
+<script>
+  const I18N = {
+    zh: {
+      title:"新增廁所",
+      intro:"請盡量提供樓層與入口提示，能大幅降低使用者迷路風險。",
+      name_lab:"廁所名稱 *",
+      name_ph:"例如：五常公園 公廁 / XX商場",
+      name_note:"建築物內請寫到館別/翼/區域，例如：A館南棟 2F 廁所。",
+      uid_lab:"你的 LINE ID",
+      uid_note:"系統會自動帶入你的 LINE UID。",
+      addr_lab:"地址 *",
+      addr_ph:"請輸入完整地址，例如：新北市...",
+      addr_note:"若剛在 LINE 傳了位置，這裡會自動帶入 OSM 友善地址；不是要新增此地點就直接修改或刪除即可。",
+      lat_lab:"緯度 (lat) *",
+      lon_lab:"經度 (lon) *",
+      floor_lab:"樓層 / 位置（選填）",
+      floor_ph:"例：地下1F / 2F / 入口旁",
+      ent_lab:"入口提示（選填）",
+      ent_ph:"例：從北側大門進入右轉，靠近電梯旁",
+      btn:"送出",
+      priv:"送出代表你同意我們用於改善服務；可隨時要求刪除。",
+      missing:"請填寫必填欄位（名稱、地址、座標）",
+      sending:"送出中…",
+      ok:"已送出，感謝！",
+      fail:"送出失敗，請稍後再試",
+    },
+    en: {
+      title:"Add Restroom",
+      intro:"Please include floor and entrance hints to reduce the chance users get lost.",
+      name_lab:"Restroom name *",
+      name_ph:"e.g., Wuchang Park / XX Mall",
+      name_note:"For indoor locations, include building/wing/area, e.g., Building A South Wing 2F Restroom.",
+      uid_lab:"Your LINE ID",
+      uid_note:"We’ll auto-fill your LINE UID.",
+      addr_lab:"Address *",
+      addr_ph:"Enter full address…",
+      addr_note:"If you just shared your location in LINE, we may auto-fill a friendly OSM address. Edit it if needed.",
+      lat_lab:"Latitude (lat) *",
+      lon_lab:"Longitude (lon) *",
+      floor_lab:"Floor / location (optional)",
+      floor_ph:"e.g., B1 / 2F / near entrance",
+      ent_lab:"Entrance hint (optional)",
+      ent_ph:"e.g., Enter from north gate, turn right, next to the elevator",
+      btn:"Submit",
+      priv:"By submitting, you agree we may use it to improve the service. You can request deletion anytime.",
+      missing:"Please fill required fields (name, address, coordinates).",
+      sending:"Submitting…",
+      ok:"Submitted. Thank you!",
+      fail:"Submit failed. Please try again.",
+    }
+  };
+
+  function normLang(x){
+    x = (x || "").toLowerCase();
+    if (x.startsWith("en")) return "en";
+    return "zh";
+  }
+  function getLang(){
+    const p = new URLSearchParams(location.search);
+    const q = p.get("lang");
+    if (q) return normLang(q);
+    return normLang(navigator.language || "zh");
+  }
+  const LANG = getLang();
+  const T = I18N[LANG] || I18N.zh;
+  document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+
+  const setText=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  setText("t_title", T.title);
+  setText("t_h1", T.title);
+  setText("t_intro", T.intro);
+  setText("t_name_lab", T.name_lab);
+  setText("t_name_note", T.name_note);
+  setText("t_uid_lab", T.uid_lab);
+  setText("t_uid_note", T.uid_note);
+  setText("t_addr_lab", T.addr_lab);
+  setText("t_addr_note", T.addr_note);
+  setText("t_lat_lab", T.lat_lab);
+  setText("t_lon_lab", T.lon_lab);
+  setText("t_floor_lab", T.floor_lab);
+  setText("t_ent_lab", T.ent_lab);
+  setText("btn", T.btn);
+  setText("t_priv_note", T.priv);
+
+  document.getElementById("name").placeholder = T.name_ph;
+  document.getElementById("address").placeholder = T.addr_ph;
+  document.getElementById("floor_hint").placeholder = T.floor_ph;
+  document.getElementById("entrance_hint").placeholder = T.ent_ph;
+  document.title = T.title;
+
+  // Fill from query params
+  const qs = new URLSearchParams(location.search);
+  const q = (k)=>qs.get(k)||"";
+  const fillIfEmpty=(id,val)=>{const el=document.getElementById(id); if(el && !el.value && val) el.value=val;};
+
+  fillIfEmpty("uid", q("user_id") || q("uid"));
+  fillIfEmpty("address", q("address"));
+  fillIfEmpty("lat", q("lat"));
+  fillIfEmpty("lon", q("lon"));
+
+  // Submit
+  const btn = document.getElementById("btn");
+  const toast = document.getElementById("toast");
+  function showToast(msg, err=false){
+    toast.textContent = msg;
+    toast.classList.toggle("err", err);
+    toast.style.display="block";
+    setTimeout(()=>toast.style.display="none", 2200);
+  }
+
+  btn.addEventListener("click", async ()=>{
+    const payload = {
+      name: document.getElementById("name").value.trim(),
+      address: document.getElementById("address").value.trim(),
+      lat: document.getElementById("lat").value.trim(),
+      lon: document.getElementById("lon").value.trim(),
+      uid: document.getElementById("uid").value.trim(),
+      floor_hint: document.getElementById("floor_hint").value.trim(),
+      entrance_hint: document.getElementById("entrance_hint").value.trim(),
+      source: "user",
+      lang: LANG
+    };
+
+    if (!payload.name || !payload.address || !payload.lat || !payload.lon) {
+      showToast(T.missing, true);
+      return;
     }
 
-    function getQueryLang(){
-      const p = new URLSearchParams(location.search);
-      const q = p.get("lang");
-      return q ? normLang(q) : "";
-    }
+    btn.disabled = true;
+    btn.textContent = T.sending;
 
-    async function detectLang(){
-      const q = getQueryLang();
-      if (q) return q;
-
-      const liffId = "{{ liff_id|default('', true) }}";
-      if (window.liff && liffId) {
-        try {
-          await liff.init({ liffId });
-          const l = liff.getLanguage();
-          if (l) return normLang(l);
-        } catch (e) {
-          console.warn("LIFF init failed:", e);
-        }
+    try{
+      const r = await fetch("/submit_toilet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(()=>({}));
+      if (r.ok && j.ok) {
+        showToast(T.ok);
+        setTimeout(()=>{ try { window.close(); } catch(e){} }, 800);
       } else {
-        try {
-          if (window.liff && typeof liff.getLanguage === "function") {
-            const l = liff.getLanguage();
-            if (l) return normLang(l);
-          }
-        } catch {}
+        showToast((j.message || T.fail), true);
+        btn.disabled = false;
+        btn.textContent = T.btn;
       }
-
-      return normLang(navigator.language || "zh");
+    }catch(e){
+      console.error(e);
+      showToast(T.fail, true);
+      btn.disabled = false;
+      btn.textContent = T.btn;
     }
-
-    function ensureLangInUrl(lang){
-      const p = new URLSearchParams(location.search);
-      if (p.get("lang")) return;
-      p.set("lang", lang);
-      history.replaceState({}, "", location.pathname + "?" + p.toString());
-    }
-
-    function applyI18n(LANG){
-      const T = I18N[LANG] || I18N.zh;
-
-      document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
-      document.title = T.title;
-
-      const setText = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
-      const setPH = (id, val)=>{ const el=document.getElementById(id); if(el) el.placeholder = val; };
-
-      setText("t_title", T.title);
-      setText("t_h1", T.title);
-      setText("t_sub", T.sub);
-
-      setText("t_lab_name", T.lab_name + " ");
-      setPH("name", T.ph_name);
-      setText("t_hint_name", T.hint_name);
-
-      setText("t_lab_uid", T.lab_uid);
-      setText("t_hint_uid", T.hint_uid);
-
-      setText("t_lab_addr", T.lab_addr + " ");
-      setPH("address", T.ph_addr);
-      setText("t_hint_addr", T.hint_addr);
-
-      setText("t_lab_lat", T.lab_lat);
-      setText("t_lab_lon", T.lab_lon);
-
-      setText("btnGeo", T.btn_geo);
-      setText("mapPreview", T.map_preview);
-      setText("t_map_note", T.map_note);
-
-      setText("t_lab_level", T.level);
-      setText("t_opt_level0", T.opt_level0);
-      setText("t_opt_outdoor", T.opt_outdoor);
-      setText("t_opt_1f", T.opt_1f);
-      setText("t_opt_5p", T.opt_5p);
-      setText("t_opt_roof", T.opt_roof);
-      setText("t_chip_ground", T.chip_ground);
-      setText("t_chip_b1", T.chip_b1);
-      setText("t_chip_up", T.chip_up);
-
-      setText("t_lab_floor", T.lab_floor + " ");
-      setPH("floor_hint", T.ph_floor);
-      setText("t_hint_floor", T.hint_floor);
-
-      setText("t_lab_entr", T.lab_entr);
-      setPH("entrance_hint", T.ph_entr);
-
-      setText("t_lab_access", T.lab_access);
-      setPH("access_note", T.ph_access);
-
-      setText("t_lab_hours", T.lab_hours);
-      setPH("open_hours", T.ph_hours);
-
-      setText("submitBtn", T.submit);
-      document.getElementById("t_footer").innerHTML = T.footer;
-
-      return T;
-    }
-
-    (async function main(){
-      // 1) 先決定語言
-      const LANG = await detectLang();
-      ensureLangInUrl(LANG);
-
-      // 2) 套用 i18n
-      const T = applyI18n(LANG);
-
-      // 3) 你的原本 submit / geo / reverse geocode 邏輯：只要把裡面的 LANG/T 用這裡的即可
-      (function () {
-        const $ = (sel) => document.querySelector(sel);
-        const form = $("#toiletForm");
-        const btn = $("#submitBtn");
-        const msg = $("#msg");
-        const uidInput = $("#user_id");
-        const addrInput = $("#address");
-        const latInput = $("#lat");
-        const lonInput = $("#lon");
-        const levelSel = $("#level");
-        const mapPreview = $("#mapPreview");
-
-        if (!uidInput.value) { uidInput.value = "web"; }
-
-        document.querySelectorAll(".chip").forEach(ch => {
-          ch.addEventListener("click", () => { levelSel.value = ch.dataset.level || ""; });
-        });
-
-        function updateMapPreview() {
-          const lat = (latInput.value || "").trim();
-          const lon = (lonInput.value || "").trim();
-          if (lat && lon) {
-            mapPreview.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
-          } else {
-            const q = (addrInput.value || "").trim();
-            mapPreview.href = q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : "#";
-          }
-        }
-        [latInput, lonInput, addrInput].forEach(el => el.addEventListener("input", updateMapPreview));
-        updateMapPreview();
-
-        $("#btnGeo").addEventListener("click", () => {
-          if (!navigator.geolocation) return showErr(T.geo_unsup);
-          btn.disabled = true;
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              latInput.value = pos.coords.latitude.toFixed(6);
-              lonInput.value = pos.coords.longitude.toFixed(6);
-              showOk(T.geo_ok);
-              btn.disabled = false;
-              updateMapPreview();
-            },
-            () => {
-              showErr(T.geo_fail);
-              btn.disabled = false;
-            },
-            { enableHighAccuracy: true, timeout: 8000 }
-          );
-        });
-
-        (async function maybeReverseGeocode() {
-          const hasAddress = (addrInput.value || "").trim().length > 0;
-          const lat = (latInput.value || "").trim() || new URLSearchParams(location.search).get("lat");
-          const lon = (lonInput.value || "").trim() || new URLSearchParams(location.search).get("lon");
-          if (hasAddress || !lat || !lon) return;
-
-          latInput.value = lat;
-          lonInput.value = lon;
-
-          try {
-            const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
-            const res = await fetch(url, { headers: { "Accept": "application/json" } });
-            if (!res.ok) throw new Error("reverse geocode failed");
-            const data = await res.json();
-
-            const a = data.address || {};
-            const pretty = [
-              a.country || "",
-              a.state || a.region || "",
-              a.city || a.town || a.village || a.county || "",
-              a.suburb || a.neighbourhood || "",
-              a.road || "",
-              a.house_number || "",
-              a.postcode || ""
-            ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-
-            addrInput.value = pretty || (data.display_name || "");
-            updateMapPreview();
-          } catch (e) {
-            console.warn("OSM reverse geocode failed", e);
-          }
-        })();
-
-        form.addEventListener("submit", async (e) => {
-          e.preventDefault();
-          msg.className = "msg"; msg.style.display = "none"; msg.textContent = "";
-
-          const name = $("#name").value.trim();
-          const address = addrInput.value.trim();
-          const user_id = uidInput.value.trim() || "web";
-          const lat = (latInput.value || "").trim();
-          const lon = (lonInput.value || "").trim();
-          const level = (levelSel.value || "").trim();
-          const floor_hint = ($("#floor_hint").value || "").trim();
-          const entrance_hint = ($("#entrance_hint").value || "").trim();
-          const access_note = ($("#access_note").value || "").trim();
-          const open_hours = ($("#open_hours").value || "").trim();
-
-          if (!name || !address) return showErr(T.err_need_name_addr);
-          if (floor_hint.length < 4) return showErr(T.err_floor_len);
-
-          btn.disabled = true; btn.textContent = T.submitting;
-
-          try {
-            const payload = { lang: LANG, user_id, name, address, floor_hint, level, entrance_hint, access_note, open_hours };
-            if (lat && lon) { payload.lat = lat; payload.lon = lon; }
-
-            const res = await fetch("/submit_toilet", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
-            const data = await res.json().catch(() => ({}));
-
-            if (res.ok && data && data.success) {
-              showOk(data.message || T.ok_added);
-              $("#name").value = "";
-              $("#floor_hint").value = "";
-              $("#entrance_hint").value = "";
-              $("#access_note").value = "";
-              $("#open_hours").value = "";
-              levelSel.value = "";
-            } else {
-              showErr((data && data.message) || T.fail_later);
-            }
-          } catch {
-            showErr(T.net_err);
-          } finally {
-            btn.disabled = false; btn.textContent = T.submit;
-          }
-        });
-
-        function showOk(text) {
-          msg.className = "msg ok";
-          msg.textContent = text;
-          msg.style.display = "block";
-        }
-        function showErr(text) {
-          msg.className = "msg err";
-          msg.textContent = "❌ " + text;
-          msg.style.display = "block";
-        }
-      })();
-    })();
-  </script>
+  });
+</script>
 </body>
 </html>
