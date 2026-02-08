@@ -96,11 +96,11 @@
     };
 
     function normLang(x){
-      x = (x || "").toLowerCase();
-      if (x.startsWith("en")) return "en";
-      return "zh";
-    }
-    function getQueryLang(){
+  x = (x || "").toLowerCase();
+  if (x.startsWith("zh")) return "zh";
+  return "en";
+}
+function getQueryLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
       return q ? normLang(q) : "";
@@ -287,9 +287,21 @@
     }
 
     async function detectLangAfterInit(){
-      // Follow phone/system language only
+      // 1) URL
+      const q = getQueryLang();
+      if (q) return q;
+
+      // 2) LIFF（需要 init 後才準）
+      try {
+        if (window.liff && typeof liff.getLanguage === "function") {
+          const l = liff.getLanguage();
+          if (l) return normLang(l);
+        }
+      } catch {}
+
+      // 3) fallback
       return normLang(navigator.language || "zh");
-}
+    }
 
     async function main(){
       const loading=document.getElementById("loading");

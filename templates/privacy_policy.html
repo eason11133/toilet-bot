@@ -115,11 +115,14 @@ const I18N = {
 
 function normLang(x){
   x = (x || "").toLowerCase();
-  if (x.startsWith("en")) return "en";
-  return "zh";
+  if (x.startsWith("zh")) return "zh";
+  return "en";
 }
 function getLang(){
-      return normLang(navigator.language || "zh");
+  const p = new URLSearchParams(location.search);
+  const q = p.get("lang");
+  if (q) return normLang(q);
+  return normLang(navigator.language || "zh");
 }
 const LANG = getLang();
 const T = I18N[LANG] || I18N.zh;
