@@ -1573,8 +1573,7 @@ def ensure_consent_or_prompt(user_id: str):
 
 # === 從 Google Sheets 查使用者新增廁所 ===
 # 設定 SQLite 資料庫位置
-CACHE_DB_PATH = "cache.db"
-
+CACHE_DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
 # 建立 SQLite 連線
 def create_cache_db():
     if not os.path.exists(CACHE_DB_PATH):
@@ -5017,15 +5016,21 @@ def handle_postback(event):
     # ✅ richmenuswitch：只做「切換確認」，不要走 gate/不要觸發其它功能
     #    （避免你覺得「沒切成功」其實只是 LINE UI 快取/後端沒回覆）
     if _switch in ("more", "main"):
-        # 若切換選單時有帶 lang，才更新使用者語言
+        # 若切換選單時有帶 lang，才更新使用者語言（切換 menu 才允許改語言，避免一般 cmd 夾帶 lang 造成誤切）
         if _lang in ("en", "zh"):
             try:
                 set_user_lang(uid, _lang)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"set_user_lang failed (switch): uid={uid} lang={_lang} err={e}", exc_info=True)
+
+        # 讀回目前語言（確保真的寫進 DB）
+        lang_now = get_user_lang(uid)
+        if _lang in ("en", "zh") and lang_now != _lang:
+            logging.warning(f"language mismatch after switch: uid={uid} expect={_lang} got={lang_now}")
+
         safe_reply(
             event,
-            TextSendMessage(text=("✅ Menu switched" if get_user_lang(uid) == "en" else "✅ 已切換選單"))
+            TextSendMessage(text=("✅ Menu switched" if lang_now == "en" else "✅ 已切換選單"))
         )
         return
 
