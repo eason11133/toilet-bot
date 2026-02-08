@@ -159,68 +159,22 @@
         };
 
         function normLang(x){
-        x = (x || "").toLowerCase();
-        if (x.startsWith("en")) return "en";
-        return "zh";
+          x = (x || "").toLowerCase();
+          if (x.startsWith("en")) return "en";
+          return "zh";
         }
-
-        /**
-         * 語言優先序（符合你要的 #1：跟 bot 切換走）
-         * 1) URL ?lang=  （後端/機器人一定要帶這個）
-         * 2) 伺服器注入 {{ lang }}（可選，沒注入就空字串）
-         * 3) localStorage（避免分享/重整掉語言）
-         * 4) LIFF 語言（LINE app 語言，不等於 bot）
-         * 5) navigator.language
-         */
-        const SERVER_LANG_RAW = "{{ lang|default('', true) }}";
-
         function getLang(){
-        try{
-            const p = new URLSearchParams(location.search);
-            const q = p.get("lang");
-            if (q) return normLang(q);
-
-            // 若你後端有傳 lang 進模板，這裡可直接吃到（沒有也沒差）
-            if (SERVER_LANG_RAW && !SERVER_LANG_RAW.includes("{{")) {
-            return normLang(SERVER_LANG_RAW);
-            }
-
-            try{
-            const ls = localStorage.getItem("lang");
-            if (ls) return normLang(ls);
-            }catch{}
-
-            try{
-            if (window.liff && typeof liff.getLanguage === "function"){
-                const l = liff.getLanguage();
-                if (l) return normLang(l);
-            }
-            }catch{}
-
-            return normLang(navigator.language || "zh");
-        }catch{
-            return "zh";
-        }
+          const p = new URLSearchParams(location.search);
+          const q = p.get("lang");
+          if (q) return normLang(q);
+          try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
+          return normLang(navigator.language || "zh");
         }
 
-        let LANG = getLang();
-
-        // 記住語言，避免下次又回中文
-        try{ localStorage.setItem("lang", LANG); }catch{}
-
-        // URL 沒帶 lang 就補上（分享/重整/返回都不會掉）
-        (function ensureLangInUrl(lang){
-        try{
-            const p = new URLSearchParams(location.search);
-            if (p.get("lang")) return;
-            p.set("lang", lang);
-            history.replaceState({}, "", location.pathname + "?" + p.toString() + location.hash);
-        }catch{}
-        })(LANG);
-
+        const LANG = getLang();
         const T = I18N[LANG] || I18N.zh;
-        document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
 
+        document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
 
         // title
         const toiletName = "{{ toilet_name }}";
