@@ -164,12 +164,8 @@
           return "zh";
         }
         function getLang(){
-          const p = new URLSearchParams(location.search);
-          const q = p.get("lang");
-          if (q) return normLang(q);
-          try { if (window.liff && typeof liff.getLanguage === "function") return normLang(liff.getLanguage()); } catch {}
-          return normLang(navigator.language || "zh");
-        }
+      return normLang(navigator.language || "zh");
+}
 
         const LANG = getLang();
         const T = I18N[LANG] || I18N.zh;

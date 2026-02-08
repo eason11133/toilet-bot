@@ -287,21 +287,9 @@
     }
 
     async function detectLangAfterInit(){
-      // 1) URL
-      const q = getQueryLang();
-      if (q) return q;
-
-      // 2) LIFF（需要 init 後才準）
-      try {
-        if (window.liff && typeof liff.getLanguage === "function") {
-          const l = liff.getLanguage();
-          if (l) return normLang(l);
-        }
-      } catch {}
-
-      // 3) fallback
+      // Follow phone/system language only
       return normLang(navigator.language || "zh");
-    }
+}
 
     async function main(){
       const loading=document.getElementById("loading");

@@ -75,11 +75,8 @@
       return "zh";
     }
     function getLang(){
-      const p = new URLSearchParams(location.search);
-      const q = p.get("lang");
-      if (q) return normLang(q);
       return normLang(navigator.language || "zh");
-    }
+}
     const LANG = getLang();
     const T = I18N[LANG] || I18N.zh;
 
