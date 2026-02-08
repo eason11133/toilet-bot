@@ -282,11 +282,8 @@
 
     async function initLiffBestEffort(){
       if (!window.liff || !LIFF_ID) return false;
-      try {
-        if (!window.liff || !LIFF_ID) return false;
-        await liff.init({ liffId: LIFF_ID });
-        return true;
-      } catch (e) { return false; }
+      try { await liff.init({ liffId: LIFF_ID }); return true; }
+      catch (e) { return false; }
     }
 
     async function detectLangAfterInit(){

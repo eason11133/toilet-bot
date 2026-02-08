@@ -149,8 +149,7 @@
     setText("noBtn", T.no);
 
     /** ===== original ===== */
-    const RAW_LIFF_ID = "{{ liff_id }}";
-const LIFF_ID = (RAW_LIFF_ID && !RAW_LIFF_ID.includes("{{") && RAW_LIFF_ID.trim() !== "") ? RAW_LIFF_ID.trim() : null;
+    const LIFF_ID = "{{ liff_id }}";
     const okBtn   = document.getElementById('okBtn');
     const noBtn   = document.getElementById('noBtn');
     const agree   = document.getElementById('agreeChk');
@@ -170,15 +169,8 @@ const LIFF_ID = (RAW_LIFF_ID && !RAW_LIFF_ID.includes("{{") && RAW_LIFF_ID.trim(
 
     async function init() {
       try {
-        if (!window.liff || !LIFF_ID) {
-          // Not a LIFF context (or liffId not injected). Show guidance and stay in web mode.
-          ctxHint.textContent = T.timeout;
-          tips.style.display = "block";
-          tips.innerHTML = T.timeout_tip;
-          return;
-        }
         await liff.init({ liffId: LIFF_ID });
-// 若非 LINE 內打開也可以使用，但需要先登入以取得 profile
+        // 若非 LINE 內打開也可以使用，但需要先登入以取得 profile
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: window.location.href });
           return;

@@ -79,8 +79,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
 });
 
 /** ===== original ===== */
-const RAW_LIFF_ID = "{{ liff_id }}";
-const LIFF_ID = (RAW_LIFF_ID && !RAW_LIFF_ID.includes("{{") && RAW_LIFF_ID.trim() !== "") ? RAW_LIFF_ID.trim() : null;      // 後端注入（可用與狀態同一組）
+const LIFF_ID = "{{ liff_id }}";      // 後端注入（可用與狀態同一組）
 const PUBLIC_URL = "{{ public_url }}";
 
 function card(a){
@@ -108,7 +107,7 @@ async function main(){
 
   let userId="";
   try{
-    if (window.liff && LIFF_ID){ await liff.init({ liffId: LIFF_ID }); }
+    if (LIFF_ID && LIFF_ID!="{{ liff_id }}"){ await liff.init({ liffId: LIFF_ID }); }
     const p = await liff.getProfile();
     userId = p.userId || "";
   }catch(e){

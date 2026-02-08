@@ -1,142 +1,363 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title id="t_title">{{ toilet_name }}</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,"Noto Sans TC",sans-serif;margin:0;background:#f6f8fb;color:#111}
-    .wrap{max-width:860px;margin:18px auto;padding:0 14px}
-    h1{font-size:28px;margin:6px 0 8px}
-    .muted{color:#667085}
-    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#eef2ff;color:#3b5bcc;font-size:12px;margin-right:8px}
-    .card{background:#fff;border:1px solid #e6e9ef;border-radius:14px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
-    .metric{flex:1;min-width:260px;border-left:6px solid #6aa9ff;background:#eef7ff}
-    .metric.alt{border-left-color:#ffb020;background:#fff6e5}
-    .metric h3{margin:0 0 6px;font-size:16px}
-    .metric .big{font-size:22px;font-weight:800}
-    .hint{font-size:12px;color:#667085;margin-top:4px}
-    .empty{padding:12px 14px;border-radius:12px;background:#f3f4f6;color:#475467}
-    .list{margin:0;padding-left:18px}
-    .list li{margin:6px 0}
-    .chartWrap{height:220px;display:flex;align-items:center;justify-content:center;color:#98a2b3;border:1px dashed #cfd4dc;border-radius:12px;background:#fafafa}
-  </style>
+    <meta charset="UTF-8" />
+    <title id="t_title">{{ toilet_name }} 回饋</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; color: #333; }
+        h2 { color: #2C3E50; margin-bottom: 6px; }
+        .addr { color: #666; margin-top: 0; }
+        .cleanliness-score { background-color: #e0f7fa; padding: 10px; border-left: 5px solid #00acc1; margin: 15px 0; font-weight: bold; }
+        .nowcast-box { background:#fff7e6; padding:10px; border-left:5px solid #ff9800; margin:12px 0; }
+        .summary-box { background: #fff; border-radius: 8px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); white-space: pre-line; }
+        .section-title { margin-top: 24px; font-weight: bold; color: #2C3E50; }
+        ul { list-style-type: none; padding: 0; }
+        li { background-color: #fff; margin: 10px 0; padding: 10px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+        .toggle-button { background: none; border: none; color: #007BFF; cursor: pointer; font-size: 1em; margin-bottom: 10px; }
+        .comment { font-style: italic; color: #888; }
+        .collapsed { display: none; }
+        .no-feedback { color: #999; }
+        #cleanlinessChart { width: 100%; height: 300px; margin-top: 14px; }
+        .muted { color:#888; font-size: 12px; }
+        .meta { color:#555; }
+    </style>
+    <script src="https://static.line-scdn.net/liff/edge/versions/2.23.0/sdk.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <div class="pill" id="t_src">Source: Government Open Data</div>
-    <h1 id="h1">{{ toilet_name }}</h1>
-    <div class="muted" id="addr">{{ address or "" }}</div>
-    <div class="muted" id="coords">{{ lat }}, {{ lon }}</div>
+    <h2 id="t_h2">{{ toilet_name }}</h2>
+    {% if address %}<p class="addr">{{ address }}</p>{% endif %}
 
-    <div class="row">
-      <div class="card metric">
-        <h3 id="t_avg">Average predicted cleanliness (max 5)</h3>
-        <div class="big" id="avgVal">{{ avg_pred_score if avg_pred_score is not none else "N/A" }}</div>
-      </div>
-      <div class="card metric alt">
-        <h3 id="t_rt">Real-time cleanliness</h3>
-        <div id="rtVal">{{ realtime_summary or "" }}</div>
-        <div class="hint" id="t_rt_hint">* Real-time estimate from recent feedback. Parentheses show 95% CI; n is the sample size.</div>
-      </div>
+    <div class="cleanliness-score">
+        <span id="t_avg_label">平均預測清潔分數(最高5分)：</span><span id="avgPredScore">未預測</span>
     </div>
 
-    <div class="card" id="summaryCard">
-      <div id="summaryText" class="{{ 'empty' if not has_feedback else '' }}">{{ summary or "" }}</div>
+    <div class="nowcast-box">
+        <div id="nowcastText">即時清潔指數載入中…</div>
+        <div class="muted" id="t_nowcast_note">* 以上為最近回饋的即時估計，括號為 95% 信賴區間；n 為納入計算的筆數</div>
     </div>
 
-    <div class="card">
-      <h3 id="t_trend">Cleanliness Trend</h3>
-      <div class="chartWrap" id="chartHint">—</div>
-      <div class="hint" id="t_trend_hint">Chart is shown when there is enough data.</div>
-    </div>
+    {% if summary %}
+      <div class="summary-box">{{ summary }}</div>
+    {% endif %}
 
-    <div class="card">
-      <h3 id="t_userfb">User Feedback</h3>
-      {% if feedbacks and feedbacks|length > 0 %}
-        <ul class="list">
-          {% for f in feedbacks %}
-          <li>
-            <b>{{ f.get("rating","") }}</b>
-            {% if f.get("time_of_use") %}<span class="muted">({{ f.get("time_of_use") }})</span>{% endif %}
-            {% if f.get("comment") %} — {{ f.get("comment") }}{% endif %}
-          </li>
-          {% endfor %}
+    <div class="section-title" id="t_trend">清潔度趨勢</div>
+    <canvas id="cleanlinessChart"></canvas>
+
+    <div class="section-title" id="t_feedbacks">使用者回饋</div>
+    {% if feedbacks and feedbacks|length > 0 %}
+        {% if feedbacks|length > 1 %}
+            <button class="toggle-button" id="toggleBtn">▶️ 展開其他 {{ feedbacks|length - 1 }} 筆使用者回饋</button>
+        {% endif %}
+        <ul id="feedbackList">
+            <li>
+                <p class="meta">
+                    <strong>🌟 <span class="t_rate">評分:</span></strong> {{ feedbacks[0].rating }} ｜ 
+                    <strong>🧻 <span class="t_paper">衛生紙:</span></strong> {{ feedbacks[0].toilet_paper }} ｜ 
+                    <strong>♿ <span class="t_access">無障礙設施:</span></strong> {{ feedbacks[0].accessibility }} ｜ 
+                    <strong>🕒 <span class="t_time">使用時間:</span></strong>
+                      <span class="v_time">{{ feedbacks[0].time_of_use or '未填寫' }}</span> ｜ 
+                    <strong>🏢 <span class="t_floor">位置/樓層:</span></strong>
+                      <span class="v_floor">{{ feedbacks[0].floor or '樓層未知' }}</span>
+                </p>
+                <p class="comment">
+                    <strong>💬 <span class="t_comment">留言:</span></strong>
+                    {% if feedbacks[0].comment and feedbacks[0].comment.strip() %}
+                        {{ feedbacks[0].comment }}
+                    {% else %}
+                        <span class="v_comment_empty">（無留言）</span>
+                    {% endif %}
+                </p>
+                <p style="color:#999;">📅 {{ feedbacks[0].created_at }}</p>
+            </li>
+
+            {% for c in feedbacks[1:] %}
+                <li class="collapsed">
+                    <p class="meta">
+                        <strong>🌟 <span class="t_rate">評分:</span></strong> {{ c.rating }} ｜ 
+                        <strong>🧻 <span class="t_paper">衛生紙:</span></strong> {{ c.toilet_paper }} ｜ 
+                        <strong>♿ <span class="t_access">無障礙設施:</span></strong> {{ c.accessibility }} ｜ 
+                        <strong>🕒 <span class="t_time">使用時間:</span></strong>
+                          <span class="v_time">{{ c.time_of_use or '未填寫' }}</span> ｜ 
+                        <strong>🏢 <span class="t_floor">位置/樓層:</span></strong>
+                          <span class="v_floor">{{ c.floor or '樓層未知' }}</span>
+                    </p>
+                    <p class="comment">
+                        <strong>💬 <span class="t_comment">留言:</span></strong>
+                        {% if c.comment and c.comment.strip() %}
+                            {{ c.comment }}
+                        {% else %}
+                            <span class="v_comment_empty">（無留言）</span>
+                        {% endif %}
+                    </p>
+                    <p style="color:#999;">📅 {{ c.created_at }}</p>
+                </li>
+            {% endfor %}
         </ul>
-      {% else %}
-        <div class="empty" id="t_no_fb">尚無回饋資料</div>
-      {% endif %}
-    </div>
-  </div>
+    {% else %}
+        <ul><li class="no-feedback" id="t_no_feedback">（目前尚無任何回饋）</li></ul>
+    {% endif %}
 
-<script>
-  const I18N = {
-    zh: {
-      src: "來源：政府開放資料",
-      avg: "平均預測清潔度（最高 5）",
-      rt: "即時清潔度",
-      rt_hint: "* 依據近期回饋估計；括號為 95% 信賴區間；n 為樣本數。",
-      no_fb: "尚無回饋資料",
-      trend: "清潔度趨勢",
-      trend_hint: "資料量足夠時會顯示圖表。",
-      userfb: "使用者回饋"
-    },
-    en: {
-      src: "Source: Government Open Data",
-      avg: "Average predicted cleanliness (max 5)",
-      rt: "Real-time cleanliness",
-      rt_hint: "* Real-time estimate from recent feedback. Parentheses show 95% CI; n is the sample size.",
-      no_fb: "No feedback yet.",
-      trend: "Cleanliness Trend",
-      trend_hint: "Chart is shown when there is enough data.",
-      userfb: "User Feedback"
-    }
-  };
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        /** ===== i18n ===== */
+        const I18N = {
+          zh: {
+            title_suffix: " 回饋",
+            avg_label: "平均預測清潔分數(最高5分)：",
+            not_pred: "未預測",
+            nowcast_loading: "即時清潔指數載入中…",
+            nowcast_note: "* 以上為最近回饋的即時估計，括號為 95% 信賴區間；n 為納入計算的筆數",
+            trend: "清潔度趨勢",
+            feedbacks: "使用者回饋",
+            toggle_prefix: "▶️ 展開其他 ",
+            toggle_suffix: " 筆使用者回饋",
+            rating: "評分:",
+            paper: "衛生紙:",
+            access: "無障礙設施:",
+            time: "使用時間:",
+            floor: "位置/樓層:",
+            comment: "留言:",
+            time_na: "未填寫",
+            floor_na: "樓層未知",
+            no_comment: "（無留言）",
+            no_feedback: "（目前尚無任何回饋）",
+            chart_label: "清潔度預測",
+            x_title: "回饋次數",
+            y_title: "清潔度",
+            nowcast_none: "即時清潔指數：尚無即時資料",
+            nowcast_fmt: (mean, lower, upper, n) => `即時清潔指數：${mean} 分（95% CI：${lower}–${upper}，n=${n}）`,
+            nowcast_fail: "即時清潔指數：載入失敗"
+          },
+          en: {
+            title_suffix: " Feedback",
+            avg_label: "Average predicted cleanliness (max 5): ",
+            not_pred: "N/A",
+            nowcast_loading: "Loading real-time cleanliness…",
+            nowcast_note: "* Real-time estimate from recent feedback. Parentheses show 95% CI; n is the sample size.",
+            trend: "Cleanliness Trend",
+            feedbacks: "User Feedback",
+            toggle_prefix: "▶️ Show ",
+            toggle_suffix: " more feedback(s)",
+            rating: "Rating:",
+            paper: "Toilet paper:",
+            access: "Accessibility:",
+            time: "Time:",
+            floor: "Floor/Location:",
+            comment: "Comment:",
+            time_na: "Not provided",
+            floor_na: "Unknown",
+            no_comment: "(No comment)",
+            no_feedback: "(No feedback yet)",
+            chart_label: "Predicted cleanliness",
+            x_title: "Feedback count",
+            y_title: "Cleanliness",
+            nowcast_none: "Real-time cleanliness: no data yet",
+            nowcast_fmt: (mean, lower, upper, n) => `Real-time cleanliness: ${mean} (95% CI: ${lower}–${upper}, n=${n})`,
+            nowcast_fail: "Real-time cleanliness: failed to load"
+          }
+        };
 
-  function normLang(x){
-    x = (x || "").toLowerCase();
-    if (x.startsWith("en")) return "en";
-    return "zh";
-  }
-  function getLang(){
-    const p = new URLSearchParams(location.search);
-    const q = p.get("lang");
-    if (q) return normLang(q);
-    return normLang(navigator.language || "zh");
-  }
+        function normLang(x){
+        x = (x || "").toLowerCase();
+        if (x.startsWith("en")) return "en";
+        return "zh";
+        }
 
-  const LANG = getLang();
-  const T = I18N[LANG] || I18N.zh;
+        /**
+         * 語言優先序（符合你要的 #1：跟 bot 切換走）
+         * 1) URL ?lang=  （後端/機器人一定要帶這個）
+         * 2) 伺服器注入 {{ lang }}（可選，沒注入就空字串）
+         * 3) localStorage（避免分享/重整掉語言）
+         * 4) LIFF 語言（LINE app 語言，不等於 bot）
+         * 5) navigator.language
+         */
+        const SERVER_LANG_RAW = "{{ lang|default('', true) }}";
 
-  document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+        function getLang(){
+        try{
+            const p = new URLSearchParams(location.search);
+            const q = p.get("lang");
+            if (q) return normLang(q);
 
-  const setText = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
-  setText("t_src", T.src);
-  setText("t_avg", T.avg);
-  setText("t_rt", T.rt);
-  setText("t_rt_hint", T.rt_hint);
-  setText("t_trend", T.trend);
-  setText("t_trend_hint", T.trend_hint);
-  setText("t_userfb", T.userfb);
+            // 若你後端有傳 lang 進模板，這裡可直接吃到（沒有也沒差）
+            if (SERVER_LANG_RAW && !SERVER_LANG_RAW.includes("{{")) {
+            return normLang(SERVER_LANG_RAW);
+            }
 
-  const noFb = document.getElementById("t_no_fb");
-  if (noFb) noFb.textContent = T.no_fb;
+            try{
+            const ls = localStorage.getItem("lang");
+            if (ls) return normLang(ls);
+            }catch{}
 
-  // 標題：如果傳進來是「廁所(…)」，英文時把前綴翻成 Restroom
-  try{
-    const h1 = document.getElementById("h1");
-    const title = h1 ? h1.textContent : document.title;
-    if (LANG === "en" && title.startsWith("廁所")) {
-      const replaced = title.replace(/^廁所/, "Restroom");
-      if (h1) h1.textContent = replaced;
-      document.title = replaced;
-    }
-  }catch{}
+            try{
+            if (window.liff && typeof liff.getLanguage === "function"){
+                const l = liff.getLanguage();
+                if (l) return normLang(l);
+            }
+            }catch{}
 
-  // 趨勢圖：目前後端沒有直接給圖檔，先用提示文字（避免中英混雜）
-  const chart = document.getElementById("chartHint");
-  if (chart) chart.textContent = (LANG === "en") ? "No trend data yet." : "目前尚無趨勢資料";
-</script>
+            return normLang(navigator.language || "zh");
+        }catch{
+            return "zh";
+        }
+        }
+
+        let LANG = getLang();
+
+        // 記住語言，避免下次又回中文
+        try{ localStorage.setItem("lang", LANG); }catch{}
+
+        // URL 沒帶 lang 就補上（分享/重整/返回都不會掉）
+        (function ensureLangInUrl(lang){
+        try{
+            const p = new URLSearchParams(location.search);
+            if (p.get("lang")) return;
+            p.set("lang", lang);
+            history.replaceState({}, "", location.pathname + "?" + p.toString() + location.hash);
+        }catch{}
+        })(LANG);
+
+        const T = I18N[LANG] || I18N.zh;
+        document.documentElement.lang = (LANG === "en") ? "en" : "zh-Hant";
+
+
+        // title
+        const toiletName = "{{ toilet_name }}";
+        document.title = toiletName + T.title_suffix;
+        const tTitle = document.getElementById("t_title");
+        if (tTitle) tTitle.textContent = toiletName + T.title_suffix;
+
+        // static labels
+        const setText = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+        setText("t_avg_label", T.avg_label);
+        setText("t_nowcast_note", T.nowcast_note);
+        setText("t_trend", T.trend);
+        setText("t_feedbacks", T.feedbacks);
+
+        const avgNode = document.getElementById("avgPredScore");
+        if (avgNode && (avgNode.textContent || "").trim() === "未預測") avgNode.textContent = T.not_pred;
+
+        const nowcastBox = document.getElementById("nowcastText");
+        if (nowcastBox) nowcastBox.textContent = T.nowcast_loading;
+
+        // translate meta labels
+        document.querySelectorAll(".t_rate").forEach(n=>n.textContent = T.rating);
+        document.querySelectorAll(".t_paper").forEach(n=>n.textContent = T.paper);
+        document.querySelectorAll(".t_access").forEach(n=>n.textContent = T.access);
+        document.querySelectorAll(".t_time").forEach(n=>n.textContent = T.time);
+        document.querySelectorAll(".t_floor").forEach(n=>n.textContent = T.floor);
+        document.querySelectorAll(".t_comment").forEach(n=>n.textContent = T.comment);
+
+        // DO NOT rewrite body HTML; only swap known placeholders
+        function swapIfExact(selector, from, to){
+          document.querySelectorAll(selector).forEach(el=>{
+            if ((el.textContent || "").trim() === from) el.textContent = to;
+          });
+        }
+
+        if (LANG === "en") {
+          swapIfExact(".v_time", "未填寫", T.time_na);
+          swapIfExact(".v_floor", "樓層未知", T.floor_na);
+          swapIfExact(".v_comment_empty", "（無留言）", T.no_comment);
+          const nf = document.getElementById("t_no_feedback");
+          if (nf) nf.textContent = T.no_feedback;
+        }
+
+        // toggle button text (pure JS, no Jinja)
+        const toggleBtn = document.getElementById("toggleBtn");
+        if (toggleBtn) {
+          const nMore = document.querySelectorAll("#feedbackList li.collapsed").length;
+          toggleBtn.textContent = T.toggle_prefix + nMore + T.toggle_suffix;
+        }
+
+        // expand more
+        if (toggleBtn) {
+          toggleBtn.addEventListener('click', () => {
+            document.querySelectorAll('#feedbackList li.collapsed').forEach(li => li.classList.remove('collapsed'));
+            toggleBtn.style.display = 'none';
+          });
+        }
+
+        // coordinates
+        function getLatLon() {
+            let lat = "{{ lat|default('', true) }}";
+            let lon = "{{ lon|default('', true) }}";
+            if (lat && lon) return {lat, lon};
+            const m = decodeURIComponent(location.pathname).match(/\/toilet_feedback_by_coord\/([^/]+)\/([^/]+)/);
+            if (m && m[1] && m[2]) return { lat: m[1], lon: m[2] };
+            const addrNode = document.querySelector('.addr');
+            if (addrNode) {
+                const m2 = (addrNode.textContent || '').match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
+                if (m2) return { lat: m2[1], lon: m2[2] };
+            }
+            return {lat:'', lon:''};
+        }
+
+        (function drawTrendAndAvg() {
+            const { lat, lon } = getLatLon();
+            if (!lat || !lon) return;
+
+            fetch(`/get_clean_trend_by_coord/${lat}/${lon}?recompute=1&lang=${encodeURIComponent(LANG)}`)
+              .then(r => r.json())
+              .then(data => {
+                  const arr = (data && data.data) ? data.data : [];
+                  const canvas = document.getElementById('cleanlinessChart');
+                  if (!canvas) return;
+                  const ctx = canvas.getContext('2d');
+
+                  const avgNode = document.getElementById('avgPredScore');
+                  if (arr.length > 0) {
+                      const avg = (arr.reduce((s,x)=>s + (Number(x.score)||0), 0) / arr.length).toFixed(2);
+                      if (avgNode) avgNode.textContent = avg;
+                  } else {
+                      if (avgNode) avgNode.textContent = T.not_pred;
+                  }
+
+                  new Chart(ctx, {
+                      type: 'line',
+                      data: {
+                          labels: arr.map((_, i) => `#${i + 1}`),
+                          datasets: [{
+                              label: T.chart_label,
+                              data: arr.map(x => Number(x.score)||null),
+                              borderColor: 'rgba(75, 192, 192, 1)',
+                              fill: false,
+                              tension: 0.3
+                          }]
+                      },
+                      options: {
+                          responsive: true,
+                          scales: {
+                              x: { title: { display: true, text: T.x_title } },
+                              y: { min: 1, max: 5, title: { display: true, text: T.y_title } }
+                          }
+                      }
+                  });
+              })
+              .catch(err => console.error('trend fetch failed:', err));
+
+            fetch(`/get_nowcast_by_coord/${lat}/${lon}?lang=${encodeURIComponent(LANG)}`)
+              .then(r => r.json())
+              .then(data => {
+                  const box = document.getElementById('nowcastText');
+                  if (!box) return;
+                  if (!data || data.success === false || (data.n !== undefined && data.n === 0)) {
+                      box.textContent = T.nowcast_none;
+                      return;
+                  }
+                  const mean = (data.mean !== undefined) ? Number(data.mean).toFixed(2) : '—';
+                  const lower = (data.lower !== undefined) ? Number(data.lower).toFixed(2) : '—';
+                  const upper = (data.upper !== undefined) ? Number(data.upper).toFixed(2) : '—';
+                  const n = (data.n !== undefined) ? data.n : 0;
+                  box.textContent = T.nowcast_fmt(mean, lower, upper, n);
+              })
+              .catch(err => {
+                  console.error('nowcast fetch failed:', err);
+                  const box = document.getElementById('nowcastText');
+                  if (box) box.textContent = T.nowcast_fail;
+              });
+        })();
+    </script>
 </body>
 </html>
