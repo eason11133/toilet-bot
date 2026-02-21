@@ -4097,7 +4097,7 @@ def _get_liff_consent_id() -> str:
 
 @app.route("/consent", methods=["GET"])
 def render_consent_page():
-    liff_id = _get_liff_consent_id()   # 改成讀 consent 專用 ID
+    liff_id = (os.getenv("LIFF_ID") or "").strip()   # 改成讀 consent 專用 ID
 
     if not liff_id:
         logging.error("LIFF_CONSENT_ID not set")
