@@ -12,13 +12,14 @@
     h1{font-size:24px;margin:0 0 6px}
     .muted{color:#b8c6d9}
     .row{margin:14px 0}
-    .btn{display:inline-block;padding:14px 18px;border-radius:12px;border:none;font-size:16px}
+    .btn{display:inline-block;padding:14px 18px;border-radius:12px;border:none;font-size:16px;cursor:pointer}
     .primary{background:#3578e5;color:#fff}
     .ghost{background:transparent;border:1px solid #30465f;color:#e8f0ff}
-    .btn:disabled{opacity:.5}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
     .me{display:flex;gap:12px;align-items:center;background:#0b1b2a;border:1px solid #1a3149;border-radius:12px;padding:12px}
     .dot{width:14px;height:14px;border-radius:50%;background:#274e74;display:inline-block;margin-right:8px}
     a{color:#8fb9ff}
+    code{background:#0b1b2a;border:1px solid #1a3149;padding:2px 6px;border-radius:8px}
   </style>
 </head>
 <body>
@@ -46,7 +47,7 @@
     <div class="row">
       <label style="display:flex;gap:10px;align-items:flex-start;">
         <input id="agreeChk" type="checkbox" checked />
-        <span id="t_chk">我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
+        <span id="t_chk">我已閱讀並同意《<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
       </label>
     </div>
 
@@ -74,7 +75,7 @@
         hello_loading: "您好（讀取中…）",
         hint_loading: "正在從 LINE 取得您的暱稱與 ID",
         hint_connected: "已連線至 LINE 帳號",
-        chk_html: `我已閱讀並同意《<a href="/privacy" target="_blank">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。`,
+        chk_html: `我已閱讀並同意《<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。`,
         ok: "同意並開始使用",
         ok_sending: "送出中…",
         ok_done: "已同意",
@@ -85,7 +86,10 @@
         timeout_tip: "若你是從外部瀏覽器開啟，請回到 LINE 聊天室，點機器人提供的按鈕開啟此頁。",
         init_failed: "初始化失敗：",
         submit_failed_prefix: "送出失敗：",
-        submit_failed_suffix: "。請稍後再試。"
+        submit_failed_suffix: "。請稍後再試。",
+        missing_liff: "頁面缺少 LIFF_ID，無法初始化 LIFF。",
+        missing_liff_tip: "請確認後端 render_template 有傳入 liff_id，或用網址參數帶入，例如：",
+        missing_liff_example: "/consent?liffId=你的LIFF_ID"
       },
       en: {
         title: "Privacy Consent | Restroom Helper",
@@ -100,7 +104,7 @@
         hello_loading: "Hello (loading…)",
         hint_loading: "Getting your display name and ID from LINE",
         hint_connected: "Connected to your LINE account",
-        chk_html: `I have read and agree to the <a href="/privacy" target="_blank">Privacy Policy</a> and Terms of Use. I understand I can’t use the service without consent.`,
+        chk_html: `I have read and agree to the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> and Terms of Use. I understand I can’t use the service without consent.`,
         ok: "Agree & Start",
         ok_sending: "Submitting…",
         ok_done: "Agreed",
@@ -111,16 +115,19 @@
         timeout_tip: "If you opened this in an external browser, go back to LINE and open it from the bot button.",
         init_failed: "Initialization failed: ",
         submit_failed_prefix: "Submit failed: ",
-        submit_failed_suffix: " Please try again later."
+        submit_failed_suffix: " Please try again later.",
+        missing_liff: "This page is missing LIFF_ID, so LIFF cannot be initialized.",
+        missing_liff_tip: "Make sure your backend passes liff_id into the template, or pass it via URL query, e.g.:",
+        missing_liff_example: "/consent?liffId=YOUR_LIFF_ID"
       }
     };
 
     function normLang(x){
-  x = (x || "").toLowerCase();
-  if (x.startsWith("zh")) return "zh";
-  return "en";
-}
-function getLang(){
+      x = (x || "").toLowerCase();
+      if (x.startsWith("zh")) return "zh";
+      return "en";
+    }
+    function getLang(){
       const p = new URLSearchParams(location.search);
       const q = p.get("lang");
       if (q) return normLang(q);
@@ -136,6 +143,11 @@ function getLang(){
 
     function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v; }
     function setHTML(id, v){ const el=document.getElementById(id); if(el) el.innerHTML = v; }
+    function showTips(html){
+      const tips = document.getElementById("tips");
+      tips.style.display = "block";
+      tips.innerHTML = html;
+    }
 
     setText("t_title", T.title);
     setText("t_banner", T.banner);
@@ -147,14 +159,27 @@ function getLang(){
     setText("okBtn", T.ok);
     setText("noBtn", T.no);
 
-    /** ===== original ===== */
-    const LIFF_ID = "{{ liff_id }}";
+    /** ===== LIFF_ID resolve (template -> query -> empty) ===== */
+    // 後端正常情況會把 {{ liff_id }} 替換成真正 ID；若沒替換就會是原字串
+    const TEMPLATE_LIFF_ID = "{{ liff_id }}";
+    function resolveLiffId(){
+      const p = new URLSearchParams(location.search);
+      const q = p.get("liffId") || p.get("liff_id") || p.get("LIFF_ID");
+      // 1) template 有被替換
+      if (TEMPLATE_LIFF_ID && !TEMPLATE_LIFF_ID.includes("{") && TEMPLATE_LIFF_ID.trim().length > 0) {
+        return TEMPLATE_LIFF_ID.trim();
+      }
+      // 2) fallback：用 query string
+      if (q && q.trim().length > 0) return q.trim();
+      return "";
+    }
+    const LIFF_ID = resolveLiffId();
+
     const okBtn   = document.getElementById('okBtn');
     const noBtn   = document.getElementById('noBtn');
     const agree   = document.getElementById('agreeChk');
     const hello   = document.getElementById('hello');
     const ctxHint = document.getElementById('ctxHint');
-    const tips    = document.getElementById('tips');
 
     let userId = "";
     let displayName = "";
@@ -166,25 +191,48 @@ function getLang(){
     }
     agree.addEventListener('change', enableIfReady);
 
+    function setMissingLiffUI(){
+      ctxHint.textContent = T.missing_liff;
+      okBtn.disabled = true;
+      // 給你 debug 資訊：方便你立刻看到到底拿到什麼
+      const safeExample = `<div style="margin-top:10px;">
+        <div>${T.missing_liff_tip}</div>
+        <div><code>${T.missing_liff_example}</code></div>
+        <div style="margin-top:10px;">debug:
+          <ul>
+            <li>template liff_id = <code>${String(TEMPLATE_LIFF_ID).replaceAll("<","&lt;").replaceAll(">","&gt;")}</code></li>
+            <li>resolved LIFF_ID = <code>${String(LIFF_ID).replaceAll("<","&lt;").replaceAll(">","&gt;")}</code></li>
+            <li>url = <code>${location.href.replaceAll("<","&lt;").replaceAll(">","&gt;")}</code></li>
+          </ul>
+        </div>
+      </div>`;
+      showTips(safeExample);
+    }
+
     async function init() {
       try {
+        if (!LIFF_ID) {
+          setMissingLiffUI();
+          return;
+        }
+
         await liff.init({ liffId: LIFF_ID });
+
         // 若非 LINE 內打開也可以使用，但需要先登入以取得 profile
         if (!liff.isLoggedIn()) {
           liff.login({ redirectUri: window.location.href });
           return;
         }
-        const profile = await liff.getProfile(); // 會帶回 userId
+
+        const profile = await liff.getProfile();
         userId = (profile && profile.userId) || "";
         displayName = (profile && profile.displayName) || "";
 
-        // 顯示暱稱
         if (displayName) {
           hello.textContent = displayName + (LANG === "en" ? "" : " 您好");
           ctxHint.textContent = T.hint_connected;
         }
 
-        // 來源型態：在 LINE 客戶端內 or 外部瀏覽器
         sourceType = liff.isInClient() ? "line-client" : "external-browser";
 
         enableIfReady();
@@ -193,13 +241,18 @@ function getLang(){
         setTimeout(() => {
           if (!userId) {
             ctxHint.textContent = T.timeout;
-            tips.style.display = "block";
-            tips.innerHTML = T.timeout_tip;
+            showTips(T.timeout_tip);
           }
         }, 6000);
+
       } catch (e) {
-        ctxHint.textContent = T.init_failed + (e.message || e);
-        tips.style.display = "block";
+        ctxHint.textContent = T.init_failed + (e && e.message ? e.message : String(e));
+        showTips(`<div>debug:
+          <ul>
+            <li>resolved LIFF_ID = <code>${String(LIFF_ID).replaceAll("<","&lt;").replaceAll(">","&gt;")}</code></li>
+            <li>isInClient = <code>${(window.liff && typeof liff.isInClient==="function") ? String(liff.isInClient()) : "n/a"}</code></li>
+          </ul>
+        </div>`);
       }
     }
 
@@ -207,6 +260,7 @@ function getLang(){
       if (!agree.checked || !userId) return;
       okBtn.disabled = true;
       okBtn.textContent = T.ok_sending;
+
       try {
         const res = await fetch("/api/consent", {
           method: "POST",
@@ -221,31 +275,29 @@ function getLang(){
             lang: LANG
           })
         });
+
         const j = await res.json().catch(()=>({}));
         if (res.ok && j.ok !== false) {
           okBtn.textContent = T.ok_done;
-          // 在 LINE 內可直接關閉
-          if (liff.isInClient()) {
-            setTimeout(() => liff.closeWindow(), 400);
+          if (window.liff && typeof liff.isInClient === "function" && liff.isInClient()) {
+            setTimeout(() => { try { liff.closeWindow(); } catch {} }, 400);
           } else {
-            tips.style.display = "block";
-            tips.innerHTML = T.ok_external_done;
+            showTips(T.ok_external_done);
           }
         } else {
           throw new Error(j.message || "consent write failed");
         }
+
       } catch (e) {
         okBtn.disabled = false;
         okBtn.textContent = T.ok;
-        tips.style.display = "block";
-        tips.innerHTML = T.submit_failed_prefix + (e.message||e) + T.submit_failed_suffix;
+        showTips(T.submit_failed_prefix + (e && e.message ? e.message : String(e)) + T.submit_failed_suffix);
       }
     });
 
     noBtn.addEventListener('click', () => {
-      tips.style.display = "block";
-      tips.innerHTML = T.no_msg;
-      try { if (liff.isInClient()) liff.closeWindow(); } catch {}
+      showTips(T.no_msg);
+      try { if (window.liff && typeof liff.isInClient === "function" && liff.isInClient()) liff.closeWindow(); } catch {}
     });
 
     init();
