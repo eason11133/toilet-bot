@@ -4094,7 +4094,16 @@ Feedback data (JSON):
 # === 同意頁面 / 隱私頁 ===
 @app.route("/consent", methods=["GET"])
 def render_consent_page():
-    return render_template("consent.html")
+    liff_id = _get_liff_status_id()   # 讀取環境變數
+
+    if not liff_id:
+        logging.error("LIFF_STATUS_ID / LIFF_ID_STATUS / LIFF_ID not set")
+        return "LIFF ID not set on server", 500
+
+    return render_template(
+        "consent.html",
+        liff_id=liff_id
+    )
 
 @app.route("/privacy", methods=["GET"])
 def render_privacy_page():
