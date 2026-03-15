@@ -10,7 +10,7 @@ import math
 from collections import OrderedDict
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
-from flask import Flask, request, abort, render_template, redirect, url_for, Response
+from flask import Flask, request, abort, render_template, redirect, url_for, Response, jsonify
 from dotenv import load_dotenv
 from urllib.parse import quote, unquote, parse_qs
 import urllib.parse
@@ -1632,6 +1632,93 @@ def save_cache(query_key, data):
 # 快取初始化
 create_cache_db()
 tune_sqlite_for_concurrency()
+
+# ================= Analytics DB =================
+ANALYTICS_DB_PATH = CACHE_DB_PATH
+
+def create_analytics_tables():
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS analytics_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        event_type TEXT,
+        result_count INTEGER,
+        success INTEGER,
+        response_time_ms INTEGER,
+        lat REAL,
+        lon REAL,
+        area_name TEXT,
+        query_text TEXT,
+        created_at TEXT
+    )
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
+
+    conn.commit()
+    conn.close()
+
+create_analytics_tables()
+
+def log_analytics_event(
+    user_id=None,
+    event_type="query",
+    result_count=0,
+    success=1,
+    response_time_ms=None,
+    lat=None,
+    lon=None,
+    area_name=None,
+    query_text=None,
+    created_at=None
+):
+    try:
+        conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO analytics_events
+            (user_id, event_type, result_count, success, response_time_ms, lat, lon, area_name, query_text, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            event_type,
+            int(result_count or 0),
+            int(1 if success else 0),
+            int(response_time_ms) if response_time_ms is not None else None,
+            float(lat) if lat is not None else None,
+            float(lon) if lon is not None else None,
+            area_name,
+            query_text,
+            created_at or datetime.utcnow().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"log_analytics_event failed: {e}")
+
+def get_area_name(lat, lon):
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except Exception:
+        return None
+
+    if 25.040 <= lat <= 25.055 and 121.510 <= lon <= 121.525:
+        return "台北車站"
+    if 25.040 <= lat <= 25.050 and 121.500 <= lon <= 121.510:
+        return "西門町"
+    if 25.028 <= lat <= 25.040 and 121.530 <= lon <= 121.570:
+        return "信義區"
+    if 25.010 <= lat <= 25.025 and 121.525 <= lon <= 121.545:
+        return "公館"
+    if 25.010 <= lat <= 25.020 and 121.455 <= lon <= 121.470:
+        return "板橋車站"
+    return "其他區域"
 
 # 查詢廁所資料
 def query_sheet_toilets(user_lat, user_lon, radius=500):
@@ -4533,268 +4620,226 @@ _DASHBOARD_RANGE_SECONDS = {
 }
 
 
-def _dashboard_range_start(range_key: str):
+def _dashboard_range_to_sqlite(range_key: str):
     now = datetime.utcnow()
-    return now - timedelta(seconds=_DASHBOARD_RANGE_SECONDS.get(range_key, 3600))
 
-
-def _bucket_floor(dt_obj: datetime, range_key: str):
     if range_key == "1h":
-        minute = (dt_obj.minute // 5) * 5
-        return dt_obj.replace(minute=minute, second=0, microsecond=0)
-    if range_key == "1d":
-        return dt_obj.replace(minute=0, second=0, microsecond=0)
-    if range_key in ("7d", "30d"):
-        return dt_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-    if range_key == "1y":
-        return dt_obj.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return dt_obj.replace(second=0, microsecond=0)
-
-
-def _build_bucket_labels(range_key: str):
-    now = datetime.utcnow()
-    labels = []
-    buckets = []
-    if range_key == "1h":
-        start = _bucket_floor(now - timedelta(minutes=55), "1h")
-        for i in range(12):
-            b = start + timedelta(minutes=5 * i)
-            buckets.append(b)
-            labels.append(f"{b.minute}分")
+        start = now - timedelta(hours=1)
+        labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
-        start = _bucket_floor(now - timedelta(hours=23), "1d")
-        for i in range(24):
-            b = start + timedelta(hours=i)
-            buckets.append(b)
-            labels.append(b.strftime("%H:00"))
+        start = now - timedelta(days=1)
+        labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
     elif range_key == "7d":
-        start = _bucket_floor(now - timedelta(days=6), "7d")
-        for i in range(7):
-            b = start + timedelta(days=i)
-            buckets.append(b)
-            labels.append(f"{b.month}/{b.day}")
+        start = now - timedelta(days=7)
+        labels = [f"{i+1}" for i in range(7)]
     elif range_key == "30d":
-        start = _bucket_floor(now - timedelta(days=29), "30d")
-        for i in range(30):
-            b = start + timedelta(days=i)
-            buckets.append(b)
-            labels.append(f"{b.month}/{b.day}")
+        start = now - timedelta(days=30)
+        labels = [f"{i+1}" for i in range(30)]
     else:
-        start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        start = start.replace(month=1) if start.month == 1 else start
-        year = start.year
-        month = start.month - 11
-        while month <= 0:
-            year -= 1
-            month += 12
-        cursor = start.replace(year=year, month=month, day=1)
-        for _ in range(12):
-            buckets.append(cursor)
-            labels.append(f"{cursor.month}月")
-            if cursor.month == 12:
-                cursor = cursor.replace(year=cursor.year + 1, month=1, day=1)
-            else:
-                cursor = cursor.replace(month=cursor.month + 1, day=1)
-    return buckets, labels
+        start = now - timedelta(days=365)
+        labels = [f"{i+1}月" for i in range(12)]
+
+    return start, now, labels
 
 
-def _parse_search_ts(ts_value):
-    if not ts_value:
-        return None
-    s = str(ts_value).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            pass
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        return None
+def _bucket_label(dt_obj, range_key):
+    if range_key == "1h":
+        return f"{(dt_obj.minute // 5) * 5}分"
+    if range_key == "1d":
+        return f"{dt_obj.hour:02d}:00"
+    if range_key in ("7d", "30d"):
+        return f"{dt_obj.day}"
+    return f"{dt_obj.month}月"
 
 
-def _dashboard_summary(range_key: str):
-    start_dt = _dashboard_range_start(range_key)
-    start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
-    conn = _get_db()
+def _generate_dashboard_data(range_key="1h"):
+    start, end, default_labels = _dashboard_range_to_sqlite(range_key)
+
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM search_log WHERE ts >= ?", (start_str,))
-    total_queries = cur.fetchone()[0] or 0
+    cur.execute("""
+        SELECT * FROM analytics_events
+        WHERE created_at >= ? AND created_at <= ?
+        ORDER BY created_at DESC
+    """, (start.isoformat(), end.isoformat()))
+    rows = cur.fetchall()
+    conn.close()
 
-    cur.execute("SELECT COUNT(DISTINCT user_id) FROM search_log WHERE ts >= ? AND user_id IS NOT NULL AND user_id != ''", (start_str,))
-    active_users = cur.fetchone()[0] or 0
+    events = [dict(r) for r in rows]
 
-    cur.execute(
-        """
-        SELECT COUNT(*) FROM (
-            SELECT user_id, MIN(ts) AS first_ts
-            FROM search_log
-            WHERE user_id IS NOT NULL AND user_id != ''
-            GROUP BY user_id
-            HAVING first_ts >= ?
-        )
-        """,
-        (start_str,),
-    )
-    new_users = cur.fetchone()[0] or 0
+    total_queries = len([e for e in events if e["event_type"] in ("location_query", "text_query")])
+    user_ids = [e["user_id"] for e in events if e["user_id"]]
+    active_users = len(set(user_ids))
 
-    cur.execute(
-        """
-        SELECT COUNT(*) FROM (
-            SELECT user_id
-            FROM search_log
-            WHERE user_id IN (
-                SELECT DISTINCT user_id
-                FROM search_log
-                WHERE ts >= ? AND user_id IS NOT NULL AND user_id != ''
-            )
-            GROUP BY user_id
-            HAVING COUNT(DISTINCT substr(ts, 1, 10)) >= 2
-        )
-        """,
-        (start_str,),
-    )
-    returning_users = cur.fetchone()[0] or 0
+    success_events = [e for e in events if e["event_type"] in ("location_query", "text_query")]
+    success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
+    success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
+
+    response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
+    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+
+    no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
+    error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
+
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    new_users = 0
+    returning_users = 0
+
+    for uid in set(user_ids):
+        cur.execute("""
+            SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
+            FROM analytics_events
+            WHERE user_id = ?
+        """, (uid,))
+        r = cur.fetchone()
+        if not r:
+            continue
+        first_seen = r["first_seen"]
+        cnt = r["cnt"] or 0
+        if first_seen and first_seen >= start.isoformat():
+            new_users += 1
+        if cnt >= 2:
+            returning_users += 1
+
     conn.close()
 
     retention_rate = round((returning_users / active_users) * 100, 1) if active_users else 0.0
 
-    return {
-        "totalQueries": total_queries,
-        "activeUsers": active_users,
-        "successRate": None,
-        "avgResponse": None,
-        "newUsers": new_users,
-        "retentionRate": retention_rate,
-        "noResultCount": None,
-        "errorCount": None,
-        "returningUsers": returning_users,
-    }
+    trend_map_queries = {label: 0 for label in default_labels}
+    trend_map_users = {label: set() for label in default_labels}
 
+    for e in events:
+        try:
+            dt_obj = datetime.fromisoformat(e["created_at"])
+        except Exception:
+            continue
+        label = _bucket_label(dt_obj, range_key)
+        if label not in trend_map_queries:
+            continue
+        if e["event_type"] in ("location_query", "text_query"):
+            trend_map_queries[label] += 1
+        if e.get("user_id"):
+            trend_map_users[label].add(e["user_id"])
 
-def _generate_dashboard_data(range_key: str):
-    summary = _dashboard_summary(range_key)
-    start_dt = _dashboard_range_start(range_key)
-    start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    trend_queries = [trend_map_queries[label] for label in default_labels]
+    trend_users = [len(trend_map_users[label]) for label in default_labels]
 
-    conn = _get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT user_id, lat, lon, ts FROM search_log WHERE ts >= ? ORDER BY ts DESC",
-        (start_str,),
-    )
-    rows = cur.fetchall()
-
-    cur.execute(
-        """
-        SELECT user_id, COUNT(*) AS c
-        FROM search_log
-        WHERE ts >= ? AND user_id IS NOT NULL AND user_id != ''
-        GROUP BY user_id
-        ORDER BY c DESC, user_id ASC
-        LIMIT 5
-        """,
-        (start_str,),
-    )
-    top_users = [{"user": r[0], "count": r[1]} for r in cur.fetchall()]
-    conn.close()
-
-    buckets, trend_labels = _build_bucket_labels(range_key)
-    bucket_index = {b: i for i, b in enumerate(buckets)}
-    trend_queries = [0] * len(buckets)
-    trend_user_sets = [set() for _ in buckets]
-    hourly_values = [0] * 24
-    area_counts = {}
-    latest_events = []
-
-    for row in rows:
-        dt_obj = _parse_search_ts(row["ts"])
-        if not dt_obj:
+    hourly_map = {f"{i:02d}:00": 0 for i in range(24)}
+    for e in events:
+        try:
+            dt_obj = datetime.fromisoformat(e["created_at"])
+            hourly_map[f"{dt_obj.hour:02d}:00"] += 1
+        except Exception:
             continue
 
-        bucket = _bucket_floor(dt_obj, range_key)
-        idx = bucket_index.get(bucket)
-        if idx is not None:
-            trend_queries[idx] += 1
-            if row["user_id"]:
-                trend_user_sets[idx].add(row["user_id"])
-
-        hourly_values[dt_obj.hour] += 1
-
-        try:
-            lat = float(row["lat"])
-            lon = float(row["lon"])
-            area_key = f"{lat:.3f}, {lon:.3f} 附近"
-            area_counts[area_key] = area_counts.get(area_key, 0) + 1
-        except Exception:
-            pass
-
-        if len(latest_events) < 15:
-            latest_events.append({
-                "time": dt_obj.strftime("%Y/%m/%d %H:%M:%S"),
-                "user_id": row["user_id"] or "匿名",
-                "event_type": "location_query",
-                "result_count": None,
-                "response_time_ms": None,
-                "success": True,
-            })
-
-    unavailable_detail = {
-        "unavailable": True,
-        "message": "目前 app.py 尚未記錄這項指標，所以先不顯示假資料。若之後加入事件紀錄，這裡就會自動顯示真實數值。",
+    type_counts = {
+        "定位查詢": len([e for e in events if e["event_type"] == "location_query"]),
+        "文字查詢": len([e for e in events if e["event_type"] == "text_query"]),
+        "點擊結果": len([e for e in events if e["event_type"] == "search_result"]),
+        "錯誤": len([e for e in events if e["event_type"] == "error"]),
     }
 
-    top_time_points = sorted(
-        [{"label": trend_labels[i], "value": trend_queries[i]} for i in range(len(trend_labels))],
-        key=lambda x: x["value"],
-        reverse=True,
-    )[:5]
+    area_counter = {}
+    for e in events:
+        area = e.get("area_name") or "其他區域"
+        area_counter[area] = area_counter.get(area, 0) + 1
+    areas = sorted(area_counter.items(), key=lambda x: x[1], reverse=True)[:8]
+
+    event_rows = []
+    for e in events[:10]:
+        event_rows.append({
+            "time": e.get("created_at", ""),
+            "user_id": e.get("user_id", "") or "-",
+            "event_type": e.get("event_type", ""),
+            "result_count": e.get("result_count", 0) or 0,
+            "response_time_ms": e.get("response_time_ms", 0) or 0,
+            "success": bool(int(e.get("success") or 0))
+        })
+
+    response_sorted = sorted(response_values)
+    median_value = response_sorted[len(response_sorted)//2] if response_sorted else 0
+    p95_index = min(len(response_sorted)-1, int(len(response_sorted)*0.95)) if response_sorted else 0
+    p95_value = response_sorted[p95_index] if response_sorted else 0
 
     return {
         "summary": {
-            "totalQueries": summary["totalQueries"],
-            "activeUsers": summary["activeUsers"],
-            "successRate": summary["successRate"],
-            "avgResponse": summary["avgResponse"],
-            "newUsers": summary["newUsers"],
-            "retentionRate": summary["retentionRate"],
-            "noResultCount": summary["noResultCount"],
-            "errorCount": summary["errorCount"],
+            "totalQueries": total_queries,
+            "activeUsers": active_users,
+            "successRate": success_rate,
+            "avgResponse": avg_response,
+            "newUsers": new_users,
+            "retentionRate": retention_rate,
+            "noResultCount": no_result_count,
+            "errorCount": error_count
         },
-        "trend": {"labels": trend_labels, "queries": trend_queries, "users": [len(s) for s in trend_user_sets]},
-        "hourly": {"labels": [f"{i:02d}:00" for i in range(24)], "values": hourly_values},
-        "typeData": {"labels": ["定位查詢"], "values": [summary["totalQueries"]]},
-        "areas": sorted(area_counts.items(), key=lambda x: x[1], reverse=True)[:8],
-        "events": latest_events,
+        "trend": {
+            "labels": default_labels,
+            "queries": trend_queries,
+            "users": trend_users
+        },
+        "hourly": {
+            "labels": list(hourly_map.keys()),
+            "values": list(hourly_map.values())
+        },
+        "typeData": {
+            "labels": list(type_counts.keys()),
+            "values": list(type_counts.values())
+        },
+        "areas": areas,
+        "events": event_rows,
         "detail": {
             "totalQueries": {
                 "peak": max(trend_queries) if trend_queries else 0,
                 "low": min(trend_queries) if trend_queries else 0,
-                "avgPerPoint": round(summary["totalQueries"] / len(trend_labels)) if trend_labels else 0,
-                "topTimePoints": top_time_points,
+                "avgPerPoint": round(total_queries / len(default_labels)) if default_labels else 0,
+                "topTimePoints": sorted(
+                    [{"label": default_labels[i], "value": trend_queries[i]} for i in range(len(default_labels))],
+                    key=lambda x: x["value"],
+                    reverse=True
+                )[:5]
             },
             "activeUsers": {
-                "inactiveUsersEstimate": max(0, summary["totalQueries"] - summary["activeUsers"]),
-                "avgQueriesPerUser": f"{(summary['totalQueries'] / summary['activeUsers']):.2f}" if summary["activeUsers"] else "0.00",
-                "topUserSamples": top_users,
+                "inactiveUsersEstimate": max(0, total_queries - active_users),
+                "avgQueriesPerUser": f"{(total_queries / active_users):.2f}" if active_users else "0.00",
+                "topUserSamples": []
             },
-            "successRate": unavailable_detail,
-            "avgResponse": unavailable_detail,
+            "successRate": {
+                "successCount": success_count,
+                "failedCount": max(0, len(success_events) - success_count),
+                "successRate": success_rate
+            },
+            "avgResponse": {
+                "min": min(response_values) if response_values else 0,
+                "median": median_value,
+                "p95": p95_value,
+                "max": max(response_values) if response_values else 0
+            },
             "newUsers": {
-                "newUsers": summary["newUsers"],
-                "existingUsers": max(0, summary["activeUsers"] - summary["newUsers"]),
-                "newUserRate": f"{((summary['newUsers'] / summary['activeUsers']) * 100):.1f}" if summary["activeUsers"] else "0.0",
+                "newUsers": new_users,
+                "existingUsers": max(0, active_users - new_users),
+                "newUserRate": f"{(new_users / active_users * 100):.1f}" if active_users else "0.0"
             },
             "retentionRate": {
-                "returningUsers": summary["returningUsers"],
-                "oneTimeUsers": max(0, summary["activeUsers"] - summary["returningUsers"]),
-                "retentionRate": summary["retentionRate"],
+                "returningUsers": returning_users,
+                "oneTimeUsers": max(0, active_users - returning_users),
+                "retentionRate": retention_rate
             },
-            "noResultCount": unavailable_detail,
-            "errorCount": unavailable_detail,
-        },
+            "noResultCount": {
+                "noResultCount": no_result_count,
+                "noResultRate": f"{(no_result_count / total_queries * 100):.1f}" if total_queries else "0.0",
+                "samples": []
+            },
+            "errorCount": {
+                "errorCount": error_count,
+                "errorRate": f"{(error_count / total_queries * 100):.1f}" if total_queries else "0.0",
+                "samples": []
+            }
+        }
     }
 
 
@@ -4806,7 +4851,7 @@ def dashboard_page():
 @app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     range_key = (request.args.get("range") or "1h").strip()
-    if range_key not in {"1h", "1d", "7d", "30d", "1y"}:
+    if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
     return jsonify(_generate_dashboard_data(range_key))
 
@@ -5046,6 +5091,7 @@ def handle_text(event):
     # ✅ cmd 分派（原本邏輯全部保留）
     # =========================
     if cmd == "nearby":
+        start_ts = time.time()
         set_user_loc_mode(uid, "normal")
         safe_reply(
             event,
@@ -5056,9 +5102,18 @@ def handle_text(event):
                 mode="normal"
             )
         )
+        log_analytics_event(
+            user_id=uid,
+            event_type="text_query",
+            result_count=0,
+            success=1,
+            response_time_ms=int((time.time() - start_ts) * 1000),
+            query_text=text_norm
+        )
         return
 
     elif cmd == "nearby_ai":
+        start_ts = time.time()
         set_user_loc_mode(uid, "ai")
         safe_reply(
             event,
@@ -5068,6 +5123,14 @@ def handle_text(event):
                   "📍 Please share your location. I will use AI to pick the best nearby toilets."),
                 mode="ai"
             )
+        )
+        log_analytics_event(
+            user_id=uid,
+            event_type="text_query",
+            result_count=0,
+            success=1,
+            response_time_ms=int((time.time() - start_ts) * 1000),
+            query_text=text_norm
         )
         return
 
@@ -5212,8 +5275,23 @@ def handle_location(event):
         safe_reply(event, make_retry_location_text())
         return
 
+    start_ts = time.time()
+    area_name = get_area_name(lat, lon)
+
     try:
         toilets = build_nearby_toilets(uid, lat, lon)
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+
+        log_analytics_event(
+            user_id=uid,
+            event_type="location_query",
+            result_count=len(toilets or []),
+            success=1,
+            response_time_ms=elapsed_ms,
+            lat=lat,
+            lon=lon,
+            area_name=area_name
+        )
 
         if toilets:
             # 先產出原本的廁所 carousel
@@ -5276,8 +5354,22 @@ def handle_location(event):
                 ]
 
             safe_reply(event, messages)
+        else:
+            safe_reply(event, make_no_toilet_quick_reply(uid, lat, lon))
 
     except Exception as e:
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+        log_analytics_event(
+            user_id=uid,
+            event_type="error",
+            result_count=0,
+            success=0,
+            response_time_ms=elapsed_ms,
+            lat=lat,
+            lon=lon,
+            area_name=area_name,
+            query_text=str(e)[:200]
+        )
         logging.error(f"nearby error: {e}", exc_info=True)
         safe_reply(event, TextSendMessage(text=L(uid, "系統忙線中，請稍後再試 🙏", "System is busy. Please try again later 🙏")))
     finally:
