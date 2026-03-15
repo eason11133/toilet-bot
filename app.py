@@ -610,7 +610,7 @@ def make_no_toilet_quick_reply(uid, lat=None, lon=None):
 
 # === 初始化 ===
 logging.basicConfig(level=logging.INFO)
-app = Flask(__name__, template_folder=os.getcwd())
+app = Flask(__name__)
 CORS(app)
 
 class _NoHealthzFilter(logging.Filter):
