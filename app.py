@@ -5775,6 +5775,36 @@ def submit_toilet():
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
 
+@app.route("/api/stats")
+def api_stats():
+    try:
+        conn = sqlite3.connect("cache.db")
+        cur = conn.cursor()
+
+        # 總使用者
+        cur.execute("SELECT COUNT(*) FROM user_lang")
+        users = cur.fetchone()[0]
+
+        # 今日使用
+        today = datetime.utcnow().date().isoformat()
+        cur.execute("SELECT COUNT(*) FROM sheets_cache")
+        requests_count = cur.fetchone()[0]
+
+        conn.close()
+
+        return {
+            "users": users,
+            "requests": requests_count,
+            "status": "ok"
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+    
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
 # === 背景排程（預留） ===
 def auto_predict_cleanliness_background():
     while True:
