@@ -4796,26 +4796,30 @@ _DASHBOARD_RANGE_SECONDS = {
 
 
 def _dashboard_range_to_sqlite(range_key: str):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if range_key == "1h":
         start = now - timedelta(hours=1)
+        bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
         start = now - timedelta(days=1)
+        bucket = "hour"
         labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
     elif range_key == "7d":
         start = now - timedelta(days=7)
+        bucket = "day"
         labels = [f"{i+1}" for i in range(7)]
     elif range_key == "30d":
         start = now - timedelta(days=30)
+        bucket = "day"
         labels = [f"{i+1}" for i in range(30)]
     else:
         start = now - timedelta(days=365)
+        bucket = "month"
         labels = [f"{i+1}月" for i in range(12)]
 
-    return start, now, labels
-
+    return start, now, bucket, labels
 
 def _bucket_label(dt_obj, range_key):
     if range_key == "1h":
@@ -4897,8 +4901,14 @@ def _generate_dashboard_data(range_key="1h"):
                 continue
             first_seen = r.get("first_seen")
             cnt = r.get("cnt") or 0
-            if first_seen and first_seen >= start:
-                new_users += 1
+            if first_seen:
+                if isinstance(first_seen, str):
+                    first_seen = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
+                if first_seen.tzinfo is None:
+                    first_seen = first_seen.replace(tzinfo=timezone.utc)
+
+                if first_seen >= start:
+                    new_users += 1
             if cnt >= 2:
                 returning_users += 1
         conn.close()
@@ -4930,7 +4940,9 @@ def _generate_dashboard_data(range_key="1h"):
 
     for e in events:
         try:
-            dt_obj = datetime.fromisoformat(e["created_at"])
+            dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
+            if dt_obj.tzinfo is None:
+                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
         except Exception:
             continue
         label = _bucket_label(dt_obj, range_key)
@@ -4947,7 +4959,9 @@ def _generate_dashboard_data(range_key="1h"):
     hourly_map = {f"{i:02d}:00": 0 for i in range(24)}
     for e in events:
         try:
-            dt_obj = datetime.fromisoformat(e["created_at"])
+            dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
+            if dt_obj.tzinfo is None:
+                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
             hourly_map[f"{dt_obj.hour:02d}:00"] += 1
         except Exception:
             continue
