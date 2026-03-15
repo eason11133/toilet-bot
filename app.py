@@ -1765,6 +1765,9 @@ def log_analytics_event(
     created_at=None
 ):
     try:
+        rt_ms = int(response_time_ms) if response_time_ms is not None else None
+        if event_type == "location_query" and (rt_ms is None or rt_ms <= 0):
+            return
         if POSTGRES_ENABLED:
             conn = _pg_connect()
             cur = conn.cursor()
@@ -1777,7 +1780,7 @@ def log_analytics_event(
                 event_type,
                 int(result_count or 0),
                 int(1 if success else 0),
-                int(response_time_ms) if response_time_ms is not None else None,
+                rt_ms,
                 float(lat) if lat is not None else None,
                 float(lon) if lon is not None else None,
                 area_name,
@@ -1799,7 +1802,7 @@ def log_analytics_event(
             event_type,
             int(result_count or 0),
             int(1 if success else 0),
-            int(response_time_ms) if response_time_ms is not None else None,
+            rt_ms,
             float(lat) if lat is not None else None,
             float(lon) if lon is not None else None,
             area_name,
@@ -4858,11 +4861,16 @@ def _generate_dashboard_data(range_key="1h"):
 
         events = [dict(r) for r in rows]
 
-    total_queries = len([e for e in events if e["event_type"] in ("location_query", "text_query")])
-    user_ids = [e["user_id"] for e in events if e["user_id"]]
+    valid_query_events = [
+        e for e in events
+        if e["event_type"] == "location_query" and int(e.get("response_time_ms") or 0) > 0
+    ]
+
+    total_queries = len(valid_query_events)
+    user_ids = [e["user_id"] for e in valid_query_events if e["user_id"]]
     active_users = len(set(user_ids))
 
-    success_events = [e for e in events if e["event_type"] in ("location_query", "text_query")]
+    success_events = valid_query_events
     success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
@@ -4928,7 +4936,7 @@ def _generate_dashboard_data(range_key="1h"):
         label = _bucket_label(dt_obj, range_key)
         if label not in trend_map_queries:
             continue
-        if e["event_type"] in ("location_query", "text_query"):
+        if e["event_type"] == "location_query" and int(e.get("response_time_ms") or 0) > 0:
             trend_map_queries[label] += 1
         if e.get("user_id"):
             trend_map_users[label].add(e["user_id"])
@@ -4945,7 +4953,7 @@ def _generate_dashboard_data(range_key="1h"):
             continue
 
     type_counts = {
-        "定位查詢": len([e for e in events if e["event_type"] == "location_query"]),
+        "定位查詢": len([e for e in events if e["event_type"] == "location_query" and int(e.get("response_time_ms") or 0) > 0]),
         "文字查詢": len([e for e in events if e["event_type"] == "text_query"]),
         "點擊結果": len([e for e in events if e["event_type"] == "search_result"]),
         "錯誤": len([e for e in events if e["event_type"] == "error"]),
@@ -4958,7 +4966,11 @@ def _generate_dashboard_data(range_key="1h"):
     areas = sorted(area_counter.items(), key=lambda x: x[1], reverse=True)[:8]
 
     event_rows = []
-    for e in events[:10]:
+    visible_events = [
+        e for e in events
+        if not (e.get("event_type") == "location_query" and int(e.get("response_time_ms") or 0) <= 0)
+    ]
+    for e in visible_events[:10]:
         event_rows.append({
             "time": e.get("created_at", ""),
             "user_id": e.get("user_id", "") or "-",
@@ -5311,14 +5323,6 @@ def handle_text(event):
                 mode="normal"
             )
         )
-        log_analytics_event(
-            user_id=uid,
-            event_type="text_query",
-            result_count=0,
-            success=1,
-            response_time_ms=int((time.time() - start_ts) * 1000),
-            query_text=text_norm
-        )
         return
 
     elif cmd == "nearby_ai":
@@ -5332,14 +5336,6 @@ def handle_text(event):
                   "📍 Please share your location. I will use AI to pick the best nearby toilets."),
                 mode="ai"
             )
-        )
-        log_analytics_event(
-            user_id=uid,
-            event_type="text_query",
-            result_count=0,
-            success=1,
-            response_time_ms=int((time.time() - start_ts) * 1000),
-            query_text=text_norm
         )
         return
 
@@ -5491,16 +5487,17 @@ def handle_location(event):
         toilets = build_nearby_toilets(uid, lat, lon)
         elapsed_ms = int((time.time() - start_ts) * 1000)
 
-        log_analytics_event(
-            user_id=uid,
-            event_type="location_query",
-            result_count=len(toilets or []),
-            success=1,
-            response_time_ms=elapsed_ms,
-            lat=lat,
-            lon=lon,
-            area_name=area_name
-        )
+        if elapsed_ms > 0:
+            log_analytics_event(
+                user_id=uid,
+                event_type="location_query",
+                result_count=len(toilets or []),
+                success=1,
+                response_time_ms=elapsed_ms,
+                lat=lat,
+                lon=lon,
+                area_name=area_name
+            )
 
         if toilets:
             # 先產出原本的廁所 carousel
