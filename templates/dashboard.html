@@ -742,6 +742,15 @@
       return Number(num).toLocaleString('zh-TW');
     }
 
+    function isMissingMetric(value) {
+      return value === null || value === undefined;
+    }
+
+    function formatMetricValue(value, suffix = '') {
+      if (isMissingMetric(value)) return '—';
+      return `${formatNumber(value)}${suffix}`;
+    }
+
     function rangeLabel(range) {
       return {
         '1h': '1小時',
@@ -911,24 +920,20 @@
     }
 
     async function getDashboardData(range) {
-      if (USE_MOCK) {
-        return generateMockData(range);
-      }
-
       const res = await fetch(`/api/dashboard?range=${range}`);
       if (!res.ok) throw new Error('API 讀取失敗');
       return await res.json();
     }
 
     function updateSummary(summary) {
-      document.getElementById('totalQueries').textContent = formatNumber(summary.totalQueries);
-      document.getElementById('activeUsers').textContent = formatNumber(summary.activeUsers);
-      document.getElementById('successRate').textContent = `${summary.successRate}%`;
-      document.getElementById('avgResponse').textContent = `${formatNumber(summary.avgResponse)} ms`;
-      document.getElementById('newUsers').textContent = formatNumber(summary.newUsers);
-      document.getElementById('retentionRate').textContent = `${summary.retentionRate}%`;
-      document.getElementById('noResultCount').textContent = formatNumber(summary.noResultCount);
-      document.getElementById('errorCount').textContent = formatNumber(summary.errorCount);
+      document.getElementById('totalQueries').textContent = formatMetricValue(summary.totalQueries);
+      document.getElementById('activeUsers').textContent = formatMetricValue(summary.activeUsers);
+      document.getElementById('successRate').textContent = isMissingMetric(summary.successRate) ? '—' : `${summary.successRate}%`;
+      document.getElementById('avgResponse').textContent = isMissingMetric(summary.avgResponse) ? '—' : `${formatNumber(summary.avgResponse)} ms`;
+      document.getElementById('newUsers').textContent = formatMetricValue(summary.newUsers);
+      document.getElementById('retentionRate').textContent = isMissingMetric(summary.retentionRate) ? '—' : `${summary.retentionRate}%`;
+      document.getElementById('noResultCount').textContent = formatMetricValue(summary.noResultCount);
+      document.getElementById('errorCount').textContent = formatMetricValue(summary.errorCount);
     }
 
     function createCommonChartOptions() {
@@ -1075,12 +1080,14 @@
 
       events.forEach(e => {
         const tr = document.createElement('tr');
+        const resultText = isMissingMetric(e.result_count) ? '—' : e.result_count;
+        const responseText = isMissingMetric(e.response_time_ms) ? '—' : `${e.response_time_ms} ms`;
         tr.innerHTML = `
           <td class="mono" title="${e.time}">${e.time}</td>
           <td title="${e.user_id}">${e.user_id}</td>
           <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
-          <td class="mono" title="${e.result_count}">${e.result_count}</td>
-          <td class="mono" title="${e.response_time_ms} ms">${e.response_time_ms} ms</td>
+          <td class="mono" title="${resultText}">${resultText}</td>
+          <td class="mono" title="${responseText}">${responseText}</td>
           <td>
             <span class="pill ${e.success ? '' : 'error'}" title="${e.success ? '成功' : '失敗'}">
               ${e.success ? '成功' : '失敗'}
@@ -1089,299 +1096,6 @@
         `;
         tbody.appendChild(tr);
       });
-    }
-
-    function openMetricModal(metric) {
-      if (!currentDashboardData) return;
-
-      const summary = currentDashboardData.summary;
-      const detail = currentDashboardData.detail || {};
-      const trend = currentDashboardData.trend || {};
-      const hourly = currentDashboardData.hourly || {};
-      const typeData = currentDashboardData.typeData || {};
-      const areas = currentDashboardData.areas || [];
-      const metricDetail = detail[metric] || {};
-
-      let title = '';
-      let subtitle = `${rangeLabel(currentRange)} 區間詳細資料`;
-      let html = '';
-
-      if (metric === 'totalQueries') {
-        title = '查詢總量明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>總查詢數</h4>
-              <div class="detail-value mono">${formatNumber(summary.totalQueries)}</div>
-            </div>
-            <div class="detail-card">
-              <h4>平均每時間點</h4>
-              <div class="detail-value mono">${formatNumber(metricDetail.avgPerPoint || 0)}</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">最高流量</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.peak || 0)}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-key">最低流量</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.low || 0)}</div>
-            </div>
-          </div>
-
-          <br>
-
-          <table class="mini-table">
-            <thead>
-              <tr>
-                <th>熱門時間點</th>
-                <th>查詢數</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(metricDetail.topTimePoints || []).map(item => `
-                <tr>
-                  <td>${item.label}</td>
-                  <td class="mono">${formatNumber(item.value)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        `;
-      }
-
-      if (metric === 'activeUsers') {
-        title = '活躍使用者明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>活躍使用者</h4>
-              <div class="detail-value mono">${formatNumber(summary.activeUsers)}</div>
-            </div>
-            <div class="detail-card">
-              <h4>平均每位查詢</h4>
-              <div class="detail-value mono">${metricDetail.avgQueriesPerUser || 0}</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">使用者樣本</div>
-              <div class="detail-val">以下為本區間查詢次數較高的使用者樣本。</div>
-            </div>
-          </div>
-
-          <br>
-
-          <table class="mini-table">
-            <thead>
-              <tr>
-                <th>使用者</th>
-                <th>查詢次數</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(metricDetail.topUserSamples || []).map(item => `
-                <tr>
-                  <td>${item.user}</td>
-                  <td class="mono">${formatNumber(item.count)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        `;
-      }
-
-      if (metric === 'successRate') {
-        title = '成功率明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>成功率</h4>
-              <div class="detail-value mono">${summary.successRate}%</div>
-            </div>
-            <div class="detail-card">
-              <h4>成功筆數</h4>
-              <div class="detail-value mono">${formatNumber(metricDetail.successCount || 0)}</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">失敗筆數</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.failedCount || 0)}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-key">計算方式</div>
-              <div class="detail-val">成功回傳結果 / 全部查詢</div>
-            </div>
-          </div>
-        `;
-      }
-
-      if (metric === 'avgResponse') {
-        title = '平均回應時間明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>平均回應時間</h4>
-              <div class="detail-value mono">${formatNumber(summary.avgResponse)} ms</div>
-            </div>
-            <div class="detail-card">
-              <h4>P95</h4>
-              <div class="detail-value mono">${formatNumber(metricDetail.p95 || 0)} ms</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">最小值</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.min || 0)} ms</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-key">中位數</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.median || 0)} ms</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-key">最大值</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.max || 0)} ms</div>
-            </div>
-          </div>
-        `;
-      }
-
-      if (metric === 'newUsers') {
-        title = '新使用者明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>新使用者</h4>
-              <div class="detail-value mono">${formatNumber(summary.newUsers)}</div>
-            </div>
-            <div class="detail-card">
-              <h4>新用戶占比</h4>
-              <div class="detail-value mono">${metricDetail.newUserRate || 0}%</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">既有使用者</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.existingUsers || 0)}</div>
-            </div>
-          </div>
-        `;
-      }
-
-      if (metric === 'retentionRate') {
-        title = '回訪率明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>回訪率</h4>
-              <div class="detail-value mono">${summary.retentionRate}%</div>
-            </div>
-            <div class="detail-card">
-              <h4>回訪使用者</h4>
-              <div class="detail-value mono">${formatNumber(metricDetail.returningUsers || 0)}</div>
-            </div>
-          </div>
-
-          <div class="detail-list">
-            <div class="detail-row">
-              <div class="detail-key">單次使用者</div>
-              <div class="detail-val mono">${formatNumber(metricDetail.oneTimeUsers || 0)}</div>
-            </div>
-          </div>
-        `;
-      }
-
-      if (metric === 'noResultCount') {
-        title = '查無結果次數明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>查無結果次數</h4>
-              <div class="detail-value mono">${formatNumber(summary.noResultCount)}</div>
-            </div>
-            <div class="detail-card">
-              <h4>查無結果率</h4>
-              <div class="detail-value mono">${metricDetail.noResultRate || 0}%</div>
-            </div>
-          </div>
-
-          ${(metricDetail.samples && metricDetail.samples.length > 0) ? `
-            <table class="mini-table">
-              <thead>
-                <tr>
-                  <th>時間</th>
-                  <th>使用者</th>
-                  <th>類型</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${metricDetail.samples.map(item => `
-                  <tr>
-                    <td>${item.time}</td>
-                    <td>${item.user}</td>
-                    <td>${item.type}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          ` : `<div class="empty-text">目前沒有可顯示的查無結果樣本。</div>`}
-        `;
-      }
-
-      if (metric === 'errorCount') {
-        title = '錯誤次數明細';
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>錯誤次數</h4>
-              <div class="detail-value mono">${formatNumber(summary.errorCount)}</div>
-            </div>
-            <div class="detail-card">
-              <h4>錯誤率</h4>
-              <div class="detail-value mono">${metricDetail.errorRate || 0}%</div>
-            </div>
-          </div>
-
-          ${(metricDetail.samples && metricDetail.samples.length > 0) ? `
-            <table class="mini-table">
-              <thead>
-                <tr>
-                  <th>時間</th>
-                  <th>使用者</th>
-                  <th>回應時間</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${metricDetail.samples.map(item => `
-                  <tr>
-                    <td>${item.time}</td>
-                    <td>${item.user}</td>
-                    <td>${item.response}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          ` : `<div class="empty-text">目前沒有可顯示的錯誤樣本。</div>`}
-        `;
-      }
-
-      modalTitle.textContent = title || '指標明細';
-      modalSubtitle.textContent = subtitle;
-      modalBody.innerHTML = html || '<div class="empty-text">目前沒有資料可顯示。</div>';
-      metricModal.classList.add('show');
-      document.body.style.overflow = 'hidden';
-    }
-
-    function closeMetricModal() {
-      metricModal.classList.remove('show');
-      document.body.style.overflow = '';
     }
 
     async function refreshDashboard() {
@@ -1396,10 +1110,7 @@
         renderAreaList(data.areas);
         renderEvents(data.events);
 
-        document.getElementById('dataStatus').textContent =
-          USE_MOCK
-            ? `目前：假資料模式（${currentRange}）`
-            : `目前：API 模式（${currentRange}）`;
+        document.getElementById('dataStatus').textContent = `目前：app.py 真實資料（${currentRange}）`;
       } catch (err) {
         console.error(err);
         document.getElementById('dataStatus').textContent = '資料讀取失敗';
