@@ -4832,7 +4832,7 @@ def _bucket_label(dt_obj, range_key):
 
 
 def _generate_dashboard_data(range_key="1h"):
-    start, end, default_labels = _dashboard_range_to_sqlite(range_key)
+    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
 
     if POSTGRES_ENABLED:
         conn = _pg_connect()
@@ -6138,6 +6138,37 @@ def admin_backfill():
     n, note = _drain_pending(limit=500)
     return {"ok": True, "written": n, "note": note}, 200
 
+@app.route("/api/events")
+def api_events():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT created_at, user_id, event_type,
+               result_count, response_time_ms, status
+        FROM analytics_events
+        WHERE response_time_ms > 0
+        ORDER BY created_at DESC
+        LIMIT 100
+    """)
+
+    rows = cur.fetchall()
+
+    events = []
+    for r in rows:
+        events.append({
+            "time": str(r[0]),   # datetime 轉字串
+            "user": r[1],
+            "type": r[2],
+            "result": r[3],
+            "response_time": r[4],
+            "status": r[5]
+        })
+
+    cur.close()
+    conn.close()
+
+    return jsonify(events)
 
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
