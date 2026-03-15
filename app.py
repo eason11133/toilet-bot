@@ -37,6 +37,12 @@ from difflib import SequenceMatcher
 import random
 import re
 
+try:
+    import psycopg2
+    import psycopg2.extras
+except Exception:
+    psycopg2 = None
+
 load_dotenv()
 try:
     import pandas as pd
@@ -780,7 +786,7 @@ def get_nearby_toilets(uid, lat, lon):
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
-    toilets = query_public_csv_toilets(lat, lon)
+    toilets = _merge_and_dedupe_lists(query_public_csv_toilets(lat, lon), query_saved_toilets(lat, lon))
     _CACHE.set(key, toilets)
     return toilets
 
@@ -793,6 +799,86 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 if not os.path.exists(FAVORITES_FILE_PATH):
     open(FAVORITES_FILE_PATH, "a", encoding="utf-8").close()
+
+# === Persistent DB (Postgres) ===
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+POSTGRES_ENABLED = bool(DATABASE_URL and psycopg2 is not None)
+
+def _pg_connect():
+    if not POSTGRES_ENABLED:
+        raise RuntimeError("Postgres not enabled")
+    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    conn.autocommit = False
+    return conn
+
+def _persistent_store_ready() -> bool:
+    return POSTGRES_ENABLED
+
+def init_persistent_store():
+    if not POSTGRES_ENABLED:
+        if DATABASE_URL and psycopg2 is None:
+            logging.warning("DATABASE_URL 已設定，但缺少 psycopg2；請安裝 psycopg2-binary")
+        return
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT,
+            event_type TEXT,
+            result_count INTEGER DEFAULT 0,
+            success INTEGER DEFAULT 1,
+            response_time_ms INTEGER,
+            lat DOUBLE PRECISION,
+            lon DOUBLE PRECISION,
+            area_name TEXT,
+            query_text TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_toilets (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT,
+            name TEXT NOT NULL,
+            address TEXT,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            level TEXT,
+            floor_hint TEXT,
+            entrance_hint TEXT,
+            access_note TEXT,
+            open_hours TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_lat_lon ON user_toilets(lat, lon)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_created_at ON user_toilets(created_at)")
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS favorites (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            address TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(user_id, name, lat, lon)
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id)")
+        conn.commit()
+        conn.close()
+        logging.info("✅ Postgres persistent store ready")
+    except Exception as e:
+        logging.error(f"❌ init_persistent_store failed: {e}")
 
 PUBLIC_HEADERS = [
     "country","city","village","number","name","address","administration",
@@ -1664,6 +1750,7 @@ def create_analytics_tables():
     conn.close()
 
 create_analytics_tables()
+init_persistent_store()
 
 def log_analytics_event(
     user_id=None,
@@ -1678,6 +1765,29 @@ def log_analytics_event(
     created_at=None
 ):
     try:
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO analytics_events
+                (user_id, event_type, result_count, success, response_time_ms, lat, lon, area_name, query_text, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id,
+                event_type,
+                int(result_count or 0),
+                int(1 if success else 0),
+                int(response_time_ms) if response_time_ms is not None else None,
+                float(lat) if lat is not None else None,
+                float(lon) if lon is not None else None,
+                area_name,
+                query_text,
+                created_at or datetime.utcnow()
+            ))
+            conn.commit()
+            conn.close()
+            return
+
         conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
         cur = conn.cursor()
         cur.execute("""
@@ -1960,6 +2070,67 @@ def query_overpass_toilets(lat, lon, radius=500):
 
     return []
 
+# === 讀取 Postgres 使用者新增廁所 ===
+def query_saved_toilets(user_lat, user_lon, radius=500):
+    if not POSTGRES_ENABLED:
+        return []
+
+    heap = []
+    limit = max(LOC_MAX_RESULTS * 8, 60)
+    try:
+        user_lat = float(user_lat)
+        user_lon = float(user_lon)
+        dlat = radius / 111000.0
+        dlon = radius / (111000.0 * max(0.1, math.cos(math.radians(user_lat))))
+        min_lat, max_lat = user_lat - dlat, user_lat + dlat
+        min_lon, max_lon = user_lon - dlon, user_lon + dlon
+
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT user_id, name, address, lat, lon, level, floor_hint, entrance_hint, access_note, open_hours, created_at
+            FROM user_toilets
+            WHERE lat BETWEEN %s AND %s AND lon BETWEEN %s AND %s
+            ORDER BY created_at DESC
+            LIMIT 500
+        """, (min_lat, max_lat, min_lon, max_lon))
+        rows = cur.fetchall()
+        conn.close()
+
+        for row in rows:
+            try:
+                t_lat = float(row.get("lat"))
+                t_lon = float(row.get("lon"))
+            except Exception:
+                continue
+            if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+                continue
+            dist = haversine(user_lat, user_lon, t_lat, t_lon)
+            if dist > radius:
+                continue
+            item = {
+                "name": (row.get("name") or "無名稱").strip(),
+                "lat": float(norm_coord(t_lat)),
+                "lon": float(norm_coord(t_lon)),
+                "address": (row.get("address") or "").strip(),
+                "distance": dist,
+                "type": "user_db",
+                "grade": "使用者新增",
+                "category": "使用者補充",
+                "floor_hint": (row.get("floor_hint") or _floor_from_name(row.get("name") or "")),
+                "entrance_hint": row.get("entrance_hint") or "",
+                "access_note": row.get("access_note") or "",
+                "open_hours": row.get("open_hours") or "",
+            }
+            heapq.heappush(heap, (-dist, id(item), item))
+            if len(heap) > limit:
+                heapq.heappop(heap)
+    except Exception as e:
+        logging.warning(f"query_saved_toilets failed: {e}")
+        return []
+
+    return [item for _, _, item in sorted(heap, key=lambda x: -x[0])]
+
 # === 讀取 public_toilets.csv ===
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
     if not os.path.exists(TOILETS_FILE_PATH):
@@ -2176,10 +2347,11 @@ def nearby_toilets():
     user_lon = float(user_lon)
 
     public_csv_toilets = query_public_csv_toilets(user_lat, user_lon, radius=500) or []
+    saved_toilets = query_saved_toilets(user_lat, user_lon, radius=500) or []
     sheet_toilets = query_sheet_toilets(user_lat, user_lon, radius=500) or []
     osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500) or []
 
-    all_toilets = _merge_and_dedupe_lists(public_csv_toilets, sheet_toilets, osm_toilets)
+    all_toilets = _merge_and_dedupe_lists(public_csv_toilets, saved_toilets, sheet_toilets, osm_toilets)
     sort_toilets(all_toilets)
 
     if not all_toilets:
@@ -4655,19 +4827,36 @@ def _bucket_label(dt_obj, range_key):
 def _generate_dashboard_data(range_key="1h"):
     start, end, default_labels = _dashboard_range_to_sqlite(range_key)
 
-    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    if POSTGRES_ENABLED:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, user_id, event_type, result_count, success, response_time_ms, lat, lon, area_name, query_text,
+                   created_at AT TIME ZONE 'UTC' AS created_at
+            FROM analytics_events
+            WHERE created_at >= %s AND created_at <= %s
+            ORDER BY created_at DESC
+        """, (start, end))
+        rows = cur.fetchall()
+        conn.close()
+        events = [dict(r) for r in rows]
+        for e in events:
+            if isinstance(e.get("created_at"), datetime):
+                e["created_at"] = e["created_at"].isoformat()
+    else:
+        conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT * FROM analytics_events
-        WHERE created_at >= ? AND created_at <= ?
-        ORDER BY created_at DESC
-    """, (start.isoformat(), end.isoformat()))
-    rows = cur.fetchall()
-    conn.close()
+        cur.execute("""
+            SELECT * FROM analytics_events
+            WHERE created_at >= ? AND created_at <= ?
+            ORDER BY created_at DESC
+        """, (start.isoformat(), end.isoformat()))
+        rows = cur.fetchall()
+        conn.close()
 
-    events = [dict(r) for r in rows]
+        events = [dict(r) for r in rows]
 
     total_queries = len([e for e in events if e["event_type"] in ("location_query", "text_query")])
     user_ids = [e["user_id"] for e in events if e["user_id"]]
@@ -4683,30 +4872,48 @@ def _generate_dashboard_data(range_key="1h"):
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
 
-    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
     new_users = 0
     returning_users = 0
 
-    for uid in set(user_ids):
-        cur.execute("""
-            SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
-            FROM analytics_events
-            WHERE user_id = ?
-        """, (uid,))
-        r = cur.fetchone()
-        if not r:
-            continue
-        first_seen = r["first_seen"]
-        cnt = r["cnt"] or 0
-        if first_seen and first_seen >= start.isoformat():
-            new_users += 1
-        if cnt >= 2:
-            returning_users += 1
-
-    conn.close()
+    if POSTGRES_ENABLED:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        for uid in set(user_ids):
+            cur.execute("""
+                SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE user_id = %s
+            """, (uid,))
+            r = cur.fetchone()
+            if not r:
+                continue
+            first_seen = r.get("first_seen")
+            cnt = r.get("cnt") or 0
+            if first_seen and first_seen >= start:
+                new_users += 1
+            if cnt >= 2:
+                returning_users += 1
+        conn.close()
+    else:
+        conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        for uid in set(user_ids):
+            cur.execute("""
+                SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE user_id = ?
+            """, (uid,))
+            r = cur.fetchone()
+            if not r:
+                continue
+            first_seen = r["first_seen"]
+            cnt = r["cnt"] or 0
+            if first_seen and first_seen >= start.isoformat():
+                new_users += 1
+            if cnt >= 2:
+                returning_users += 1
+        conn.close()
 
     retention_rate = round((returning_users / active_users) * 100, 1) if active_users else 0.0
 
@@ -4909,10 +5116,11 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
         return cached
 
     futures = []
-    csv_res, sheet_res, osm_res = [], [], []
+    csv_res, saved_res, sheet_res, osm_res = [], [], [], []
 
     try:
         futures.append(("csv",   _pool.submit(query_public_csv_toilets, lat, lon, radius)))
+        futures.append(("saved", _pool.submit(query_saved_toilets,      lat, lon, radius)))
         futures.append(("sheet", _pool.submit(query_sheet_toilets,      lat, lon, radius)))
         futures.append(("osm",   _pool.submit(query_overpass_toilets,   lat, lon, radius)))
 
@@ -4920,8 +5128,9 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
             try:
                 res = fut.result(timeout=LOC_QUERY_TIMEOUT_SEC)
                 if   name == "csv":   csv_res   = res or []
+                elif name == "saved": saved_res = res or []
                 elif name == "sheet": sheet_res = res or []
-                else:                 osm_res   = res or []
+                else:                  osm_res   = res or []
             except FuturesTimeoutError:
                 logging.warning(f"{name} 查詢逾時")
             except Exception as e:
@@ -4932,7 +5141,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
             if not fut.done():
                 fut.cancel()
 
-    quick = _merge_and_dedupe_lists(csv_res, sheet_res, osm_res)
+    quick = _merge_and_dedupe_lists(csv_res, saved_res, sheet_res, osm_res)
     sort_toilets(quick)
     result = quick[:LOC_MAX_RESULTS]
 
@@ -5714,20 +5923,8 @@ def _fallback_store_toilet_row_locally(row_values):
         except Exception as e:
             logging.warning(f"備份至本地 CSV 失敗：{e}")
 
-        # 2) 寫入 SQLite
+        # 2) 寫入 Postgres / SQLite
         try:
-            conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-            cur = conn.cursor()
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_toilets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT, name TEXT, address TEXT,
-                lat TEXT, lon TEXT,
-                level TEXT, floor_hint TEXT, entrance_hint TEXT,
-                access_note TEXT, open_hours TEXT, timestamp TEXT
-            )
-            """)
-
             header = ensure_toilet_sheet_header(worksheet)
             idx = {h:i for i,h in enumerate(header)}
 
@@ -5737,26 +5934,56 @@ def _fallback_store_toilet_row_locally(row_values):
                 except:
                     return ""
 
-            cur.execute("""
-                INSERT INTO user_toilets (
-                    user_id, name, address, lat, lon,
-                    level, floor_hint, entrance_hint,
-                    access_note, open_hours, timestamp
+            if POSTGRES_ENABLED:
+                conn = _pg_connect()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO user_toilets (
+                        user_id, name, address, lat, lon,
+                        level, floor_hint, entrance_hint,
+                        access_note, open_hours, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    v("user_id"), v("name"), v("address"),
+                    float(v("lat")), float(v("lon")),
+                    v("level"), v("floor_hint"), v("entrance_hint"),
+                    v("access_note"), v("open_hours"),
+                    datetime.utcnow(), datetime.utcnow()
+                ))
+                conn.commit()
+                conn.close()
+            else:
+                conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+                cur = conn.cursor()
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_toilets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT, name TEXT, address TEXT,
+                    lat TEXT, lon TEXT,
+                    level TEXT, floor_hint TEXT, entrance_hint TEXT,
+                    access_note TEXT, open_hours TEXT, timestamp TEXT
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                v("user_id"), v("name"), v("address"),
-                v("lat"), v("lon"),
-                v("level"), v("floor_hint"), v("entrance_hint"),
-                v("access_note"), v("open_hours"),
-                v("timestamp")
-            ))
-
-            conn.commit()
-            conn.close()
+                """)
+                cur.execute("""
+                    INSERT INTO user_toilets (
+                        user_id, name, address, lat, lon,
+                        level, floor_hint, entrance_hint,
+                        access_note, open_hours, timestamp
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    v("user_id"), v("name"), v("address"),
+                    v("lat"), v("lon"),
+                    v("level"), v("floor_hint"), v("entrance_hint"),
+                    v("access_note"), v("open_hours"),
+                    v("timestamp")
+                ))
+                conn.commit()
+                conn.close()
 
         except Exception as e:
-            logging.warning(f"備份至 SQLite 失敗：{e}")
+            logging.warning(f"備份至資料庫失敗：{e}")
 
 def _append_toilet_row_safely(ws, row_values):
     global _toilet_sheet_over_quota, _toilet_sheet_over_quota_ts
@@ -5904,9 +6131,10 @@ def admin_backfill():
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
-    _ensure_sheets_ready()
-    if worksheet is None:
-        return {"success": False, "message": "雲端表格暫時無法連線，請稍後再試"}, 503
+    if not POSTGRES_ENABLED:
+        _ensure_sheets_ready()
+        if worksheet is None:
+            return {"success": False, "message": "雲端表格暫時無法連線，請稍後再試"}, 503
     try:
         data = request.get_json(force=True, silent=False) or {}
         logging.info(f"📥 收到表單資料: {data}")
@@ -5949,6 +6177,29 @@ def submit_toilet():
 
         lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
 
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO user_toilets (
+                    user_id, name, address, lat, lon,
+                    level, floor_hint, entrance_hint,
+                    access_note, open_hours, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                uid, name, addr, float(lat_s), float(lon_s),
+                level, floor_hint, entrance_hint,
+                access_note, open_hours,
+                datetime.utcnow(), datetime.utcnow()
+            ))
+            new_id = cur.fetchone()[0]
+            conn.commit()
+            conn.close()
+            logging.info(f"📝 submit_toilet 已寫入 Postgres id={new_id} name={name}")
+            return {"success": True, "message": f"✅ 已新增廁所 {name}", "id": new_id}
+
         # 佈局表頭 & 寫入欄位
         header = ensure_toilet_sheet_header(worksheet)
         idx = {h: i for i, h in enumerate(header)}
@@ -5970,14 +6221,12 @@ def submit_toilet():
         put("open_hours", open_hours)
         put("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
-        # ✅ 安全寫入（Sheets 滿格自動 fallback 到本機 CSV/SQLite）
         status, note = _append_toilet_row_safely(worksheet, row_values)
         logging.info(f"📝 submit_toilet 寫入狀態: {status} ({note}) name={name}")
 
         if status == "ok":
             return {"success": True, "message": f"✅ 已新增廁所 {name}"}
         else:
-            # fallback：資料已落地本機，之後可批次補寫到新試算表
             return {"success": True, "message": f"✅ 已暫存 {name}（雲端表已滿，稍後可批次補寫）"}
 
     except Exception as e:
