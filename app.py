@@ -610,7 +610,7 @@ def make_no_toilet_quick_reply(uid, lat=None, lon=None):
 
 # === 初始化 ===
 logging.basicConfig(level=logging.INFO)
-app = Flask(__name__)
+app = Flask(__name__, template_folder=os.getcwd())
 CORS(app)
 
 class _NoHealthzFilter(logging.Filter):
@@ -4523,6 +4523,177 @@ def create_my_contrib_flex(uid):
     return {"type":"carousel", "contents": bubbles}
 
 # === Webhook ===
+
+
+# === Dashboard ===
+def _dashboard_range_config(range_key: str):
+    return {
+        "1h":  {"count": 12, "activeUsers": rand(15, 60), "totalQueries": rand(40, 180)},
+        "1d":  {"count": 24, "activeUsers": rand(120, 400), "totalQueries": rand(300, 1200)},
+        "7d":  {"count": 7,  "activeUsers": rand(400, 1200), "totalQueries": rand(1500, 5000)},
+        "30d": {"count": 30, "activeUsers": rand(1000, 5000), "totalQueries": rand(5000, 18000)},
+        "1y":  {"count": 12, "activeUsers": rand(5000, 20000), "totalQueries": rand(30000, 120000)},
+    }.get(range_key, {"count": 12, "activeUsers": 0, "totalQueries": 0})
+
+
+def _generate_dashboard_data(range_key: str):
+    cfg = _dashboard_range_config(range_key)
+    trend_labels, trend_queries, trend_users = [], [], []
+
+    for i in range(cfg["count"]):
+        if range_key == "1h":
+            label = f"{i * 5}分"
+        elif range_key == "1d":
+            label = f"{str(i).zfill(2)}:00"
+        elif range_key == "1y":
+            label = f"{i + 1}月"
+        else:
+            label = f"{i + 1}"
+        trend_labels.append(label)
+        trend_queries.append(rand(10, 500))
+        trend_users.append(rand(5, 250))
+
+    hour_labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
+    hour_values = [rand(0, 100) for _ in hour_labels]
+
+    type_data = {
+        "labels": ["定位查詢", "文字查詢", "點擊結果", "錯誤"],
+        "values": [rand(100, 500), rand(20, 120), rand(30, 150), rand(1, 30)]
+    }
+
+    areas = [
+        ["台北車站", rand(50, 300)],
+        ["西門町", rand(30, 250)],
+        ["信義區", rand(30, 220)],
+        ["公館", rand(20, 180)],
+        ["板橋車站", rand(20, 170)],
+        ["松山車站", rand(10, 120)],
+        ["中山站", rand(15, 140)],
+        ["淡水老街", rand(8, 100)],
+    ]
+    areas.sort(key=lambda x: x[1], reverse=True)
+
+    events = []
+    for i in range(15):
+        evt_type = ["location_query", "text_query", "search_result", "error"][rand(0, 3)]
+        result_count = rand(0, 10)
+        response_time_ms = rand(100, 1800)
+        success = random.random() > 0.12
+        events.append({
+            "time": (datetime.now().astimezone() - timedelta(minutes=i * 10)).strftime("%Y/%m/%d %H:%M:%S"),
+            "user_id": f"user_{rand(1000, 9999)}",
+            "event_type": evt_type,
+            "result_count": result_count,
+            "response_time_ms": response_time_ms,
+            "success": success,
+        })
+
+    total_queries = cfg["totalQueries"]
+    active_users = cfg["activeUsers"]
+    success_rate = round(random.uniform(89, 99), 1)
+    avg_response = rand(180, 900)
+    new_users = rand(10, max(20, int(active_users * 0.25) if active_users else 20))
+    retention_rate = round(random.uniform(40, 70), 1)
+    no_result_count = rand(0, 80)
+    error_count = rand(0, 20)
+    success_count = round(total_queries * (success_rate / 100))
+    failed_count = max(0, total_queries - success_count)
+    returning_users = round(active_users * (retention_rate / 100))
+
+    return {
+        "summary": {
+            "totalQueries": total_queries,
+            "activeUsers": active_users,
+            "successRate": success_rate,
+            "avgResponse": avg_response,
+            "newUsers": new_users,
+            "retentionRate": retention_rate,
+            "noResultCount": no_result_count,
+            "errorCount": error_count,
+        },
+        "trend": {"labels": trend_labels, "queries": trend_queries, "users": trend_users},
+        "hourly": {"labels": hour_labels, "values": hour_values},
+        "typeData": type_data,
+        "areas": areas,
+        "events": events,
+        "detail": {
+            "totalQueries": {
+                "peak": max(trend_queries) if trend_queries else 0,
+                "low": min(trend_queries) if trend_queries else 0,
+                "avgPerPoint": round(total_queries / len(trend_labels)) if trend_labels else 0,
+                "topTimePoints": sorted(
+                    [{"label": trend_labels[i], "value": trend_queries[i]} for i in range(len(trend_labels))],
+                    key=lambda x: x["value"], reverse=True
+                )[:5],
+            },
+            "activeUsers": {
+                "inactiveUsersEstimate": max(0, total_queries - active_users),
+                "avgQueriesPerUser": f"{(total_queries / active_users):.2f}" if active_users else "0.00",
+                "topUserSamples": [
+                    {"user": f"user_{rand(1000, 9999)}", "count": rand(2, 12)} for _ in range(5)
+                ],
+            },
+            "successRate": {
+                "successCount": success_count,
+                "failedCount": failed_count,
+                "successRate": success_rate,
+            },
+            "avgResponse": {
+                "min": rand(80, 140),
+                "median": rand(160, 320),
+                "p95": rand(700, 1400),
+                "max": rand(1500, 2200),
+            },
+            "newUsers": {
+                "newUsers": new_users,
+                "existingUsers": max(0, active_users - new_users),
+                "newUserRate": f"{((new_users / active_users) * 100):.1f}" if active_users else "0.0",
+            },
+            "retentionRate": {
+                "returningUsers": returning_users,
+                "oneTimeUsers": max(0, active_users - returning_users),
+                "retentionRate": retention_rate,
+            },
+            "noResultCount": {
+                "noResultCount": no_result_count,
+                "noResultRate": f"{((no_result_count / total_queries) * 100):.1f}" if total_queries else "0.0",
+                "samples": [
+                    {
+                        "time": e["time"],
+                        "user": e["user_id"],
+                        "type": e["event_type"],
+                    }
+                    for e in events if e["result_count"] == 0
+                ][:5],
+            },
+            "errorCount": {
+                "errorCount": error_count,
+                "errorRate": f"{((error_count / total_queries) * 100):.1f}" if total_queries else "0.0",
+                "samples": [
+                    {
+                        "time": e["time"],
+                        "user": e["user_id"],
+                        "response": f"{e['response_time_ms']} ms",
+                    }
+                    for e in events if (not e["success"]) or e["event_type"] == "error"
+                ][:5],
+            },
+        },
+    }
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard_page():
+    return render_template("dashboard.html")
+
+
+@app.route("/api/dashboard", methods=["GET"])
+def api_dashboard():
+    range_key = (request.args.get("range") or "1h").strip()
+    if range_key not in {"1h", "1d", "7d", "30d", "1y"}:
+        range_key = "1h"
+    return jsonify(_generate_dashboard_data(range_key))
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")

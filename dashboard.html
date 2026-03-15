@@ -1,0 +1,1413 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Toilet Bot Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+      --radius: 18px;
+      --primary: #111827;
+      --primary-soft: #eef2ff;
+      --primary-text: #3730a3;
+      --success-bg: #ecfeff;
+      --success-text: #155e75;
+      --error-bg: #fef2f2;
+      --error-text: #991b1b;
+      --row-bg: #f9fafb;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Segoe UI", "Noto Sans TC", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .title-wrap h1 {
+      margin: 0 0 6px;
+      font-size: 30px;
+      line-height: 1.2;
+    }
+
+    .title-wrap p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .range-btn {
+      border: none;
+      background: var(--card);
+      border-radius: 999px;
+      padding: 10px 16px;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 14px;
+      color: var(--text);
+      transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
+      height: 40px;
+    }
+
+    .range-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .range-btn.active {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      color: var(--primary-text);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+      align-items: stretch;
+    }
+
+    .card,
+    .chart-box,
+    .table-wrap {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .card {
+      padding: 18px;
+      min-width: 0;
+      min-height: 150px;
+      height: 150px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border: none;
+      width: 100%;
+      text-align: left;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    }
+
+    .card:active {
+      transform: translateY(0);
+    }
+
+    .card:focus-visible {
+      outline: 2px solid #4f46e5;
+      outline-offset: 2px;
+    }
+
+    .card h3 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .big-number {
+      font-size: 34px;
+      font-weight: 700;
+      line-height: 1.15;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .subtext {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+      min-height: 20px;
+      margin-top: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .card-hint {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #4f46e5;
+    }
+
+    .grid-main {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+      align-items: stretch;
+    }
+
+    .grid-charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+      align-items: stretch;
+    }
+
+    .chart-box {
+      padding: 18px;
+      min-width: 0;
+      height: 390px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chart-box h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+      line-height: 1.3;
+      flex: 0 0 auto;
+    }
+
+    .chart-container {
+      position: relative;
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .hot-area-box {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+      padding-right: 2px;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .list-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--row-bg);
+      font-size: 14px;
+      min-height: 48px;
+    }
+
+    .list-item span,
+    .list-item strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .table-wrap {
+      padding: 18px;
+      overflow-x: auto;
+    }
+
+    .table-wrap h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      table-layout: fixed;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
+      height: 52px;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: #fff;
+    }
+
+    tbody tr:hover {
+      background: #fafafa;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 60px;
+      max-width: 100%;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--success-bg);
+      color: var(--success-text);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pill.error {
+      background: var(--error-bg);
+      color: var(--error-text);
+    }
+
+    .mono {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 9999;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+    }
+
+    .modal {
+      width: min(900px, 100%);
+      max-height: 85vh;
+      overflow: hidden;
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.22);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 20px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-title-wrap h3 {
+      margin: 0 0 6px;
+      font-size: 22px;
+    }
+
+    .modal-title-wrap p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .close-btn {
+      border: none;
+      background: #f3f4f6;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+
+    .close-btn:hover {
+      background: #e5e7eb;
+    }
+
+    .modal-body {
+      padding: 20px;
+      overflow: auto;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .detail-card {
+      background: #f8fafc;
+      border-radius: 14px;
+      padding: 16px;
+      min-width: 0;
+    }
+
+    .detail-card h4 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .detail-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .detail-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 12px 14px;
+      background: #f9fafb;
+      border-radius: 12px;
+    }
+
+    .detail-key {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .detail-val {
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 14px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      border-bottom: 1px solid #edf2f7;
+      padding: 10px 8px;
+      height: auto;
+    }
+
+    .mini-table th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .empty-text {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1200px) {
+      .grid-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-main {
+        grid-template-columns: 1fr;
+      }
+
+      .grid-charts {
+        grid-template-columns: 1fr;
+      }
+
+      .chart-box {
+        height: 360px;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .container {
+        padding: 16px;
+      }
+
+      .topbar {
+        align-items: stretch;
+      }
+
+      .controls {
+        justify-content: flex-start;
+      }
+
+      .grid-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        height: 148px;
+      }
+
+      .big-number {
+        font-size: 30px;
+      }
+
+      .chart-box {
+        height: 330px;
+      }
+
+      th, td {
+        padding: 10px;
+        height: 48px;
+      }
+
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-row {
+        grid-template-columns: 1fr;
+      }
+
+      .modal {
+        max-height: 90vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="title-wrap">
+        <h1>Toilet Bot 儀表板</h1>
+        <p>流量、活躍、回訪、查詢成功率、回應時間、熱門區域與錯誤監控</p>
+      </div>
+
+      <div class="controls">
+        <button class="range-btn active" data-range="1h">1小時</button>
+        <button class="range-btn" data-range="1d">1日</button>
+        <button class="range-btn" data-range="7d">7日</button>
+        <button class="range-btn" data-range="30d">30日</button>
+        <button class="range-btn" data-range="1y">1年</button>
+        <div class="status" id="dataStatus">目前：假資料模式</div>
+      </div>
+    </div>
+
+    <div class="grid-cards">
+      <button class="card metric-card" data-metric="totalQueries">
+        <h3>查詢總量</h3>
+        <div class="big-number mono" id="totalQueries">0</div>
+        <div class="subtext">所選期間內總查詢次數</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="activeUsers">
+        <h3>活躍使用者</h3>
+        <div class="big-number mono" id="activeUsers">0</div>
+        <div class="subtext">所選期間內至少查詢一次</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="successRate">
+        <h3>成功率</h3>
+        <div class="big-number mono" id="successRate">0%</div>
+        <div class="subtext">成功回傳結果 / 全部查詢</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="avgResponse">
+        <h3>平均回應時間</h3>
+        <div class="big-number mono" id="avgResponse">0 ms</div>
+        <div class="subtext">API + 排序 + 回傳</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="newUsers">
+        <h3>新使用者</h3>
+        <div class="big-number mono" id="newUsers">0</div>
+        <div class="subtext">首次使用者數</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="retentionRate">
+        <h3>回訪率</h3>
+        <div class="big-number mono" id="retentionRate">0%</div>
+        <div class="subtext">曾在不同日期再次使用</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="noResultCount">
+        <h3>查無結果次數</h3>
+        <div class="big-number mono" id="noResultCount">0</div>
+        <div class="subtext">結果數量 = 0</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="errorCount">
+        <h3>錯誤次數</h3>
+        <div class="big-number mono" id="errorCount">0</div>
+        <div class="subtext">系統或 API 失敗</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+    </div>
+
+    <div class="grid-main">
+      <div class="chart-box">
+        <h2>使用趨勢</h2>
+        <div class="chart-container">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-box">
+        <h2>熱門區域</h2>
+        <div class="hot-area-box">
+          <div class="list" id="hotAreaList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-charts">
+      <div class="chart-box">
+        <h2>時段分布</h2>
+        <div class="chart-container">
+          <canvas id="hourChart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-box">
+        <h2>查詢類型分布</h2>
+        <div class="chart-container">
+          <canvas id="typeChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <h2>最近事件紀錄</h2>
+      <table>
+        <colgroup>
+          <col style="width: 20%">
+          <col style="width: 18%">
+          <col style="width: 20%">
+          <col style="width: 10%">
+          <col style="width: 15%">
+          <col style="width: 17%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>時間</th>
+            <th>使用者</th>
+            <th>事件類型</th>
+            <th>結果數</th>
+            <th>回應時間</th>
+            <th>狀態</th>
+          </tr>
+        </thead>
+        <tbody id="eventTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="metricModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 id="modalTitle">指標明細</h3>
+          <p id="modalSubtitle">查看目前區間的詳細資料</p>
+        </div>
+        <button class="close-btn" id="closeModalBtn">×</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <script>
+    const USE_MOCK = false;
+    let currentRange = '1h';
+    let trendChart = null;
+    let hourChart = null;
+    let typeChart = null;
+    let currentDashboardData = null;
+
+    const rangeButtons = document.querySelectorAll('.range-btn');
+    const metricCards = document.querySelectorAll('.metric-card');
+    const metricModal = document.getElementById('metricModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalSubtitle = document.getElementById('modalSubtitle');
+    const modalBody = document.getElementById('modalBody');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+
+    rangeButtons.forEach(btn => {
+      btn.addEventListener('click', async () => {
+        rangeButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentRange = btn.dataset.range;
+        await refreshDashboard();
+      });
+    });
+
+    metricCards.forEach(card => {
+      card.addEventListener('click', () => {
+        const metric = card.dataset.metric;
+        openMetricModal(metric);
+      });
+    });
+
+    closeModalBtn.addEventListener('click', closeMetricModal);
+
+    metricModal.addEventListener('click', (e) => {
+      if (e.target === metricModal) {
+        closeMetricModal();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && metricModal.classList.contains('show')) {
+        closeMetricModal();
+      }
+    });
+
+    function rand(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function formatNumber(num) {
+      return Number(num).toLocaleString('zh-TW');
+    }
+
+    function rangeLabel(range) {
+      return {
+        '1h': '1小時',
+        '1d': '1日',
+        '7d': '7日',
+        '30d': '30日',
+        '1y': '1年'
+      }[range] || range;
+    }
+
+    function translateEventType(type) {
+      const map = {
+        location_query: '定位查詢',
+        text_query: '文字查詢',
+        search_result: '點擊結果',
+        error: '錯誤'
+      };
+      return map[type] || type;
+    }
+
+    function generateMockData(range) {
+      const rangeConfig = {
+        '1h':  { count: 12, activeUsers: rand(15, 60), totalQueries: rand(40, 180) },
+        '1d':  { count: 24, activeUsers: rand(120, 400), totalQueries: rand(300, 1200) },
+        '7d':  { count: 7, activeUsers: rand(400, 1200), totalQueries: rand(1500, 5000) },
+        '30d': { count: 30, activeUsers: rand(1000, 5000), totalQueries: rand(5000, 18000) },
+        '1y':  { count: 12, activeUsers: rand(5000, 20000), totalQueries: rand(30000, 120000) }
+      };
+
+      const cfg = rangeConfig[range];
+      const trendLabels = [];
+      const trendQueries = [];
+      const trendUsers = [];
+
+      for (let i = 0; i < cfg.count; i++) {
+        trendLabels.push(
+          range === '1h' ? `${i * 5}分` :
+          range === '1d' ? `${String(i).padStart(2, '0')}:00` :
+          range === '1y' ? `${i + 1}月` :
+          `${i + 1}`
+        );
+        trendQueries.push(rand(10, 500));
+        trendUsers.push(rand(5, 250));
+      }
+
+      const hourLabels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+      const hourValues = hourLabels.map(() => rand(0, 100));
+
+      const typeData = {
+        labels: ['定位查詢', '文字查詢', '點擊結果', '錯誤'],
+        values: [rand(100, 500), rand(20, 120), rand(30, 150), rand(1, 30)]
+      };
+
+      const areas = [
+        ['台北車站', rand(50, 300)],
+        ['西門町', rand(30, 250)],
+        ['信義區', rand(30, 220)],
+        ['公館', rand(20, 180)],
+        ['板橋車站', rand(20, 170)],
+        ['松山車站', rand(10, 120)],
+        ['中山站', rand(15, 140)],
+        ['淡水老街', rand(8, 100)]
+      ].sort((a, b) => b[1] - a[1]);
+
+      const events = Array.from({ length: 15 }, (_, i) => ({
+        time: new Date(Date.now() - i * 600000).toLocaleString('zh-TW'),
+        user_id: `user_${rand(1000, 9999)}`,
+        event_type: ['location_query', 'text_query', 'search_result', 'error'][rand(0, 3)],
+        result_count: rand(0, 10),
+        response_time_ms: rand(100, 1800),
+        success: Math.random() > 0.12
+      }));
+
+      const totalQueries = cfg.totalQueries;
+      const activeUsers = cfg.activeUsers;
+      const successRate = +(Math.random() * 10 + 89).toFixed(1);
+      const avgResponse = rand(180, 900);
+      const newUsers = rand(10, Math.max(20, Math.floor(cfg.activeUsers * 0.25)));
+      const retentionRate = +(Math.random() * 30 + 40).toFixed(1);
+      const noResultCount = rand(0, 80);
+      const errorCount = rand(0, 20);
+      const successCount = Math.round(totalQueries * (successRate / 100));
+      const failedCount = totalQueries - successCount;
+      const returningUsers = Math.round(activeUsers * (retentionRate / 100));
+
+      return {
+        summary: {
+          totalQueries,
+          activeUsers,
+          successRate,
+          avgResponse,
+          newUsers,
+          retentionRate,
+          noResultCount,
+          errorCount
+        },
+        trend: { labels: trendLabels, queries: trendQueries, users: trendUsers },
+        hourly: { labels: hourLabels, values: hourValues },
+        typeData,
+        areas,
+        events,
+        detail: {
+          totalQueries: {
+            peak: Math.max(...trendQueries),
+            low: Math.min(...trendQueries),
+            avgPerPoint: Math.round(totalQueries / trendLabels.length),
+            topTimePoints: trendLabels
+              .map((label, i) => ({ label, value: trendQueries[i] }))
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 5)
+          },
+          activeUsers: {
+            inactiveUsersEstimate: Math.max(0, totalQueries - activeUsers),
+            avgQueriesPerUser: (totalQueries / activeUsers).toFixed(2),
+            topUserSamples: Array.from({ length: 5 }, (_, i) => ({
+              user: `user_${rand(1000, 9999)}`,
+              count: rand(2, 12)
+            }))
+          },
+          successRate: {
+            successCount,
+            failedCount,
+            successRate
+          },
+          avgResponse: {
+            min: rand(80, 140),
+            median: rand(160, 320),
+            p95: rand(700, 1400),
+            max: rand(1500, 2200)
+          },
+          newUsers: {
+            newUsers,
+            existingUsers: Math.max(0, activeUsers - newUsers),
+            newUserRate: ((newUsers / activeUsers) * 100).toFixed(1)
+          },
+          retentionRate: {
+            returningUsers,
+            oneTimeUsers: Math.max(0, activeUsers - returningUsers),
+            retentionRate
+          },
+          noResultCount: {
+            noResultCount,
+            noResultRate: ((noResultCount / totalQueries) * 100).toFixed(1),
+            samples: events
+              .filter(e => e.result_count === 0)
+              .slice(0, 5)
+              .map(e => ({
+                time: e.time,
+                user: e.user_id,
+                type: translateEventType(e.event_type)
+              }))
+          },
+          errorCount: {
+            errorCount,
+            errorRate: ((errorCount / totalQueries) * 100).toFixed(1),
+            samples: events
+              .filter(e => !e.success || e.event_type === 'error')
+              .slice(0, 5)
+              .map(e => ({
+                time: e.time,
+                user: e.user_id,
+                response: `${e.response_time_ms} ms`
+              }))
+          }
+        }
+      };
+    }
+
+    async function getDashboardData(range) {
+      if (USE_MOCK) {
+        return generateMockData(range);
+      }
+
+      const res = await fetch(`/api/dashboard?range=${range}`);
+      if (!res.ok) throw new Error('API 讀取失敗');
+      return await res.json();
+    }
+
+    function updateSummary(summary) {
+      document.getElementById('totalQueries').textContent = formatNumber(summary.totalQueries);
+      document.getElementById('activeUsers').textContent = formatNumber(summary.activeUsers);
+      document.getElementById('successRate').textContent = `${summary.successRate}%`;
+      document.getElementById('avgResponse').textContent = `${formatNumber(summary.avgResponse)} ms`;
+      document.getElementById('newUsers').textContent = formatNumber(summary.newUsers);
+      document.getElementById('retentionRate').textContent = `${summary.retentionRate}%`;
+      document.getElementById('noResultCount').textContent = formatNumber(summary.noResultCount);
+      document.getElementById('errorCount').textContent = formatNumber(summary.errorCount);
+    }
+
+    function createCommonChartOptions() {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: {
+              boxWidth: 12,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            padding: 10
+          }
+        },
+        scales: {
+          x: {
+            grid: {
+              display: false
+            },
+            ticks: {
+              maxRotation: 0,
+              autoSkip: true
+            }
+          },
+          y: {
+            beginAtZero: true,
+            grid: {
+              color: '#eef2f7'
+            }
+          }
+        }
+      };
+    }
+
+    function renderTrendChart(trend) {
+      if (trendChart) trendChart.destroy();
+
+      trendChart = new Chart(document.getElementById('trendChart'), {
+        type: 'line',
+        data: {
+          labels: trend.labels,
+          datasets: [
+            {
+              label: '查詢量',
+              data: trend.queries,
+              tension: 0.25,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              borderWidth: 2
+            },
+            {
+              label: '活躍使用者',
+              data: trend.users,
+              tension: 0.25,
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: createCommonChartOptions()
+      });
+    }
+
+    function renderHourChart(hourly) {
+      if (hourChart) hourChart.destroy();
+
+      const options = createCommonChartOptions();
+      options.plugins.legend.position = 'top';
+
+      hourChart = new Chart(document.getElementById('hourChart'), {
+        type: 'bar',
+        data: {
+          labels: hourly.labels,
+          datasets: [{
+            label: '查詢量',
+            data: hourly.values,
+            borderWidth: 0,
+            borderRadius: 6
+          }]
+        },
+        options
+      });
+    }
+
+    function renderTypeChart(typeData) {
+      if (typeChart) typeChart.destroy();
+
+      typeChart = new Chart(document.getElementById('typeChart'), {
+        type: 'doughnut',
+        data: {
+          labels: typeData.labels,
+          datasets: [{
+            data: typeData.values,
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          cutout: '62%',
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                boxWidth: 12,
+                padding: 16,
+                usePointStyle: true
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function renderAreaList(areas) {
+      const el = document.getElementById('hotAreaList');
+      el.innerHTML = '';
+
+      areas.forEach(([name, count], idx) => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `
+          <span title="${idx + 1}. ${name}">${idx + 1}. ${name}</span>
+          <strong class="mono" title="${count} 次">${formatNumber(count)} 次</strong>
+        `;
+        el.appendChild(div);
+      });
+    }
+
+    function renderEvents(events) {
+      const tbody = document.getElementById('eventTableBody');
+      tbody.innerHTML = '';
+
+      events.forEach(e => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="mono" title="${e.time}">${e.time}</td>
+          <td title="${e.user_id}">${e.user_id}</td>
+          <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
+          <td class="mono" title="${e.result_count}">${e.result_count}</td>
+          <td class="mono" title="${e.response_time_ms} ms">${e.response_time_ms} ms</td>
+          <td>
+            <span class="pill ${e.success ? '' : 'error'}" title="${e.success ? '成功' : '失敗'}">
+              ${e.success ? '成功' : '失敗'}
+            </span>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function openMetricModal(metric) {
+      if (!currentDashboardData) return;
+
+      const summary = currentDashboardData.summary;
+      const detail = currentDashboardData.detail || {};
+      const trend = currentDashboardData.trend || {};
+      const hourly = currentDashboardData.hourly || {};
+      const typeData = currentDashboardData.typeData || {};
+      const areas = currentDashboardData.areas || [];
+      const metricDetail = detail[metric] || {};
+
+      let title = '';
+      let subtitle = `${rangeLabel(currentRange)} 區間詳細資料`;
+      let html = '';
+
+      if (metric === 'totalQueries') {
+        title = '查詢總量明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>總查詢數</h4>
+              <div class="detail-value mono">${formatNumber(summary.totalQueries)}</div>
+            </div>
+            <div class="detail-card">
+              <h4>平均每時間點</h4>
+              <div class="detail-value mono">${formatNumber(metricDetail.avgPerPoint || 0)}</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">最高流量</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.peak || 0)}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-key">最低流量</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.low || 0)}</div>
+            </div>
+          </div>
+
+          <br>
+
+          <table class="mini-table">
+            <thead>
+              <tr>
+                <th>熱門時間點</th>
+                <th>查詢數</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(metricDetail.topTimePoints || []).map(item => `
+                <tr>
+                  <td>${item.label}</td>
+                  <td class="mono">${formatNumber(item.value)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      if (metric === 'activeUsers') {
+        title = '活躍使用者明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>活躍使用者</h4>
+              <div class="detail-value mono">${formatNumber(summary.activeUsers)}</div>
+            </div>
+            <div class="detail-card">
+              <h4>平均每位查詢</h4>
+              <div class="detail-value mono">${metricDetail.avgQueriesPerUser || 0}</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">使用者樣本</div>
+              <div class="detail-val">以下為本區間查詢次數較高的使用者樣本。</div>
+            </div>
+          </div>
+
+          <br>
+
+          <table class="mini-table">
+            <thead>
+              <tr>
+                <th>使用者</th>
+                <th>查詢次數</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(metricDetail.topUserSamples || []).map(item => `
+                <tr>
+                  <td>${item.user}</td>
+                  <td class="mono">${formatNumber(item.count)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      if (metric === 'successRate') {
+        title = '成功率明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>成功率</h4>
+              <div class="detail-value mono">${summary.successRate}%</div>
+            </div>
+            <div class="detail-card">
+              <h4>成功筆數</h4>
+              <div class="detail-value mono">${formatNumber(metricDetail.successCount || 0)}</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">失敗筆數</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.failedCount || 0)}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-key">計算方式</div>
+              <div class="detail-val">成功回傳結果 / 全部查詢</div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (metric === 'avgResponse') {
+        title = '平均回應時間明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>平均回應時間</h4>
+              <div class="detail-value mono">${formatNumber(summary.avgResponse)} ms</div>
+            </div>
+            <div class="detail-card">
+              <h4>P95</h4>
+              <div class="detail-value mono">${formatNumber(metricDetail.p95 || 0)} ms</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">最小值</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.min || 0)} ms</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-key">中位數</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.median || 0)} ms</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-key">最大值</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.max || 0)} ms</div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (metric === 'newUsers') {
+        title = '新使用者明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>新使用者</h4>
+              <div class="detail-value mono">${formatNumber(summary.newUsers)}</div>
+            </div>
+            <div class="detail-card">
+              <h4>新用戶占比</h4>
+              <div class="detail-value mono">${metricDetail.newUserRate || 0}%</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">既有使用者</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.existingUsers || 0)}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (metric === 'retentionRate') {
+        title = '回訪率明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>回訪率</h4>
+              <div class="detail-value mono">${summary.retentionRate}%</div>
+            </div>
+            <div class="detail-card">
+              <h4>回訪使用者</h4>
+              <div class="detail-value mono">${formatNumber(metricDetail.returningUsers || 0)}</div>
+            </div>
+          </div>
+
+          <div class="detail-list">
+            <div class="detail-row">
+              <div class="detail-key">單次使用者</div>
+              <div class="detail-val mono">${formatNumber(metricDetail.oneTimeUsers || 0)}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (metric === 'noResultCount') {
+        title = '查無結果次數明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>查無結果次數</h4>
+              <div class="detail-value mono">${formatNumber(summary.noResultCount)}</div>
+            </div>
+            <div class="detail-card">
+              <h4>查無結果率</h4>
+              <div class="detail-value mono">${metricDetail.noResultRate || 0}%</div>
+            </div>
+          </div>
+
+          ${(metricDetail.samples && metricDetail.samples.length > 0) ? `
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>時間</th>
+                  <th>使用者</th>
+                  <th>類型</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${metricDetail.samples.map(item => `
+                  <tr>
+                    <td>${item.time}</td>
+                    <td>${item.user}</td>
+                    <td>${item.type}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : `<div class="empty-text">目前沒有可顯示的查無結果樣本。</div>`}
+        `;
+      }
+
+      if (metric === 'errorCount') {
+        title = '錯誤次數明細';
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4>錯誤次數</h4>
+              <div class="detail-value mono">${formatNumber(summary.errorCount)}</div>
+            </div>
+            <div class="detail-card">
+              <h4>錯誤率</h4>
+              <div class="detail-value mono">${metricDetail.errorRate || 0}%</div>
+            </div>
+          </div>
+
+          ${(metricDetail.samples && metricDetail.samples.length > 0) ? `
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>時間</th>
+                  <th>使用者</th>
+                  <th>回應時間</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${metricDetail.samples.map(item => `
+                  <tr>
+                    <td>${item.time}</td>
+                    <td>${item.user}</td>
+                    <td>${item.response}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : `<div class="empty-text">目前沒有可顯示的錯誤樣本。</div>`}
+        `;
+      }
+
+      modalTitle.textContent = title || '指標明細';
+      modalSubtitle.textContent = subtitle;
+      modalBody.innerHTML = html || '<div class="empty-text">目前沒有資料可顯示。</div>';
+      metricModal.classList.add('show');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeMetricModal() {
+      metricModal.classList.remove('show');
+      document.body.style.overflow = '';
+    }
+
+    async function refreshDashboard() {
+      try {
+        const data = await getDashboardData(currentRange);
+        currentDashboardData = data;
+
+        updateSummary(data.summary);
+        renderTrendChart(data.trend);
+        renderHourChart(data.hourly);
+        renderTypeChart(data.typeData);
+        renderAreaList(data.areas);
+        renderEvents(data.events);
+
+        document.getElementById('dataStatus').textContent =
+          USE_MOCK
+            ? `目前：假資料模式（${currentRange}）`
+            : `目前：API 模式（${currentRange}）`;
+      } catch (err) {
+        console.error(err);
+        document.getElementById('dataStatus').textContent = '資料讀取失敗';
+      }
+    }
+
+    refreshDashboard();
+    setInterval(refreshDashboard, 30000);
+  </script>
+</body>
+</html>
