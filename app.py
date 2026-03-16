@@ -4805,31 +4805,26 @@ def _dashboard_range_to_sqlite(range_key: str):
 
     if range_key == "1h":
         start = now - timedelta(hours=1)
+        bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
         start = now - timedelta(days=1)
+        bucket = "hour"
         labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
     elif range_key == "7d":
         start = now - timedelta(days=7)
+        bucket = "day"
         labels = [f"{i+1}" for i in range(7)]
     elif range_key == "30d":
         start = now - timedelta(days=30)
+        bucket = "day"
         labels = [f"{i+1}" for i in range(30)]
     else:
         start = now - timedelta(days=365)
+        bucket = "month"
         labels = [f"{i+1}月" for i in range(12)]
 
-    return start, now, labels
-
-def _bucket_label(dt_obj, range_key):
-    if range_key == "1h":
-        return f"{(dt_obj.minute // 5) * 5}分"
-    if range_key == "1d":
-        return f"{dt_obj.hour:02d}:00"
-    if range_key in ("7d", "30d"):
-        return f"{dt_obj.day}"
-    return f"{dt_obj.month}月"
-
+    return start, now, bucket, labels
 
 def _generate_dashboard_data(range_key="1h"):
     start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
