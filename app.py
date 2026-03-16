@@ -166,6 +166,7 @@ def infer_cmd_from_text(text: str):
 
 # ------ 統一設定（可用環境變數覆寫；若你已在別處定義，請以這裡為準）------
 
+TW_TZ = timezone(timedelta(hours=8))
 LOC_MAX_CONCURRENCY = int(os.getenv("LOC_MAX_CONCURRENCY", "3"))      # 同時最多幾個使用者在跑附近查詢
 LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))  # 各資料源逾時（秒）
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "4"))             # 最多回幾個
@@ -4159,8 +4160,6 @@ _ai_quota = {}  # key: (usage_key, date_str) -> count
 
 
 def _ai_quota_check_and_inc(key: str):
-    TW_TZ = timezone(timedelta(hours=8))
-
     today = datetime.now(TW_TZ).strftime("%Y-%m-%d")
 
     conn = _get_db()
@@ -4802,30 +4801,25 @@ _DASHBOARD_RANGE_SECONDS = {
 
 
 def _dashboard_range_to_sqlite(range_key: str):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(TW_TZ)
 
     if range_key == "1h":
         start = now - timedelta(hours=1)
-        bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
         start = now - timedelta(days=1)
-        bucket = "hour"
         labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
     elif range_key == "7d":
         start = now - timedelta(days=7)
-        bucket = "day"
         labels = [f"{i+1}" for i in range(7)]
     elif range_key == "30d":
         start = now - timedelta(days=30)
-        bucket = "day"
         labels = [f"{i+1}" for i in range(30)]
     else:
         start = now - timedelta(days=365)
-        bucket = "month"
         labels = [f"{i+1}月" for i in range(12)]
 
-    return start, now, bucket, labels
+    return start, now, labels
 
 def _bucket_label(dt_obj, range_key):
     if range_key == "1h":
@@ -4845,9 +4839,7 @@ def _generate_dashboard_data(range_key="1h"):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT id, user_id, event_type, result_count, success, response_time_ms, lat, lon, area_name, query_text,
-                   created_at AT TIME ZONE 'UTC' AS created_at
-            FROM analytics_events
-            WHERE created_at >= %s AND created_at <= %s
+                    WHERE created_at >= %s AND created_at <= %s
             ORDER BY created_at DESC
         """, (start, end))
         rows = cur.fetchall()
@@ -4855,7 +4847,11 @@ def _generate_dashboard_data(range_key="1h"):
         events = [dict(r) for r in rows]
         for e in events:
             if isinstance(e.get("created_at"), datetime):
-                e["created_at"] = e["created_at"].isoformat()
+                dt = e["created_at"]
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.astimezone(TW_TZ)
+                e["created_at"] = dt.isoformat()
     else:
         conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
         conn.row_factory = sqlite3.Row
@@ -6183,53 +6179,89 @@ def api_line_insights():
             "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
         }
 
-        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        tw_now = datetime.now(timezone(timedelta(hours=8)))
+        query_date = (tw_now.date() - timedelta(days=1)).isoformat()
 
-        # followers
+        followers = 0
+        targeted = 0
+        blocks = 0
+        block_rate = 0.0
+        gender = []
+        age = []
+        area = []
+        app_type = []
+        subscription_period = []
+
         r = requests.get(
-            f"https://api.line.me/v2/bot/insight/followers?date={yesterday}",
-            headers=headers
+            f"https://api.line.me/v2/bot/insight/followers?date={query_date}",
+            headers=headers,
+            timeout=10
         )
-        followers_data = r.json() if r.status_code == 200 else {}
+        if r.status_code == 200:
+            j = r.json()
+            followers = j.get("followers", 0) or 0
+            targeted = j.get("targetedReaches", 0) or 0
+            blocks = j.get("blocks", 0) or 0
+            block_rate = round((blocks / followers) * 100, 1) if followers else 0.0
+        else:
+            logging.warning(f"followers insight failed: {r.status_code} {r.text}")
 
-        followers = followers_data.get("followers", 0)
-        targeted = followers_data.get("targetedReaches", 0)
-        blocks = followers_data.get("blocks", 0)
-
-        block_rate = 0
-        if followers:
-            block_rate = round(blocks / followers * 100, 2)
-
-        # demographic
         r2 = requests.get(
-            f"https://api.line.me/v2/bot/insight/demographic?date={yesterday}",
-            headers=headers
+            "https://api.line.me/v2/bot/insight/demographic",
+            headers=headers,
+            timeout=10
         )
-        demo = r2.json() if r2.status_code == 200 else {}
+        if r2.status_code == 200:
+            j = r2.json()
 
-        def convert(data):
-            if not data:
-                return []
-            return [
-                {"label": k, "percentage": v}
-                for k, v in data.items()
+            gender = [
+                {"label": item.get("gender"), "percentage": item.get("percentage", 0)}
+                for item in j.get("genders", [])
             ]
+            age = [
+                {"label": item.get("age"), "percentage": item.get("percentage", 0)}
+                for item in j.get("ages", [])
+            ]
+            area = [
+                {"label": item.get("area"), "percentage": item.get("percentage", 0)}
+                for item in j.get("areas", [])
+            ]
+            app_type = [
+                {"label": item.get("appType"), "percentage": item.get("percentage", 0)}
+                for item in j.get("appTypes", [])
+            ]
+            subscription_period = [
+                {"label": item.get("subscriptionPeriod"), "percentage": item.get("percentage", 0)}
+                for item in j.get("subscriptionPeriods", [])
+            ]
+        else:
+            logging.warning(f"demographic insight failed: {r2.status_code} {r2.text}")
 
         return jsonify({
             "followers": followers,
             "targetedReaches": targeted,
             "blocks": blocks,
             "blockRate": block_rate,
-            "gender": convert(demo.get("gender")),
-            "age": convert(demo.get("age")),
-            "area": convert(demo.get("area")),
-            "appType": convert(demo.get("appType")),
-            "subscriptionPeriod": convert(demo.get("subscriptionPeriod"))
+            "gender": gender,
+            "age": age,
+            "area": area,
+            "appType": app_type,
+            "subscriptionPeriod": subscription_period
         })
-
     except Exception as e:
-        logging.error(e)
-        return jsonify({"error": str(e)})
+        logging.exception("api_line_insights failed")
+        return jsonify({
+            "followers": 0,
+            "targetedReaches": 0,
+            "blocks": 0,
+            "blockRate": 0,
+            "gender": [],
+            "age": [],
+            "area": [],
+            "appType": [],
+            "subscriptionPeriod": [],
+            "error": str(e)
+        }), 200
     
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])

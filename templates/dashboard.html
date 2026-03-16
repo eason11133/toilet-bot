@@ -1134,46 +1134,35 @@
     async function refreshLineInsights() {
       try {
         const res = await fetch('/api/line-insights');
-
         if (!res.ok) {
-          console.error("LINE insights API error:", res.status);
+          console.error('LINE insights API error:', res.status);
           return;
         }
 
         const data = await res.json();
 
-        // LINE 好友數
         document.getElementById('lineFollowers').textContent =
           formatNumber(data.followers ?? 0);
 
-        // 可分析好友數
         document.getElementById('lineTargeted').textContent =
           formatNumber(data.targetedReaches ?? 0);
 
-        // 封鎖數
         document.getElementById('lineBlocks').textContent =
           formatNumber(data.blocks ?? 0);
 
-        // 封鎖率
         document.getElementById('lineBlockRate').textContent =
           `${data.blockRate ?? 0}%`;
 
-        // 人口統計
         renderInsightList('genderList', data.gender ?? []);
         renderInsightList('ageList', data.age ?? []);
         renderInsightList('areaInsightList', data.area ?? []);
-
-        // 裝置
         renderInsightList('appTypeList', data.appType ?? []);
-
-        // 關係期間
         renderInsightList('subscriptionList', data.subscriptionPeriod ?? []);
-
       } catch (err) {
-        console.error("LINE insight fetch error:", err);
+        console.error(err);
       }
     }
-
+    
     function renderHourChart(hourly) {
       if (hourChart) hourChart.destroy();
 
