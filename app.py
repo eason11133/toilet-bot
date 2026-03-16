@@ -6178,61 +6178,59 @@ def api_events():
 
 @app.route("/api/line-insights")
 def api_line_insights():
-
-    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-
-    if not token:
-        return jsonify({"error": "missing LINE_CHANNEL_ACCESS_TOKEN"}), 500
-
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-
-    data = {
-        "followers": 0,
-        "targeted": 0,
-        "blocks": 0,
-        "gender": {},
-        "age": {},
-        "area": {}
-    }
-
     try:
-        # 好友統計
+        headers = {
+            "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
+        }
+
+        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+
+        # followers
         r = requests.get(
-            "https://api.line.me/v2/bot/insight/followers?date=2024-01-01",
+            f"https://api.line.me/v2/bot/insight/followers?date={yesterday}",
             headers=headers
         )
+        followers_data = r.json() if r.status_code == 200 else {}
 
-        if r.status_code == 200:
-            j = r.json()
-            data["followers"] = j.get("followers", 0)
-            data["targeted"] = j.get("targetedReaches", 0)
-            data["blocks"] = j.get("blocks", 0)
+        followers = followers_data.get("followers", 0)
+        targeted = followers_data.get("targetedReaches", 0)
+        blocks = followers_data.get("blocks", 0)
 
-        # 人口統計
-        r = requests.get(
-            "https://api.line.me/v2/bot/insight/demographic",
+        block_rate = 0
+        if followers:
+            block_rate = round(blocks / followers * 100, 2)
+
+        # demographic
+        r2 = requests.get(
+            f"https://api.line.me/v2/bot/insight/demographic?date={yesterday}",
             headers=headers
         )
+        demo = r2.json() if r2.status_code == 200 else {}
 
-        if r.status_code == 200:
-            j = r.json()
+        def convert(data):
+            if not data:
+                return []
+            return [
+                {"label": k, "percentage": v}
+                for k, v in data.items()
+            ]
 
-            for item in j.get("genders", []):
-                data["gender"][item["gender"]] = item["percentage"]
-
-            for item in j.get("ages", []):
-                data["age"][item["age"]] = item["percentage"]
-
-            for item in j.get("areas", []):
-                data["area"][item["area"]] = item["percentage"]
+        return jsonify({
+            "followers": followers,
+            "targetedReaches": targeted,
+            "blocks": blocks,
+            "blockRate": block_rate,
+            "gender": convert(demo.get("gender")),
+            "age": convert(demo.get("age")),
+            "area": convert(demo.get("area")),
+            "appType": convert(demo.get("appType")),
+            "subscriptionPeriod": convert(demo.get("subscriptionPeriod"))
+        })
 
     except Exception as e:
-        print("LINE insight error:", e)
-
-    return jsonify(data)
-
+        logging.error(e)
+        return jsonify({"error": str(e)})
+    
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
