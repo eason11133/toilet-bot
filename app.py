@@ -4901,7 +4901,9 @@ def _generate_dashboard_data(range_key="1h"):
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
     response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
-    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+    instant_response_count = len([v for v in response_values if v < 50])
+    response_values_for_avg = [v for v in response_values if v >= 50]
+    avg_response = round(sum(response_values_for_avg) / len(response_values_for_avg)) if response_values_for_avg else (round(sum(response_values) / len(response_values)) if response_values else 0)
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
@@ -5009,7 +5011,6 @@ def _generate_dashboard_data(range_key="1h"):
     for e in visible_events[:10]:
         event_rows.append({
             "time": e.get("created_at", ""),
-            "user_id": e.get("user_id", "") or "-",
             "event_type": e.get("event_type", ""),
             "result_count": e.get("result_count", 0) or 0,
             "response_time_ms": e.get("response_time_ms", 0) or 0,
@@ -5027,6 +5028,7 @@ def _generate_dashboard_data(range_key="1h"):
             "activeUsers": active_users,
             "successRate": success_rate,
             "avgResponse": avg_response,
+            "instantResponses": instant_response_count,
             "newUsers": new_users,
             "retentionRate": retention_rate,
             "noResultCount": no_result_count,
@@ -5069,10 +5071,15 @@ def _generate_dashboard_data(range_key="1h"):
                 "successRate": success_rate
             },
             "avgResponse": {
-                "min": min(response_values) if response_values else 0,
+                "min": min(response_values_for_avg) if response_values_for_avg else (min(response_values) if response_values else 0),
                 "median": median_value,
                 "p95": p95_value,
                 "max": max(response_values) if response_values else 0
+            },
+            "instantResponses": {
+                "count": instant_response_count,
+                "thresholdMs": 50,
+                "rate": f"{(instant_response_count / total_queries * 100):.1f}" if total_queries else "0.0"
             },
             "newUsers": {
                 "newUsers": new_users,
@@ -5104,49 +5111,11 @@ def dashboard_page():
 
 
 @app.route("/api/dashboard", methods=["GET"])
-
-def _postprocess_dashboard_payload(payload):
-    events = payload.get("detail", {}).get("events", [])
-
-    times = [
-        e.get("responseTime")
-        for e in events
-        if e.get("responseTime") is not None
-    ]
-
-    instant = sum(1 for t in times if t < 50)
-
-    valid = [t for t in times if t >= 50]
-
-    if valid:
-        avg = sum(valid) / len(valid)
-    elif times:
-        avg = sum(times) / len(times)
-    else:
-        avg = 0
-
-    payload.setdefault("summary", {})["instantResponses"] = instant
-    payload["summary"]["avgResponse"] = round(avg, 2)
-
-    # 移除 user_id
-    for e in events:
-        e.pop("user_id", None)
-        e.pop("userId", None)
-
-    return payload
-
 def api_dashboard():
-
     range_key = (request.args.get("range") or "1h").strip()
-
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-
-    payload = _generate_dashboard_data(range_key)
-
-    payload = _postprocess_dashboard_payload(payload)
-
-    return jsonify(payload)
+    return jsonify(_generate_dashboard_data(range_key))
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])

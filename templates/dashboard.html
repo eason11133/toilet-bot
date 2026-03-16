@@ -707,7 +707,14 @@
       <button class="card metric-card" data-metric="avgResponse">
         <h3><span class="heading-inline">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="avgResponse">0 ms</div>
-        <div class="subtext">API + 排序 + 回傳</div>
+        <div class="subtext">已排除小於 50 ms 的瞬時回應</div>
+        <div class="card-hint">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="instantResponses">
+        <h3><span class="heading-inline">瞬時回應筆數 <span class="info-icon" data-info="instantResponses" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="instantResponses">0</div>
+        <div class="subtext">小於 50 ms 的瞬時回應次數</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
@@ -777,7 +784,6 @@
       <table>
         <colgroup>
           <col style="width: 20%">
-          <col style="width: 18%">
           <col style="width: 20%">
           <col style="width: 10%">
           <col style="width: 15%">
@@ -840,7 +846,8 @@
       totalQueries: '所選期間內的總查詢次數，包含定位查詢與文字查詢。',
       activeUsers: '所選期間內至少使用過一次的使用者數。',
       successRate: '成功回傳結果的比例，公式為成功回傳結果 ÷ 全部查詢。',
-      avgResponse: '系統平均回應時間，包含 API、排序與回傳。',
+      avgResponse: '系統平均回應時間，已排除小於 50 ms 的瞬時回應，避免平均值失真。',
+      instantResponses: '小於 50 ms 的瞬時回應次數，通常代表快取命中或極快回傳。',
       newUsers: '所選期間內首次使用本系統的使用者數。',
       retentionRate: '曾在不同日期再次使用系統的比例。',
       noResultCount: '查詢成功送出，但結果數量為 0 的次數。',
@@ -1041,6 +1048,7 @@
           activeUsers,
           successRate,
           avgResponse,
+          instantResponses: rand(0, Math.max(3, Math.floor(totalQueries * 0.2))),
           newUsers,
           retentionRate,
           noResultCount,
@@ -1079,6 +1087,11 @@
             median: rand(160, 320),
             p95: rand(700, 1400),
             max: rand(1500, 2200)
+          },
+          instantResponses: {
+            count: rand(0, Math.max(3, Math.floor(totalQueries * 0.2))),
+            thresholdMs: 50,
+            rate: (Math.random() * 20).toFixed(1)
           },
           newUsers: {
             newUsers,
@@ -1129,6 +1142,8 @@
       document.getElementById('activeUsers').textContent = formatMetricValue(summary.activeUsers);
       document.getElementById('successRate').textContent = isMissingMetric(summary.successRate) ? '—' : `${summary.successRate}%`;
       document.getElementById('avgResponse').textContent = isMissingMetric(summary.avgResponse) ? '—' : `${formatNumber(summary.avgResponse)} ms`;
+      const instantEl = document.getElementById('instantResponses');
+      if (instantEl) instantEl.textContent = formatMetricValue(summary.instantResponses);
       document.getElementById('newUsers').textContent = formatMetricValue(summary.newUsers);
       document.getElementById('retentionRate').textContent = isMissingMetric(summary.retentionRate) ? '—' : `${summary.retentionRate}%`;
       document.getElementById('noResultCount').textContent = formatMetricValue(summary.noResultCount);
@@ -1222,6 +1237,7 @@
         activeUsers: '活躍使用者明細',
         successRate: '成功率明細',
         avgResponse: '平均回應時間明細',
+        instantResponses: '瞬時回應筆數明細',
         newUsers: '新使用者明細',
         retentionRate: '回訪率明細',
         noResultCount: '查無結果次數明細',
@@ -1247,7 +1263,9 @@
       } else if (metric === 'successRate') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>成功次數</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>失敗次數</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>成功率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
       } else if (metric === 'avgResponse') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div><div class="empty-text">平均值已排除小於 50 ms 的瞬時回應，避免統計失真。</div>`;
+      } else if (metric === 'instantResponses') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>瞬時回應次數</h4><div class="detail-value">${detail.count ?? 0}</div></div><div class="detail-card"><h4>判定門檻</h4><div class="detail-value">&lt; ${detail.thresholdMs ?? 50} ms</div></div><div class="detail-card"><h4>占總查詢比例</h4><div class="detail-value">${detail.rate ?? 0}%</div></div></div>`;
       } else if (metric === 'newUsers') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>新使用者</h4><div class="detail-value">${detail.newUsers ?? 0}</div></div><div class="detail-card"><h4>既有使用者</h4><div class="detail-value">${detail.existingUsers ?? 0}</div></div><div class="detail-card"><h4>新用戶占比</h4><div class="detail-value">${detail.newUserRate ?? 0}%</div></div></div>`;
       } else if (metric === 'retentionRate') {
@@ -1393,7 +1411,6 @@
         const responseText = isMissingMetric(e.response_time_ms) ? '—' : `${e.response_time_ms} ms`;
         tr.innerHTML = `
           <td class="mono" title="${e.time}">${e.time}</td>
-          <td title="${e.user_id}">${e.user_id}</td>
           <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
           <td class="mono" title="${resultText}">${resultText}</td>
           <td class="mono" title="${responseText}">${responseText}</td>
