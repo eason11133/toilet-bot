@@ -555,7 +555,56 @@
         <button class="range-btn" data-range="7d">7日</button>
         <button class="range-btn" data-range="30d">30日</button>
         <button class="range-btn" data-range="1y">1年</button>
-        <div class="status" id="dataStatus">目前：假資料模式</div>
+        <div class="status" id="dataStatus">目前：真實資料模式</div>
+      </div>
+    </div>
+
+    <div class="grid-cards" id="lineInsightCards">
+      <div class="card">
+        <h3>LINE 好友數</h3>
+        <div class="big-number mono" id="lineFollowers">0</div>
+        <div class="subtext">官方帳號目前好友數</div>
+      </div>
+      <div class="card">
+        <h3>目標好友數</h3>
+        <div class="big-number mono" id="lineTargeted">0</div>
+        <div class="subtext">可用於人口統計分析的人數</div>
+      </div>
+      <div class="card">
+        <h3>封鎖數</h3>
+        <div class="big-number mono" id="lineBlocks">0</div>
+        <div class="subtext">官方帳號封鎖數</div>
+      </div>
+      <div class="card">
+        <h3>封鎖率</h3>
+        <div class="big-number mono" id="lineBlockRate">0%</div>
+        <div class="subtext">封鎖數 / 好友數</div>
+      </div>
+    </div>
+
+    <div class="grid-charts">
+      <div class="chart-box">
+        <h2>LINE 性別分布</h2>
+        <div class="hot-area-box"><div class="list" id="genderList"></div></div>
+      </div>
+      <div class="chart-box">
+        <h2>LINE 年齡分布</h2>
+        <div class="hot-area-box"><div class="list" id="ageList"></div></div>
+      </div>
+    </div>
+
+    <div class="grid-charts">
+      <div class="chart-box">
+        <h2>LINE 地區分布</h2>
+        <div class="hot-area-box"><div class="list" id="areaInsightList"></div></div>
+      </div>
+      <div class="chart-box">
+        <h2>LINE 裝置 / 關係期間</h2>
+        <div class="hot-area-box">
+          <div class="list" id="appTypeList"></div>
+          <div style="height:12px"></div>
+          <div class="list" id="subscriptionList"></div>
+        </div>
       </div>
     </div>
 
@@ -1007,6 +1056,98 @@
       });
     }
 
+
+
+    function closeMetricModal() {
+      metricModal.classList.remove('show');
+    }
+
+    function openMetricModal(metric) {
+      if (!currentDashboardData || !currentDashboardData.detail) return;
+      const detail = currentDashboardData.detail[metric];
+      if (!detail) return;
+
+      const titleMap = {
+        totalQueries: '查詢總量明細',
+        activeUsers: '活躍使用者明細',
+        successRate: '成功率明細',
+        avgResponse: '平均回應時間明細',
+        newUsers: '新使用者明細',
+        retentionRate: '回訪率明細',
+        noResultCount: '查無結果次數明細',
+        errorCount: '錯誤次數明細'
+      };
+      modalTitle.textContent = titleMap[metric] || '指標明細';
+      modalSubtitle.textContent = `目前區間：${rangeLabel(currentRange)}`;
+
+      let html = '';
+      if (metric === 'totalQueries') {
+        html = `
+          <div class="detail-grid">
+            <div class="detail-card"><h4>最高時段查詢量</h4><div class="detail-value">${detail.peak ?? 0}</div></div>
+            <div class="detail-card"><h4>最低時段查詢量</h4><div class="detail-value">${detail.low ?? 0}</div></div>
+            <div class="detail-card"><h4>平均每時段查詢量</h4><div class="detail-value">${detail.avgPerPoint ?? 0}</div></div>
+          </div>
+          <div class="detail-list">
+            <h4>熱門時段</h4>
+            ${(detail.topTimePoints || []).length ? `<table class="mini-table"><thead><tr><th>時段</th><th>查詢量</th></tr></thead><tbody>${(detail.topTimePoints || []).map(x => `<tr><td>${x.label}</td><td>${x.value}</td></tr>`).join('')}</tbody></table>` : '<div class="empty-text">目前沒有資料</div>'}
+          </div>`;
+      } else if (metric === 'activeUsers') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>平均每位使用者查詢次數</h4><div class="detail-value">${detail.avgQueriesPerUser ?? '0.00'}</div></div><div class="detail-card"><h4>推估非重複外查詢數</h4><div class="detail-value">${detail.inactiveUsersEstimate ?? 0}</div></div></div>`;
+      } else if (metric === 'successRate') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>成功次數</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>失敗次數</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>成功率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
+      } else if (metric === 'avgResponse') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div>`;
+      } else if (metric === 'newUsers') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>新使用者</h4><div class="detail-value">${detail.newUsers ?? 0}</div></div><div class="detail-card"><h4>既有使用者</h4><div class="detail-value">${detail.existingUsers ?? 0}</div></div><div class="detail-card"><h4>新用戶占比</h4><div class="detail-value">${detail.newUserRate ?? 0}%</div></div></div>`;
+      } else if (metric === 'retentionRate') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>回訪使用者</h4><div class="detail-value">${detail.returningUsers ?? 0}</div></div><div class="detail-card"><h4>單次使用者</h4><div class="detail-value">${detail.oneTimeUsers ?? 0}</div></div><div class="detail-card"><h4>回訪率</h4><div class="detail-value">${detail.retentionRate ?? 0}%</div></div></div>`;
+      } else if (metric === 'noResultCount') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>查無結果次數</h4><div class="detail-value">${detail.noResultCount ?? 0}</div></div><div class="detail-card"><h4>查無結果比例</h4><div class="detail-value">${detail.noResultRate ?? 0}%</div></div></div>`;
+      } else if (metric === 'errorCount') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>錯誤次數</h4><div class="detail-value">${detail.errorCount ?? 0}</div></div><div class="detail-card"><h4>錯誤比例</h4><div class="detail-value">${detail.errorRate ?? 0}%</div></div></div>`;
+      } else {
+        html = '<div class="empty-text">目前沒有可顯示的明細。</div>';
+      }
+      modalBody.innerHTML = html;
+      metricModal.classList.add('show');
+    }
+
+    function renderInsightList(id, items, formatPct = true) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = '';
+      if (!items || !items.length) {
+        el.innerHTML = '<div class="empty-text">目前沒有資料</div>';
+        return;
+      }
+      items.forEach((item, idx) => {
+        const name = item.label || item.name || item.type || item.age || item.area || item.appType || item.subscriptionPeriod || `項目${idx+1}`;
+        const pct = item.percentage ?? item.percent ?? item.value ?? 0;
+        const div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `<span title="${name}">${name}</span><strong class="mono">${formatPct ? pct + '%' : pct}</strong>`;
+        el.appendChild(div);
+      });
+    }
+
+    async function refreshLineInsights() {
+      try {
+        const res = await fetch('/api/line-insights');
+        const data = await res.json();
+        if (!data.available) return;
+        document.getElementById('lineFollowers').textContent = formatNumber(data.followers || 0);
+        document.getElementById('lineTargeted').textContent = formatNumber(data.targetedReaches || 0);
+        document.getElementById('lineBlocks').textContent = formatNumber(data.blocks || 0);
+        document.getElementById('lineBlockRate').textContent = `${data.blockRate || 0}%`;
+        renderInsightList('genderList', data.gender || []);
+        renderInsightList('ageList', data.age || []);
+        renderInsightList('areaInsightList', data.area || []);
+        renderInsightList('appTypeList', data.appType || []);
+        renderInsightList('subscriptionList', data.subscriptionPeriod || []);
+      } catch (err) { console.error(err); }
+    }
+
     function renderHourChart(hourly) {
       if (hourChart) hourChart.destroy();
 
@@ -1098,189 +1239,6 @@
       });
     }
 
-
-
-    function closeMetricModal() {
-      metricModal.classList.remove('show');
-    }
-
-    function openMetricModal(metric) {
-      if (!currentDashboardData || !currentDashboardData.detail) return;
-
-      const detail = currentDashboardData.detail[metric];
-      if (!detail) return;
-
-      const titleMap = {
-        totalQueries: '查詢總量明細',
-        activeUsers: '活躍使用者明細',
-        successRate: '成功率明細',
-        avgResponse: '平均回應時間明細',
-        newUsers: '新使用者明細',
-        retentionRate: '回訪率明細',
-        noResultCount: '查無結果次數明細',
-        errorCount: '錯誤次數明細'
-      };
-
-      modalTitle.textContent = titleMap[metric] || '指標明細';
-      modalSubtitle.textContent = `目前區間：${rangeLabel(currentRange)}`;
-
-      let html = '';
-
-      if (metric === 'totalQueries') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>最高時段查詢量</h4>
-              <div class="detail-value">${detail.peak ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>最低時段查詢量</h4>
-              <div class="detail-value">${detail.low ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>平均每時段查詢量</h4>
-              <div class="detail-value">${detail.avgPerPoint ?? 0}</div>
-            </div>
-          </div>
-          <div class="detail-list">
-            <h4>熱門時段</h4>
-            ${(detail.topTimePoints || []).length ? `
-              <table class="mini-table">
-                <thead>
-                  <tr><th>時段</th><th>查詢量</th></tr>
-                </thead>
-                <tbody>
-                  ${(detail.topTimePoints || []).map(x => `
-                    <tr>
-                      <td>${x.label}</td>
-                      <td>${x.value}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            ` : '<div class="empty-text">目前沒有資料</div>'}
-          </div>
-        `;
-      } else if (metric === 'activeUsers') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>平均每位使用者查詢次數</h4>
-              <div class="detail-value">${detail.avgQueriesPerUser ?? '0.00'}</div>
-            </div>
-            <div class="detail-card">
-              <h4>推估非重複外查詢數</h4>
-              <div class="detail-value">${detail.inactiveUsersEstimate ?? 0}</div>
-            </div>
-          </div>
-          <div class="empty-text">目前未提供 top user 明細。</div>
-        `;
-      } else if (metric === 'successRate') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>成功次數</h4>
-              <div class="detail-value">${detail.successCount ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>失敗次數</h4>
-              <div class="detail-value">${detail.failedCount ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>成功率</h4>
-              <div class="detail-value">${detail.successRate ?? 0}%</div>
-            </div>
-          </div>
-        `;
-      } else if (metric === 'avgResponse') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>最小值</h4>
-              <div class="detail-value">${detail.min ?? 0} ms</div>
-            </div>
-            <div class="detail-card">
-              <h4>中位數</h4>
-              <div class="detail-value">${detail.median ?? 0} ms</div>
-            </div>
-            <div class="detail-card">
-              <h4>P95</h4>
-              <div class="detail-value">${detail.p95 ?? 0} ms</div>
-            </div>
-            <div class="detail-card">
-              <h4>最大值</h4>
-              <div class="detail-value">${detail.max ?? 0} ms</div>
-            </div>
-          </div>
-        `;
-      } else if (metric === 'newUsers') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>新使用者</h4>
-              <div class="detail-value">${detail.newUsers ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>既有使用者</h4>
-              <div class="detail-value">${detail.existingUsers ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>新用戶占比</h4>
-              <div class="detail-value">${detail.newUserRate ?? 0}%</div>
-            </div>
-          </div>
-        `;
-      } else if (metric === 'retentionRate') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>回訪使用者</h4>
-              <div class="detail-value">${detail.returningUsers ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>單次使用者</h4>
-              <div class="detail-value">${detail.oneTimeUsers ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>回訪率</h4>
-              <div class="detail-value">${detail.retentionRate ?? 0}%</div>
-            </div>
-          </div>
-        `;
-      } else if (metric === 'noResultCount') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>查無結果次數</h4>
-              <div class="detail-value">${detail.noResultCount ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>查無結果比例</h4>
-              <div class="detail-value">${detail.noResultRate ?? 0}%</div>
-            </div>
-          </div>
-        `;
-      } else if (metric === 'errorCount') {
-        html = `
-          <div class="detail-grid">
-            <div class="detail-card">
-              <h4>錯誤次數</h4>
-              <div class="detail-value">${detail.errorCount ?? 0}</div>
-            </div>
-            <div class="detail-card">
-              <h4>錯誤比例</h4>
-              <div class="detail-value">${detail.errorRate ?? 0}%</div>
-            </div>
-          </div>
-        `;
-      } else {
-        html = '<div class="empty-text">目前沒有可顯示的明細。</div>';
-      }
-
-      modalBody.innerHTML = html;
-      metricModal.classList.add('show');
-    }
-
     async function refreshDashboard() {
       try {
         const data = await getDashboardData(currentRange);
@@ -1294,6 +1252,7 @@
         renderEvents(data.events);
 
         document.getElementById('dataStatus').textContent = `目前：真實資料模式（${currentRange}）`;
+        refreshLineInsights();
       } catch (err) {
         console.error(err);
         document.getElementById('dataStatus').textContent = '資料讀取失敗';
@@ -1301,7 +1260,9 @@
     }
 
     refreshDashboard();
+    refreshLineInsights();
     setInterval(refreshDashboard, 30000);
+    setInterval(refreshLineInsights, 300000);
   </script>
 </body>
 </html>
