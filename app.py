@@ -6176,6 +6176,63 @@ def api_events():
 
     return jsonify(events)
 
+@app.route("/api/line-insights")
+def api_line_insights():
+
+    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+
+    if not token:
+        return jsonify({"error": "missing LINE_CHANNEL_ACCESS_TOKEN"}), 500
+
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    data = {
+        "followers": 0,
+        "targeted": 0,
+        "blocks": 0,
+        "gender": {},
+        "age": {},
+        "area": {}
+    }
+
+    try:
+        # 好友統計
+        r = requests.get(
+            "https://api.line.me/v2/bot/insight/followers?date=2024-01-01",
+            headers=headers
+        )
+
+        if r.status_code == 200:
+            j = r.json()
+            data["followers"] = j.get("followers", 0)
+            data["targeted"] = j.get("targetedReaches", 0)
+            data["blocks"] = j.get("blocks", 0)
+
+        # 人口統計
+        r = requests.get(
+            "https://api.line.me/v2/bot/insight/demographic",
+            headers=headers
+        )
+
+        if r.status_code == 200:
+            j = r.json()
+
+            for item in j.get("genders", []):
+                data["gender"][item["gender"]] = item["percentage"]
+
+            for item in j.get("ages", []):
+                data["age"][item["age"]] = item["percentage"]
+
+            for item in j.get("areas", []):
+                data["area"][item["area"]] = item["percentage"]
+
+    except Exception as e:
+        print("LINE insight error:", e)
+
+    return jsonify(data)
+
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
