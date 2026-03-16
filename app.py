@@ -5106,37 +5106,47 @@ def dashboard_page():
 @app.route("/api/dashboard", methods=["GET"])
 
 def _postprocess_dashboard_payload(payload):
-    try:
-        events = payload.get("detail", {}).get("events", [])
-        times = [e.get("responseTime") or e.get("response_time_ms") for e in events if (e.get("responseTime") or e.get("response_time_ms")) is not None]
-        instant = sum(1 for t in times if t < 50)
-        valid = [t for t in times if t >= 50]
-        if valid:
-            avg = sum(valid)/len(valid)
-        elif times:
-            avg = sum(times)/len(times)
-        else:
-            avg = 0
+    events = payload.get("detail", {}).get("events", [])
 
-        payload.setdefault("summary", {})["instantResponses"] = instant
-        payload["summary"]["avgResponse"] = round(avg,2)
+    times = [
+        e.get("responseTime")
+        for e in events
+        if e.get("responseTime") is not None
+    ]
 
-        # remove user_id
-        for e in events:
-            if "user_id" in e:
-                del e["user_id"]
-            if "userId" in e:
-                del e["userId"]
-    except Exception:
-        pass
+    instant = sum(1 for t in times if t < 50)
+
+    valid = [t for t in times if t >= 50]
+
+    if valid:
+        avg = sum(valid) / len(valid)
+    elif times:
+        avg = sum(times) / len(times)
+    else:
+        avg = 0
+
+    payload.setdefault("summary", {})["instantResponses"] = instant
+    payload["summary"]["avgResponse"] = round(avg, 2)
+
+    # 移除 user_id
+    for e in events:
+        e.pop("user_id", None)
+        e.pop("userId", None)
+
     return payload
 
-
 def api_dashboard():
+
     range_key = (request.args.get("range") or "1h").strip()
+
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-    return jsonify(_postprocess_dashboard_payload(_generate_dashboard_data(range_key)))
+
+    payload = _generate_dashboard_data(range_key)
+
+    payload = _postprocess_dashboard_payload(payload)
+
+    return jsonify(payload)
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
