@@ -328,6 +328,71 @@
       font-variant-numeric: tabular-nums;
     }
 
+
+    .section-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 20px;
+    }
+
+    .section-controls .controls {
+      justify-content: flex-start;
+    }
+
+    .section-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .heading-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .info-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid #cbd5e1;
+      color: #64748b;
+      font-size: 12px;
+      font-style: normal;
+      cursor: pointer;
+      background: #fff;
+      vertical-align: middle;
+      flex: 0 0 auto;
+    }
+
+    .info-icon:hover {
+      background: #f8fafc;
+      color: #334155;
+      border-color: #94a3b8;
+    }
+
+    .info-tooltip {
+      position: fixed;
+      z-index: 10001;
+      background: #111827;
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 10px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.18);
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 260px;
+      pointer-events: none;
+      white-space: normal;
+    }
+
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -550,6 +615,64 @@
       </div>
 
       <div class="controls">
+        <div class="status" id="lineDataStatus">LINE 官方資料：每日更新一次</div>
+      </div>
+    </div>
+
+    <div class="grid-cards" id="lineInsightCards">
+      <div class="card">
+        <h3><span class="heading-inline">LINE 好友數 <span class="info-icon" data-info="lineFollowers" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="lineFollowers">0</div>
+        <div class="subtext">官方帳號目前好友數</div>
+      </div>
+      <div class="card">
+        <h3><span class="heading-inline">目標好友數 <span class="info-icon" data-info="lineTargeted" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="lineTargeted">0</div>
+        <div class="subtext">可用於人口統計分析的人數</div>
+      </div>
+      <div class="card">
+        <h3><span class="heading-inline">封鎖數 <span class="info-icon" data-info="lineBlocks" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="lineBlocks">0</div>
+        <div class="subtext">官方帳號封鎖數</div>
+      </div>
+      <div class="card">
+        <h3><span class="heading-inline">封鎖率 <span class="info-icon" data-info="lineBlockRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="lineBlockRate">0%</div>
+        <div class="subtext">封鎖數 / 好友數</div>
+      </div>
+    </div>
+
+    <div class="grid-charts">
+      <div class="chart-box">
+        <h2><span class="heading-inline">LINE 性別分布 <span class="info-icon" data-info="genderList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <div class="hot-area-box"><div class="list" id="genderList"></div></div>
+      </div>
+      <div class="chart-box">
+        <h2><span class="heading-inline">LINE 年齡分布 <span class="info-icon" data-info="ageList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <div class="hot-area-box"><div class="list" id="ageList"></div></div>
+      </div>
+    </div>
+
+    <div class="grid-charts">
+      <div class="chart-box">
+        <h2><span class="heading-inline">LINE 地區分布 <span class="info-icon" data-info="areaInsightList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <div class="hot-area-box"><div class="list" id="areaInsightList"></div></div>
+      </div>
+      <div class="chart-box">
+        <h2><span class="heading-inline">LINE 裝置 / 關係期間 <span class="info-icon" data-info="lineDeviceSubscription" role="button" tabindex="0">ⓘ</span></span></h2>
+        <div class="hot-area-box">
+          <div class="list" id="appTypeList"></div>
+          <div style="height:12px"></div>
+          <div class="list" id="subscriptionList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-controls">
+      <div>
+        <div class="section-note">以下區間切換只影響系統查詢資料，不會改變上方 LINE 官方統計。</div>
+      </div>
+      <div class="controls">
         <button class="range-btn active" data-range="1h">1小時</button>
         <button class="range-btn" data-range="1d">1日</button>
         <button class="range-btn" data-range="7d">7日</button>
@@ -559,114 +682,58 @@
       </div>
     </div>
 
-    <div class="grid-cards" id="lineInsightCards">
-      <div class="card">
-        <h3>LINE 好友數</h3>
-        <div class="big-number mono" id="lineFollowers">0</div>
-        <div class="subtext">官方帳號目前好友數</div>
-      </div>
-      <div class="card">
-        <h3>目標好友數</h3>
-        <div class="big-number mono" id="lineTargeted">0</div>
-        <div class="subtext">可用於人口統計分析的人數</div>
-      </div>
-      <div class="card">
-        <h3>封鎖數</h3>
-        <div class="big-number mono" id="lineBlocks">0</div>
-        <div class="subtext">官方帳號封鎖數</div>
-      </div>
-      <div class="card">
-        <h3>封鎖率</h3>
-        <div class="big-number mono" id="lineBlockRate">0%</div>
-        <div class="subtext">封鎖數 / 好友數</div>
-      </div>
-    </div>
-
-    <div class="grid-charts">
-      <div class="chart-box">
-        <h2>LINE 性別分布</h2>
-        <div class="hot-area-box"><div class="list" id="genderList"></div></div>
-      </div>
-      <div class="chart-box">
-        <h2>LINE 年齡分布</h2>
-        <div class="hot-area-box"><div class="list" id="ageList"></div></div>
-      </div>
-    </div>
-
-    <div class="grid-charts">
-      <div class="chart-box">
-        <h2>LINE 地區分布</h2>
-        <div class="hot-area-box"><div class="list" id="areaInsightList"></div></div>
-      </div>
-      <div class="chart-box">
-        <h2>LINE 裝置 / 關係期間</h2>
-        <div class="hot-area-box">
-          <div class="list" id="appTypeList"></div>
-          <div style="height:12px"></div>
-          <div class="list" id="subscriptionList"></div>
-        </div>
-      </div>
-    </div>
-
     <div class="grid-cards">
       <button class="card metric-card" data-metric="totalQueries">
-        <h3>查詢總量</h3>
+        <h3><span class="heading-inline">查詢總量 <span class="info-icon" data-info="totalQueries" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="totalQueries">0</div>
         <div class="subtext">所選期間內總查詢次數</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="activeUsers">
-        <h3>活躍使用者</h3>
+        <h3><span class="heading-inline">活躍使用者 <span class="info-icon" data-info="activeUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="activeUsers">0</div>
         <div class="subtext">所選期間內至少查詢一次</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="successRate">
-        <h3>成功率</h3>
+        <h3><span class="heading-inline">成功率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="successRate">0%</div>
         <div class="subtext">成功回傳結果 / 全部查詢</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="avgResponse">
-        <h3>平均回應時間</h3>
+        <h3><span class="heading-inline">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="avgResponse">0 ms</div>
-        <div class="subtext">已排除小於 50 ms 的瞬時回應</div>
-        <div class="card-hint">點擊查看明細</div>
-      </button>
-
-      <button class="card metric-card" data-metric="instantResponses">
-        <h3>瞬時回應筆數</h3>
-        <div class="big-number mono" id="instantResponses">0</div>
-        <div class="subtext">小於 50 ms 的回應次數</div>
+        <div class="subtext">API + 排序 + 回傳</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="newUsers">
-        <h3>新使用者</h3>
+        <h3><span class="heading-inline">新使用者 <span class="info-icon" data-info="newUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="newUsers">0</div>
         <div class="subtext">首次使用者數</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="retentionRate">
-        <h3>回訪率</h3>
+        <h3><span class="heading-inline">回訪率 <span class="info-icon" data-info="retentionRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="retentionRate">0%</div>
         <div class="subtext">曾在不同日期再次使用</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="noResultCount">
-        <h3>查無結果次數</h3>
+        <h3><span class="heading-inline">查無結果次數 <span class="info-icon" data-info="noResultCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="noResultCount">0</div>
         <div class="subtext">結果數量 = 0</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="errorCount">
-        <h3>錯誤次數</h3>
+        <h3><span class="heading-inline">錯誤次數 <span class="info-icon" data-info="errorCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="errorCount">0</div>
         <div class="subtext">系統或 API 失敗</div>
         <div class="card-hint">點擊查看明細</div>
@@ -675,14 +742,14 @@
 
     <div class="grid-main">
       <div class="chart-box">
-        <h2>使用趨勢</h2>
+        <h2><span class="heading-inline">使用趨勢 <span class="info-icon" data-info="trendChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="trendChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <h2>熱門區域</h2>
+        <h2><span class="heading-inline">熱門區域 <span class="info-icon" data-info="hotAreaList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box">
           <div class="list" id="hotAreaList"></div>
         </div>
@@ -691,14 +758,14 @@
 
     <div class="grid-charts">
       <div class="chart-box">
-        <h2>時段分布</h2>
+        <h2><span class="heading-inline">時段分布 <span class="info-icon" data-info="hourChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="hourChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <h2>查詢類型分布</h2>
+        <h2><span class="heading-inline">查詢類型分布 <span class="info-icon" data-info="typeChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="typeChart"></canvas>
         </div>
@@ -706,18 +773,20 @@
     </div>
 
     <div class="table-wrap">
-      <h2>最近事件紀錄</h2>
+      <h2><span class="heading-inline">最近事件紀錄 <span class="info-icon" data-info="eventTable" role="button" tabindex="0">ⓘ</span></span></h2>
       <table>
         <colgroup>
-          <col style="width: 28%">
-          <col style="width: 26%">
-          <col style="width: 12%">
-          <col style="width: 16%">
+          <col style="width: 20%">
           <col style="width: 18%">
+          <col style="width: 20%">
+          <col style="width: 10%">
+          <col style="width: 15%">
+          <col style="width: 17%">
         </colgroup>
         <thead>
           <tr>
             <th>時間</th>
+            
             <th>事件類型</th>
             <th>結果數</th>
             <th>回應時間</th>
@@ -758,6 +827,32 @@
     const modalBody = document.getElementById('modalBody');
     const closeModalBtn = document.getElementById('closeModalBtn');
 
+
+    const infoTextMap = {
+      lineFollowers: 'LINE 官方帳號目前好友總數。這是官方統計資料，不會跟下方時間區間一起切換。',
+      lineTargeted: '可用於人口統計分析的人數。這是 LINE 後台可辨識的樣本數，不一定等於全部好友。',
+      lineBlocks: '封鎖官方帳號的人數。這是官方統計資料，通常每日更新一次。',
+      lineBlockRate: '封鎖數 ÷ 好友數。用來觀察使用者是否持續願意保留帳號。',
+      genderList: 'LINE 後台提供的性別分布，僅反映可辨識樣本，不代表全部好友。',
+      ageList: 'LINE 後台提供的年齡分布，屬官方彙整資料，不跟下方區間一起切換。',
+      areaInsightList: 'LINE 後台提供的地區分布，僅供整體受眾觀察。',
+      lineDeviceSubscription: '包含使用裝置與加入好友時間長短，屬 LINE 官方資料，固定每日更新。',
+      totalQueries: '所選期間內的總查詢次數，包含定位查詢與文字查詢。',
+      activeUsers: '所選期間內至少使用過一次的使用者數。',
+      successRate: '成功回傳結果的比例，公式為成功回傳結果 ÷ 全部查詢。',
+      avgResponse: '系統平均回應時間，包含 API、排序與回傳。',
+      newUsers: '所選期間內首次使用本系統的使用者數。',
+      retentionRate: '曾在不同日期再次使用系統的比例。',
+      noResultCount: '查詢成功送出，但結果數量為 0 的次數。',
+      errorCount: '系統或 API 失敗的次數。',
+      trendChart: '顯示所選期間內查詢量與活躍使用者的變化趨勢。',
+      hotAreaList: '統計所選期間內最常被查詢的區域。',
+      hourChart: '顯示一天 24 小時內各時段的查詢分布。',
+      typeChart: '顯示定位查詢、文字查詢、點擊結果與錯誤的占比。',
+      eventTable: '列出最近事件紀錄，方便快速檢查系統運作情況。'
+    };
+    let activeInfoTooltip = null;
+
     rangeButtons.forEach(btn => {
       btn.addEventListener('click', async () => {
         rangeButtons.forEach(b => b.classList.remove('active'));
@@ -787,6 +882,56 @@
         closeMetricModal();
       }
     });
+    document.addEventListener('click', (e) => {
+      const icon = e.target.closest('.info-icon');
+      if (icon) {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = infoTextMap[icon.dataset.info] || '目前沒有補充說明';
+        showInfoTooltip(icon, text);
+        return;
+      }
+      if (activeInfoTooltip && !e.target.closest('.info-tooltip')) {
+        removeInfoTooltip();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        removeInfoTooltip();
+      }
+    });
+
+
+    function removeInfoTooltip() {
+      if (activeInfoTooltip) {
+        activeInfoTooltip.remove();
+        activeInfoTooltip = null;
+      }
+    }
+
+    function showInfoTooltip(target, text) {
+      removeInfoTooltip();
+      const tip = document.createElement('div');
+      tip.className = 'info-tooltip';
+      tip.textContent = text;
+      document.body.appendChild(tip);
+      const rect = target.getBoundingClientRect();
+      const tipRect = tip.getBoundingClientRect();
+      let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+      let top = rect.bottom + 10;
+      const padding = 10;
+      if (left < padding) left = padding;
+      if (left + tipRect.width > window.innerWidth - padding) {
+        left = window.innerWidth - tipRect.width - padding;
+      }
+      if (top + tipRect.height > window.innerHeight - padding) {
+        top = rect.top - tipRect.height - 10;
+      }
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+      activeInfoTooltip = tip;
+    }
 
     function rand(min, max) {
       return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -896,7 +1041,6 @@
           activeUsers,
           successRate,
           avgResponse,
-          instantResponses: rand(0, Math.max(1, Math.floor(totalQueries * 0.2))),
           newUsers,
           retentionRate,
           noResultCount,
@@ -934,14 +1078,7 @@
             min: rand(80, 140),
             median: rand(160, 320),
             p95: rand(700, 1400),
-            max: rand(1500, 2200),
-            instantThresholdMs: 50,
-            instantCount: rand(0, 20)
-          },
-          instantResponses: {
-            instantCount: rand(0, 20),
-            instantRate: +(Math.random() * 10).toFixed(1),
-            thresholdMs: 50
+            max: rand(1500, 2200)
           },
           newUsers: {
             newUsers,
@@ -992,7 +1129,6 @@
       document.getElementById('activeUsers').textContent = formatMetricValue(summary.activeUsers);
       document.getElementById('successRate').textContent = isMissingMetric(summary.successRate) ? '—' : `${summary.successRate}%`;
       document.getElementById('avgResponse').textContent = isMissingMetric(summary.avgResponse) ? '—' : `${formatNumber(summary.avgResponse)} ms`;
-      document.getElementById('instantResponses').textContent = formatMetricValue(summary.instantResponses);
       document.getElementById('newUsers').textContent = formatMetricValue(summary.newUsers);
       document.getElementById('retentionRate').textContent = isMissingMetric(summary.retentionRate) ? '—' : `${summary.retentionRate}%`;
       document.getElementById('noResultCount').textContent = formatMetricValue(summary.noResultCount);
@@ -1086,7 +1222,6 @@
         activeUsers: '活躍使用者明細',
         successRate: '成功率明細',
         avgResponse: '平均回應時間明細',
-        instantResponses: '瞬時回應筆數明細',
         newUsers: '新使用者明細',
         retentionRate: '回訪率明細',
         noResultCount: '查無結果次數明細',
@@ -1112,9 +1247,7 @@
       } else if (metric === 'successRate') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>成功次數</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>失敗次數</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>成功率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
       } else if (metric === 'avgResponse') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div><div class="detail-list" style="margin-top:16px;"><div class="empty-text">已排除小於 ${detail.instantThresholdMs ?? 50} ms 的瞬時回應再計算平均；本區間瞬時回應 ${detail.instantCount ?? 0} 筆。</div></div>`;
-      } else if (metric === 'instantResponses') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>瞬時回應筆數</h4><div class="detail-value">${detail.instantCount ?? 0}</div></div><div class="detail-card"><h4>瞬時回應比例</h4><div class="detail-value">${detail.instantRate ?? 0}%</div></div><div class="detail-card"><h4>判定門檻</h4><div class="detail-value">&lt; ${detail.thresholdMs ?? 50} ms</div></div></div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div>`;
       } else if (metric === 'newUsers') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>新使用者</h4><div class="detail-value">${detail.newUsers ?? 0}</div></div><div class="detail-card"><h4>既有使用者</h4><div class="detail-value">${detail.existingUsers ?? 0}</div></div><div class="detail-card"><h4>新用戶占比</h4><div class="detail-value">${detail.newUserRate ?? 0}%</div></div></div>`;
       } else if (metric === 'retentionRate') {
@@ -1175,8 +1308,11 @@
         renderInsightList('areaInsightList', data.area ?? []);
         renderInsightList('appTypeList', data.appType ?? []);
         renderInsightList('subscriptionList', data.subscriptionPeriod ?? []);
+        const updatedAt = new Date().toLocaleString('zh-TW');
+        document.getElementById('lineDataStatus').textContent = `LINE 官方資料：每日更新一次｜上次載入 ${updatedAt}`;
       } catch (err) {
         console.error(err);
+        document.getElementById('lineDataStatus').textContent = 'LINE 官方資料讀取失敗';
       }
     }
     
@@ -1257,6 +1393,7 @@
         const responseText = isMissingMetric(e.response_time_ms) ? '—' : `${e.response_time_ms} ms`;
         tr.innerHTML = `
           <td class="mono" title="${e.time}">${e.time}</td>
+          <td title="${e.user_id}">${e.user_id}</td>
           <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
           <td class="mono" title="${resultText}">${resultText}</td>
           <td class="mono" title="${responseText}">${responseText}</td>
@@ -1282,7 +1419,7 @@
         renderAreaList(data.areas);
         renderEvents(data.events);
 
-        document.getElementById('dataStatus').textContent = `目前：真實資料模式（${currentRange}）`;
+        document.getElementById('dataStatus').textContent = `目前區間：${rangeLabel(currentRange)}｜真實資料模式`;
       } catch (err) {
         console.error(err);
         document.getElementById('dataStatus').textContent = '資料讀取失敗';

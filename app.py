@@ -1728,7 +1728,6 @@ tune_sqlite_for_concurrency()
 
 # ================= Analytics DB =================
 ANALYTICS_DB_PATH = CACHE_DB_PATH
-INSTANT_RESPONSE_THRESHOLD_MS = int(os.getenv("INSTANT_RESPONSE_THRESHOLD_MS", "50"))
 
 def create_analytics_tables():
     conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
@@ -4901,14 +4900,8 @@ def _generate_dashboard_data(range_key="1h"):
     success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
-    response_values = [
-        int(e["response_time_ms"]) for e in valid_query_events
-        if e.get("response_time_ms") is not None and int(e.get("response_time_ms") or 0) > 0
-    ]
-    instant_response_count = len([v for v in response_values if v < INSTANT_RESPONSE_THRESHOLD_MS])
-    filtered_response_values = [v for v in response_values if v >= INSTANT_RESPONSE_THRESHOLD_MS]
-    avg_response_base = filtered_response_values or response_values
-    avg_response = round(sum(avg_response_base) / len(avg_response_base)) if avg_response_base else 0
+    response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
+    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
@@ -5016,13 +5009,14 @@ def _generate_dashboard_data(range_key="1h"):
     for e in visible_events[:10]:
         event_rows.append({
             "time": e.get("created_at", ""),
+            "user_id": e.get("user_id", "") or "-",
             "event_type": e.get("event_type", ""),
             "result_count": e.get("result_count", 0) or 0,
             "response_time_ms": e.get("response_time_ms", 0) or 0,
             "success": bool(int(e.get("success") or 0))
         })
 
-    response_sorted = sorted(avg_response_base) if avg_response_base else sorted(response_values)
+    response_sorted = sorted(response_values)
     median_value = response_sorted[len(response_sorted)//2] if response_sorted else 0
     p95_index = min(len(response_sorted)-1, int(len(response_sorted)*0.95)) if response_sorted else 0
     p95_value = response_sorted[p95_index] if response_sorted else 0
@@ -5033,7 +5027,6 @@ def _generate_dashboard_data(range_key="1h"):
             "activeUsers": active_users,
             "successRate": success_rate,
             "avgResponse": avg_response,
-            "instantResponses": instant_response_count,
             "newUsers": new_users,
             "retentionRate": retention_rate,
             "noResultCount": no_result_count,
@@ -5076,17 +5069,10 @@ def _generate_dashboard_data(range_key="1h"):
                 "successRate": success_rate
             },
             "avgResponse": {
-                "min": min(avg_response_base) if avg_response_base else (min(response_values) if response_values else 0),
+                "min": min(response_values) if response_values else 0,
                 "median": median_value,
                 "p95": p95_value,
-                "max": max(avg_response_base) if avg_response_base else (max(response_values) if response_values else 0),
-                "instantThresholdMs": INSTANT_RESPONSE_THRESHOLD_MS,
-                "instantCount": instant_response_count
-            },
-            "instantResponses": {
-                "instantCount": instant_response_count,
-                "instantRate": round((instant_response_count / total_queries) * 100, 1) if total_queries else 0.0,
-                "thresholdMs": INSTANT_RESPONSE_THRESHOLD_MS
+                "max": max(response_values) if response_values else 0
             },
             "newUsers": {
                 "newUsers": new_users,
@@ -5118,11 +5104,39 @@ def dashboard_page():
 
 
 @app.route("/api/dashboard", methods=["GET"])
+
+def _postprocess_dashboard_payload(payload):
+    try:
+        events = payload.get("detail", {}).get("events", [])
+        times = [e.get("responseTime") or e.get("response_time_ms") for e in events if (e.get("responseTime") or e.get("response_time_ms")) is not None]
+        instant = sum(1 for t in times if t < 50)
+        valid = [t for t in times if t >= 50]
+        if valid:
+            avg = sum(valid)/len(valid)
+        elif times:
+            avg = sum(times)/len(times)
+        else:
+            avg = 0
+
+        payload.setdefault("summary", {})["instantResponses"] = instant
+        payload["summary"]["avgResponse"] = round(avg,2)
+
+        # remove user_id
+        for e in events:
+            if "user_id" in e:
+                del e["user_id"]
+            if "userId" in e:
+                del e["userId"]
+    except Exception:
+        pass
+    return payload
+
+
 def api_dashboard():
     range_key = (request.args.get("range") or "1h").strip()
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-    return jsonify(_generate_dashboard_data(range_key))
+    return jsonify(_postprocess_dashboard_payload(_generate_dashboard_data(range_key)))
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
