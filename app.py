@@ -4799,7 +4799,6 @@ _DASHBOARD_RANGE_SECONDS = {
     "1y": 365 * 86400,
 }
 
-
 def _dashboard_range_to_sqlite(range_key: str):
     now = datetime.now(TW_TZ)
 
@@ -4833,12 +4832,25 @@ def _generate_dashboard_data(range_key="1h"):
         conn = _pg_connect()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
-            SELECT id, user_id, event_type, result_count, success, response_time_ms, lat, lon, area_name, query_text,
-                    WHERE created_at >= %s AND created_at <= %s
+            SELECT
+                id,
+                user_id,
+                event_type,
+                result_count,
+                success,
+                response_time_ms,
+                lat,
+                lon,
+                area_name,
+                query_text,
+                created_at
+            FROM analytics_events
+            WHERE created_at >= %s AND created_at <= %s
             ORDER BY created_at DESC
         """, (start, end))
         rows = cur.fetchall()
         conn.close()
+
         events = [dict(r) for r in rows]
         for e in events:
             if isinstance(e.get("created_at"), datetime):
@@ -4851,9 +4863,9 @@ def _generate_dashboard_data(range_key="1h"):
         conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-
         cur.execute("""
-            SELECT * FROM analytics_events
+            SELECT *
+            FROM analytics_events
             WHERE created_at >= ? AND created_at <= ?
             ORDER BY created_at DESC
         """, (start.isoformat(), end.isoformat()))
