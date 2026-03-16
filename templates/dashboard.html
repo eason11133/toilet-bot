@@ -328,6 +328,71 @@
       font-variant-numeric: tabular-nums;
     }
 
+
+    .section-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 20px;
+    }
+
+    .section-controls .controls {
+      justify-content: flex-start;
+    }
+
+    .section-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .heading-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .info-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid #cbd5e1;
+      color: #64748b;
+      font-size: 12px;
+      font-style: normal;
+      cursor: pointer;
+      background: #fff;
+      vertical-align: middle;
+      flex: 0 0 auto;
+    }
+
+    .info-icon:hover {
+      background: #f8fafc;
+      color: #334155;
+      border-color: #94a3b8;
+    }
+
+    .info-tooltip {
+      position: fixed;
+      z-index: 10001;
+      background: #111827;
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 10px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.18);
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 260px;
+      pointer-events: none;
+      white-space: normal;
+    }
+
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -475,71 +540,6 @@
       line-height: 1.6;
     }
 
-
-    .card-title-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-
-    .card-title-row h3,
-    .chart-title-row h2 {
-      margin: 0;
-    }
-
-    .chart-title-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin: 0 0 16px;
-    }
-
-    .info-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 22px;
-      height: 22px;
-      border: 1px solid #cbd5e1;
-      border-radius: 999px;
-      background: #fff;
-      color: #64748b;
-      font-size: 13px;
-      font-weight: 700;
-      line-height: 1;
-      cursor: pointer;
-      flex: 0 0 auto;
-      transition: all 0.15s ease;
-      user-select: none;
-    }
-
-    .info-icon:hover {
-      background: #f8fafc;
-      color: #334155;
-      border-color: #94a3b8;
-    }
-
-    .info-popup {
-      position: fixed;
-      z-index: 10001;
-      width: min(300px, calc(100vw - 24px));
-      background: #111827;
-      color: #fff;
-      border-radius: 12px;
-      padding: 12px 14px;
-      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
-      font-size: 13px;
-      line-height: 1.6;
-      display: none;
-    }
-
-    .info-popup.show {
-      display: block;
-    }
-
     @media (max-width: 1200px) {
       .grid-cards {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -615,34 +615,28 @@
       </div>
 
       <div class="controls">
-        <button class="range-btn active" data-range="1h">1小時</button>
-        <button class="range-btn" data-range="1d">1日</button>
-        <button class="range-btn" data-range="7d">7日</button>
-        <button class="range-btn" data-range="30d">30日</button>
-        <button class="range-btn" data-range="1y">1年</button>
-        <div class="status" id="dataStatus">目前：真實資料模式</div>
-        <div class="status" id="lineInsightStatus">LINE 官方資料：每日更新一次</div>
+        <div class="status" id="lineDataStatus">LINE 官方資料：每日更新一次</div>
       </div>
     </div>
 
     <div class="grid-cards" id="lineInsightCards">
       <div class="card">
-        <div class="card-title-row"><h3>LINE 好友數</h3><span class="info-icon" data-info="lineFollowers" role="button" tabindex="0" aria-label="LINE 好友數說明">ⓘ</span></div>
+        <h3><span class="heading-inline">LINE 好友數 <span class="info-icon" data-info="lineFollowers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineFollowers">0</div>
         <div class="subtext">官方帳號目前好友數</div>
       </div>
       <div class="card">
-        <div class="card-title-row"><h3>目標好友數</h3><span class="info-icon" data-info="lineTargeted" role="button" tabindex="0" aria-label="目標好友數說明">ⓘ</span></div>
+        <h3><span class="heading-inline">目標好友數 <span class="info-icon" data-info="lineTargeted" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineTargeted">0</div>
         <div class="subtext">可用於人口統計分析的人數</div>
       </div>
       <div class="card">
-        <div class="card-title-row"><h3>封鎖數</h3><span class="info-icon" data-info="lineBlocks" role="button" tabindex="0" aria-label="封鎖數說明">ⓘ</span></div>
+        <h3><span class="heading-inline">封鎖數 <span class="info-icon" data-info="lineBlocks" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineBlocks">0</div>
         <div class="subtext">官方帳號封鎖數</div>
       </div>
       <div class="card">
-        <div class="card-title-row"><h3>封鎖率</h3><span class="info-icon" data-info="lineBlockRate" role="button" tabindex="0" aria-label="封鎖率說明">ⓘ</span></div>
+        <h3><span class="heading-inline">封鎖率 <span class="info-icon" data-info="lineBlockRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineBlockRate">0%</div>
         <div class="subtext">封鎖數 / 好友數</div>
       </div>
@@ -650,22 +644,22 @@
 
     <div class="grid-charts">
       <div class="chart-box">
-        <div class="chart-title-row"><h2>LINE 性別分布</h2><span class="info-icon" data-info="genderList" role="button" tabindex="0" aria-label="LINE 性別分布說明">ⓘ</span></div>
+        <h2><span class="heading-inline">LINE 性別分布 <span class="info-icon" data-info="genderList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="genderList"></div></div>
       </div>
       <div class="chart-box">
-        <div class="chart-title-row"><h2>LINE 年齡分布</h2><span class="info-icon" data-info="ageList" role="button" tabindex="0" aria-label="LINE 年齡分布說明">ⓘ</span></div>
+        <h2><span class="heading-inline">LINE 年齡分布 <span class="info-icon" data-info="ageList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="ageList"></div></div>
       </div>
     </div>
 
     <div class="grid-charts">
       <div class="chart-box">
-        <div class="chart-title-row"><h2>LINE 地區分布</h2><span class="info-icon" data-info="areaInsightList" role="button" tabindex="0" aria-label="LINE 地區分布說明">ⓘ</span></div>
+        <h2><span class="heading-inline">LINE 地區分布 <span class="info-icon" data-info="areaInsightList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="areaInsightList"></div></div>
       </div>
       <div class="chart-box">
-        <div class="chart-title-row"><h2>LINE 裝置 / 關係期間</h2><span class="info-icon" data-info="lineDeviceAndSubscription" role="button" tabindex="0" aria-label="LINE 裝置 / 關係期間說明">ⓘ</span></div>
+        <h2><span class="heading-inline">LINE 裝置 / 關係期間 <span class="info-icon" data-info="lineDeviceSubscription" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box">
           <div class="list" id="appTypeList"></div>
           <div style="height:12px"></div>
@@ -674,58 +668,72 @@
       </div>
     </div>
 
+    <div class="section-controls">
+      <div>
+        <div class="section-note">以下區間切換只影響系統查詢資料，不會改變上方 LINE 官方統計。</div>
+      </div>
+      <div class="controls">
+        <button class="range-btn active" data-range="1h">1小時</button>
+        <button class="range-btn" data-range="1d">1日</button>
+        <button class="range-btn" data-range="7d">7日</button>
+        <button class="range-btn" data-range="30d">30日</button>
+        <button class="range-btn" data-range="1y">1年</button>
+        <div class="status" id="dataStatus">目前：真實資料模式</div>
+      </div>
+    </div>
+
     <div class="grid-cards">
       <button class="card metric-card" data-metric="totalQueries">
-        <div class="card-title-row"><h3>查詢總量</h3><span class="info-icon" data-info="totalQueries" role="button" tabindex="0" aria-label="查詢總量說明">ⓘ</span></div>
+        <h3><span class="heading-inline">查詢總量 <span class="info-icon" data-info="totalQueries" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="totalQueries">0</div>
         <div class="subtext">所選期間內總查詢次數</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="activeUsers">
-        <div class="card-title-row"><h3>活躍使用者</h3><span class="info-icon" data-info="activeUsers" role="button" tabindex="0" aria-label="活躍使用者說明">ⓘ</span></div>
+        <h3><span class="heading-inline">活躍使用者 <span class="info-icon" data-info="activeUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="activeUsers">0</div>
         <div class="subtext">所選期間內至少查詢一次</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="successRate">
-        <div class="card-title-row"><h3>成功率</h3><span class="info-icon" data-info="successRate" role="button" tabindex="0" aria-label="成功率說明">ⓘ</span></div>
+        <h3><span class="heading-inline">成功率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="successRate">0%</div>
         <div class="subtext">成功回傳結果 / 全部查詢</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="avgResponse">
-        <div class="card-title-row"><h3>平均回應時間</h3><span class="info-icon" data-info="avgResponse" role="button" tabindex="0" aria-label="平均回應時間說明">ⓘ</span></div>
+        <h3><span class="heading-inline">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="avgResponse">0 ms</div>
         <div class="subtext">API + 排序 + 回傳</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="newUsers">
-        <div class="card-title-row"><h3>新使用者</h3><span class="info-icon" data-info="newUsers" role="button" tabindex="0" aria-label="新使用者說明">ⓘ</span></div>
+        <h3><span class="heading-inline">新使用者 <span class="info-icon" data-info="newUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="newUsers">0</div>
         <div class="subtext">首次使用者數</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="retentionRate">
-        <div class="card-title-row"><h3>回訪率</h3><span class="info-icon" data-info="retentionRate" role="button" tabindex="0" aria-label="回訪率說明">ⓘ</span></div>
+        <h3><span class="heading-inline">回訪率 <span class="info-icon" data-info="retentionRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="retentionRate">0%</div>
         <div class="subtext">曾在不同日期再次使用</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="noResultCount">
-        <div class="card-title-row"><h3>查無結果次數</h3><span class="info-icon" data-info="noResultCount" role="button" tabindex="0" aria-label="查無結果次數說明">ⓘ</span></div>
+        <h3><span class="heading-inline">查無結果次數 <span class="info-icon" data-info="noResultCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="noResultCount">0</div>
         <div class="subtext">結果數量 = 0</div>
         <div class="card-hint">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="errorCount">
-        <div class="card-title-row"><h3>錯誤次數</h3><span class="info-icon" data-info="errorCount" role="button" tabindex="0" aria-label="錯誤次數說明">ⓘ</span></div>
+        <h3><span class="heading-inline">錯誤次數 <span class="info-icon" data-info="errorCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="errorCount">0</div>
         <div class="subtext">系統或 API 失敗</div>
         <div class="card-hint">點擊查看明細</div>
@@ -734,14 +742,14 @@
 
     <div class="grid-main">
       <div class="chart-box">
-        <div class="chart-title-row"><h2>使用趨勢</h2><span class="info-icon" data-info="trendChart" role="button" tabindex="0" aria-label="使用趨勢說明">ⓘ</span></div>
+        <h2><span class="heading-inline">使用趨勢 <span class="info-icon" data-info="trendChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="trendChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <div class="chart-title-row"><h2>熱門區域</h2><span class="info-icon" data-info="hotAreaList" role="button" tabindex="0" aria-label="熱門區域說明">ⓘ</span></div>
+        <h2><span class="heading-inline">熱門區域 <span class="info-icon" data-info="hotAreaList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box">
           <div class="list" id="hotAreaList"></div>
         </div>
@@ -750,14 +758,14 @@
 
     <div class="grid-charts">
       <div class="chart-box">
-        <div class="chart-title-row"><h2>時段分布</h2><span class="info-icon" data-info="hourChart" role="button" tabindex="0" aria-label="時段分布說明">ⓘ</span></div>
+        <h2><span class="heading-inline">時段分布 <span class="info-icon" data-info="hourChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="hourChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <div class="chart-title-row"><h2>查詢類型分布</h2><span class="info-icon" data-info="typeChart" role="button" tabindex="0" aria-label="查詢類型分布說明">ⓘ</span></div>
+        <h2><span class="heading-inline">查詢類型分布 <span class="info-icon" data-info="typeChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="typeChart"></canvas>
         </div>
@@ -765,7 +773,7 @@
     </div>
 
     <div class="table-wrap">
-      <div class="chart-title-row"><h2>最近事件紀錄</h2><span class="info-icon" data-info="eventTable" role="button" tabindex="0" aria-label="最近事件紀錄說明">ⓘ</span></div>
+      <h2><span class="heading-inline">最近事件紀錄 <span class="info-icon" data-info="eventTable" role="button" tabindex="0">ⓘ</span></span></h2>
       <table>
         <colgroup>
           <col style="width: 20%">
@@ -803,8 +811,6 @@
     </div>
   </div>
 
-  <div class="info-popup" id="infoPopup"></div>
-
   <script>
     const USE_MOCK = false;
     let currentRange = '1h';
@@ -821,51 +827,31 @@
     const modalBody = document.getElementById('modalBody');
     const closeModalBtn = document.getElementById('closeModalBtn');
 
-    const infoPopup = document.getElementById('infoPopup');
+
     const infoTextMap = {
-      lineFollowers: 'LINE 官方帳號目前累積的好友數。LINE Insights 為官方每日彙整資料，不是即時跳動。',
-      lineTargeted: '可納入 LINE 官方人口統計分析的對象數，通常不會等於全部好友數。',
-      lineBlocks: '封鎖官方帳號的人數。此數據由 LINE 官方提供，為每日更新。',
-      lineBlockRate: '封鎖數 ÷ 好友數。用來觀察帳號內容是否讓使用者持續願意保留。',
-      genderList: '性別分布來自 LINE 官方 Insights，只涵蓋可分析樣本，不代表所有好友。',
-      ageList: '年齡分布來自 LINE 官方 Insights，只涵蓋可分析樣本，更新頻率為每日。',
-      areaInsightList: '地區分布為 LINE 官方提供的受眾區域資料，通常是較大範圍統計。',
-      lineDeviceAndSubscription: '裝置與關係期間是 LINE 官方帳號 Insights 的彙整資料，適合看受眾輪廓，不適合當即時流量。',
-      totalQueries: '所選期間內的查詢總次數，包含定位查詢與文字查詢。',
-      activeUsers: '所選期間內至少查詢一次的使用者數。這裡看的是活躍人數，不是好友總數。',
-      successRate: '成功回傳查詢結果的比例。若查無資料或系統失敗，成功率會下降。',
-      avgResponse: '平均回應時間包含 API 存取、排序與回傳結果所需時間。越低越好。',
-      newUsers: '在所選期間內第一次使用本系統的使用者數。',
-      retentionRate: '曾在不同日期再次使用的使用者比例，用來觀察回訪狀況。',
-      noResultCount: '查詢後結果數量為 0 的次數，可能代表附近資料不足或條件過嚴。',
-      errorCount: '系統或外部 API 發生失敗的次數，建議搭配事件紀錄一起看。',
-      trendChart: '顯示各時間點的查詢量與活躍使用者變化，適合觀察尖峰時段。',
-      hotAreaList: '依查詢次數排序的熱門區域，可用來看哪裡最常被搜尋。',
-      hourChart: '統計一天 24 小時內各時段的查詢量，用來看使用高峰。',
-      typeChart: '比較定位查詢、文字查詢、點擊結果與錯誤的占比。',
-      eventTable: '最近事件紀錄用來追查最新查詢、錯誤、回應時間與結果數。'
+      lineFollowers: 'LINE 官方帳號目前好友總數。這是官方統計資料，不會跟下方時間區間一起切換。',
+      lineTargeted: '可用於人口統計分析的人數。這是 LINE 後台可辨識的樣本數，不一定等於全部好友。',
+      lineBlocks: '封鎖官方帳號的人數。這是官方統計資料，通常每日更新一次。',
+      lineBlockRate: '封鎖數 ÷ 好友數。用來觀察使用者是否持續願意保留帳號。',
+      genderList: 'LINE 後台提供的性別分布，僅反映可辨識樣本，不代表全部好友。',
+      ageList: 'LINE 後台提供的年齡分布，屬官方彙整資料，不跟下方區間一起切換。',
+      areaInsightList: 'LINE 後台提供的地區分布，僅供整體受眾觀察。',
+      lineDeviceSubscription: '包含使用裝置與加入好友時間長短，屬 LINE 官方資料，固定每日更新。',
+      totalQueries: '所選期間內的總查詢次數，包含定位查詢與文字查詢。',
+      activeUsers: '所選期間內至少使用過一次的使用者數。',
+      successRate: '成功回傳結果的比例，公式為成功回傳結果 ÷ 全部查詢。',
+      avgResponse: '系統平均回應時間，包含 API、排序與回傳。',
+      newUsers: '所選期間內首次使用本系統的使用者數。',
+      retentionRate: '曾在不同日期再次使用系統的比例。',
+      noResultCount: '查詢成功送出，但結果數量為 0 的次數。',
+      errorCount: '系統或 API 失敗的次數。',
+      trendChart: '顯示所選期間內查詢量與活躍使用者的變化趨勢。',
+      hotAreaList: '統計所選期間內最常被查詢的區域。',
+      hourChart: '顯示一天 24 小時內各時段的查詢分布。',
+      typeChart: '顯示定位查詢、文字查詢、點擊結果與錯誤的占比。',
+      eventTable: '列出最近事件紀錄，方便快速檢查系統運作情況。'
     };
-
-    function hideInfoPopup() {
-      infoPopup.classList.remove('show');
-    }
-
-    function showInfoPopup(target, key) {
-      const text = infoTextMap[key] || '目前沒有補充說明。';
-      infoPopup.textContent = text;
-      infoPopup.classList.add('show');
-
-      const rect = target.getBoundingClientRect();
-      const popupWidth = Math.min(300, window.innerWidth - 24);
-      let left = rect.left + window.scrollX - popupWidth + rect.width;
-      left = Math.max(12, Math.min(left, window.scrollX + window.innerWidth - popupWidth - 12));
-      let top = rect.bottom + window.scrollY + 10;
-      if (top + 120 > window.scrollY + window.innerHeight) {
-        top = rect.top + window.scrollY - 130;
-      }
-      infoPopup.style.left = `${left}px`;
-      infoPopup.style.top = `${Math.max(window.scrollY + 12, top)}px`;
-    }
+    let activeInfoTooltip = null;
 
     rangeButtons.forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -883,28 +869,6 @@
       });
     });
 
-
-    document.querySelectorAll('.info-icon').forEach(icon => {
-      icon.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isSame = infoPopup.classList.contains('show') && infoPopup.dataset.key === icon.dataset.info;
-        if (isSame) {
-          hideInfoPopup();
-          infoPopup.dataset.key = '';
-          return;
-        }
-        infoPopup.dataset.key = icon.dataset.info || '';
-        showInfoPopup(icon, icon.dataset.info);
-      });
-
-      icon.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          icon.click();
-        }
-      });
-    });
-
     closeModalBtn.addEventListener('click', closeMetricModal);
 
     metricModal.addEventListener('click', (e) => {
@@ -917,21 +881,57 @@
       if (e.key === 'Escape' && metricModal.classList.contains('show')) {
         closeMetricModal();
       }
-      if (e.key === 'Escape') {
-        hideInfoPopup();
-        infoPopup.dataset.key = '';
-      }
     });
-
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('.info-icon') && !e.target.closest('#infoPopup')) {
-        hideInfoPopup();
-        infoPopup.dataset.key = '';
+      const icon = e.target.closest('.info-icon');
+      if (icon) {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = infoTextMap[icon.dataset.info] || '目前沒有補充說明';
+        showInfoTooltip(icon, text);
+        return;
+      }
+      if (activeInfoTooltip && !e.target.closest('.info-tooltip')) {
+        removeInfoTooltip();
       }
     });
 
-    window.addEventListener('resize', hideInfoPopup);
-    window.addEventListener('scroll', hideInfoPopup, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        removeInfoTooltip();
+      }
+    });
+
+
+    function removeInfoTooltip() {
+      if (activeInfoTooltip) {
+        activeInfoTooltip.remove();
+        activeInfoTooltip = null;
+      }
+    }
+
+    function showInfoTooltip(target, text) {
+      removeInfoTooltip();
+      const tip = document.createElement('div');
+      tip.className = 'info-tooltip';
+      tip.textContent = text;
+      document.body.appendChild(tip);
+      const rect = target.getBoundingClientRect();
+      const tipRect = tip.getBoundingClientRect();
+      let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+      let top = rect.bottom + 10;
+      const padding = 10;
+      if (left < padding) left = padding;
+      if (left + tipRect.width > window.innerWidth - padding) {
+        left = window.innerWidth - tipRect.width - padding;
+      }
+      if (top + tipRect.height > window.innerHeight - padding) {
+        top = rect.top - tipRect.height - 10;
+      }
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+      activeInfoTooltip = tip;
+    }
 
     function rand(min, max) {
       return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1286,7 +1286,6 @@
         const res = await fetch('/api/line-insights');
         if (!res.ok) {
           console.error('LINE insights API error:', res.status);
-          document.getElementById('lineInsightStatus').textContent = 'LINE 官方資料：讀取失敗';
           return;
         }
 
@@ -1309,12 +1308,11 @@
         renderInsightList('areaInsightList', data.area ?? []);
         renderInsightList('appTypeList', data.appType ?? []);
         renderInsightList('subscriptionList', data.subscriptionPeriod ?? []);
-
-        const now = new Date().toLocaleString('zh-TW');
-        document.getElementById('lineInsightStatus').textContent = `LINE 官方資料：每日更新一次｜本頁載入：${now}`;
+        const updatedAt = new Date().toLocaleString('zh-TW');
+        document.getElementById('lineDataStatus').textContent = `LINE 官方資料：每日更新一次｜上次載入 ${updatedAt}`;
       } catch (err) {
         console.error(err);
-        document.getElementById('lineInsightStatus').textContent = 'LINE 官方資料：讀取失敗';
+        document.getElementById('lineDataStatus').textContent = 'LINE 官方資料讀取失敗';
       }
     }
     
@@ -1421,8 +1419,7 @@
         renderAreaList(data.areas);
         renderEvents(data.events);
 
-        document.getElementById('dataStatus').textContent = `目前：真實資料模式（${currentRange}）`;
-        refreshLineInsights();
+        document.getElementById('dataStatus').textContent = `目前區間：${rangeLabel(currentRange)}｜真實資料模式`;
       } catch (err) {
         console.error(err);
         document.getElementById('dataStatus').textContent = '資料讀取失敗';
