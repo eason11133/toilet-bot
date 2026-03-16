@@ -1728,6 +1728,7 @@ tune_sqlite_for_concurrency()
 
 # ================= Analytics DB =================
 ANALYTICS_DB_PATH = CACHE_DB_PATH
+INSTANT_RESPONSE_THRESHOLD_MS = int(os.getenv("INSTANT_RESPONSE_THRESHOLD_MS", "50"))
 
 def create_analytics_tables():
     conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
@@ -4900,8 +4901,14 @@ def _generate_dashboard_data(range_key="1h"):
     success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
-    response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
-    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+    response_values = [
+        int(e["response_time_ms"]) for e in valid_query_events
+        if e.get("response_time_ms") is not None and int(e.get("response_time_ms") or 0) > 0
+    ]
+    instant_response_count = len([v for v in response_values if v < INSTANT_RESPONSE_THRESHOLD_MS])
+    filtered_response_values = [v for v in response_values if v >= INSTANT_RESPONSE_THRESHOLD_MS]
+    avg_response_base = filtered_response_values or response_values
+    avg_response = round(sum(avg_response_base) / len(avg_response_base)) if avg_response_base else 0
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
@@ -5009,14 +5016,13 @@ def _generate_dashboard_data(range_key="1h"):
     for e in visible_events[:10]:
         event_rows.append({
             "time": e.get("created_at", ""),
-            "user_id": e.get("user_id", "") or "-",
             "event_type": e.get("event_type", ""),
             "result_count": e.get("result_count", 0) or 0,
             "response_time_ms": e.get("response_time_ms", 0) or 0,
             "success": bool(int(e.get("success") or 0))
         })
 
-    response_sorted = sorted(response_values)
+    response_sorted = sorted(avg_response_base) if avg_response_base else sorted(response_values)
     median_value = response_sorted[len(response_sorted)//2] if response_sorted else 0
     p95_index = min(len(response_sorted)-1, int(len(response_sorted)*0.95)) if response_sorted else 0
     p95_value = response_sorted[p95_index] if response_sorted else 0
@@ -5027,6 +5033,7 @@ def _generate_dashboard_data(range_key="1h"):
             "activeUsers": active_users,
             "successRate": success_rate,
             "avgResponse": avg_response,
+            "instantResponses": instant_response_count,
             "newUsers": new_users,
             "retentionRate": retention_rate,
             "noResultCount": no_result_count,
@@ -5069,10 +5076,17 @@ def _generate_dashboard_data(range_key="1h"):
                 "successRate": success_rate
             },
             "avgResponse": {
-                "min": min(response_values) if response_values else 0,
+                "min": min(avg_response_base) if avg_response_base else (min(response_values) if response_values else 0),
                 "median": median_value,
                 "p95": p95_value,
-                "max": max(response_values) if response_values else 0
+                "max": max(avg_response_base) if avg_response_base else (max(response_values) if response_values else 0),
+                "instantThresholdMs": INSTANT_RESPONSE_THRESHOLD_MS,
+                "instantCount": instant_response_count
+            },
+            "instantResponses": {
+                "instantCount": instant_response_count,
+                "instantRate": round((instant_response_count / total_queries) * 100, 1) if total_queries else 0.0,
+                "thresholdMs": INSTANT_RESPONSE_THRESHOLD_MS
             },
             "newUsers": {
                 "newUsers": new_users,
