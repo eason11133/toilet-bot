@@ -4825,6 +4825,19 @@ def _dashboard_range_to_sqlite(range_key: str):
 
     return start, now, bucket, labels
 
+def _bucket_label(dt_obj, range_key):
+    if dt_obj.tzinfo is None:
+        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+    dt_obj = dt_obj.astimezone(TW_TZ)
+
+    if range_key == "1h":
+        return f"{(dt_obj.minute // 5) * 5}分"
+    if range_key == "1d":
+        return f"{dt_obj.hour:02d}:00"
+    if range_key in ("7d", "30d"):
+        return f"{dt_obj.day}"
+    return f"{dt_obj.month}月"
+
 def _generate_dashboard_data(range_key="1h"):
     start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
 
