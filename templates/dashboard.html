@@ -1308,8 +1308,19 @@
         renderInsightList('areaInsightList', data.area ?? []);
         renderInsightList('appTypeList', data.appType ?? []);
         renderInsightList('subscriptionList', data.subscriptionPeriod ?? []);
-        const updatedAt = new Date().toLocaleString('zh-TW');
-        document.getElementById('lineDataStatus').textContent = `LINE 官方資料：每日更新一次｜上次載入 ${updatedAt}`;
+
+        const queryDate = data.queryDate || '—';
+        const fetchedAt = data.fetchedAt ? new Date(data.fetchedAt).toLocaleString('zh-TW') : '—';
+        const sourceLabelMap = {
+          live: 'LINE 即時抓取',
+          daily_cache: '本日快取',
+          stale_cache: '前次成功資料',
+          empty: '目前無快取',
+          error: '讀取失敗'
+        };
+        const sourceLabel = sourceLabelMap[data.source] || '資料來源未知';
+        const staleNote = data.stale ? '｜目前顯示前次成功資料' : '';
+        document.getElementById('lineDataStatus').textContent = `LINE 官方資料：每日更新一次｜統計日 ${queryDate}｜${sourceLabel}｜更新時間 ${fetchedAt}${staleNote}`;
       } catch (err) {
         console.error(err);
         document.getElementById('lineDataStatus').textContent = 'LINE 官方資料讀取失敗';
