@@ -4875,7 +4875,8 @@ def _dashboard_range_to_sqlite(range_key: str):
     now = datetime.now(TW_TZ)
 
     if range_key == "1h":
-        start = now - timedelta(hours=1)
+        end = now.replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(hours=1)
         bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
