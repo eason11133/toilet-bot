@@ -1717,7 +1717,7 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
         row_values[idx["display_name"]] = display_name or ""
         row_values[idx["source_type"]] = source_type or ""
         row_values[idx["ua"]] = ua or ""
-        row_values[idx["timestamp"]] = ts_iso or datetime.utcnow().isoformat()
+        row_values[idx["timestamp"]] = ts_iso or datetime.now(TW_TZ).isoformat()
 
         if row_to_update:
             consent_ws.update(f"A{row_to_update}", [row_values])
@@ -1886,7 +1886,7 @@ def log_analytics_event(
             float(lon) if lon is not None else None,
             area_name,
             query_text,
-            created_at or datetime.utcnow().isoformat()
+            created_at or datetime.now(TW_TZ).isoformat()
         ))
         conn.commit()
         conn.close()
@@ -4500,7 +4500,7 @@ def api_consent():
         display_name = payload.get("displayName") or ""
         source_type = payload.get("sourceType") or ""
         ua = payload.get("ua") or request.headers.get("User-Agent","")
-        ts = payload.get("ts") or datetime.utcnow().isoformat()
+        ts = payload.get("ts") or datetime.now(TW_TZ).isoformat()
 
         if not user_id:
             logging.warning(f"/api/consent missing userId. payload={payload}")
@@ -5054,8 +5054,12 @@ def _generate_dashboard_data(range_key="1h"):
     for e in events:
         try:
             dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
+
             if dt_obj.tzinfo is None:
                 dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+
+            dt_obj = dt_obj.astimezone(TW_TZ)
+
             hourly_map[f"{dt_obj.hour:02d}:00"] += 1
         except Exception:
             continue
