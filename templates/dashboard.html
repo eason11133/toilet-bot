@@ -94,6 +94,34 @@
       color: #fff;
     }
 
+
+    .date-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    .date-filter label {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .date-filter input[type="date"] {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0 10px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .date-filter.hidden {
+      display: none;
+    }
+
     .status {
       display: inline-flex;
       align-items: center;
@@ -621,22 +649,22 @@
 
     <div class="grid-cards" id="lineInsightCards">
       <div class="card">
-        <h3><span class="heading-inline">LINE 好友數 <span class="info-icon" data-info="lineFollowers" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="lineFollowersTitle">LINE 好友數 <span class="info-icon" data-info="lineFollowers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineFollowers">0</div>
         <div class="subtext" data-i18n="lineFollowersSub">官方帳號目前好友數</div>
       </div>
       <div class="card">
-        <h3><span class="heading-inline">目標好友數 <span class="info-icon" data-info="lineTargeted" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="lineTargetedTitle">目標好友數 <span class="info-icon" data-info="lineTargeted" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineTargeted">0</div>
         <div class="subtext" data-i18n="lineTargetedSub">可用於人口統計分析的人數</div>
       </div>
       <div class="card">
-        <h3><span class="heading-inline">封鎖數 <span class="info-icon" data-info="lineBlocks" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="lineBlocksTitle">封鎖數 <span class="info-icon" data-info="lineBlocks" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineBlocks">0</div>
         <div class="subtext" data-i18n="lineBlocksSub">官方帳號封鎖數</div>
       </div>
       <div class="card">
-        <h3><span class="heading-inline">封鎖率 <span class="info-icon" data-info="lineBlockRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="lineBlockRateTitle">封鎖率 <span class="info-icon" data-info="lineBlockRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="lineBlockRate">0%</div>
         <div class="subtext" data-i18n="lineBlockRateSub">封鎖數 / 好友數</div>
       </div>
@@ -644,22 +672,22 @@
 
     <div class="grid-charts">
       <div class="chart-box">
-        <h2><span class="heading-inline">LINE 性別分布 <span class="info-icon" data-info="genderList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="lineGender">LINE 性別分布 <span class="info-icon" data-info="genderList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="genderList"></div></div>
       </div>
       <div class="chart-box">
-        <h2><span class="heading-inline">LINE 年齡分布 <span class="info-icon" data-info="ageList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="lineAge">LINE 年齡分布 <span class="info-icon" data-info="ageList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="ageList"></div></div>
       </div>
     </div>
 
     <div class="grid-charts">
       <div class="chart-box">
-        <h2><span class="heading-inline">LINE 地區分布 <span class="info-icon" data-info="areaInsightList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="lineArea">LINE 地區分布 <span class="info-icon" data-info="areaInsightList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box"><div class="list" id="areaInsightList"></div></div>
       </div>
       <div class="chart-box">
-        <h2><span class="heading-inline">LINE 裝置 / 關係期間 <span class="info-icon" data-info="lineDeviceSubscription" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="lineDevicePeriod">LINE 裝置 / 關係期間 <span class="info-icon" data-info="lineDeviceSubscription" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box">
           <div class="list" id="appTypeList"></div>
           <div style="height:12px"></div>
@@ -670,7 +698,7 @@
 
     <div class="section-controls">
       <div>
-        <div class="section-note">以下區間切換只影響系統查詢資料，不會改變上方 LINE 官方統計。</div>
+        <div class="section-note" data-i18n="sectionNote">以下區間切換只影響系統查詢資料，不會改變上方 LINE 官方統計。</div>
       </div>
       <div class="controls">
         <button class="range-btn active" data-range="1h">1小時</button>
@@ -678,69 +706,73 @@
         <button class="range-btn" data-range="7d">7日</button>
         <button class="range-btn" data-range="30d">30日</button>
         <button class="range-btn" data-range="1y">1年</button>
+        <div class="date-filter hidden" id="dateFilter">
+          <label for="anchorDate" data-i18n="dateLabel">日期</label>
+          <input type="date" id="anchorDate" />
+        </div>
         <div class="status" id="dataStatus">目前：真實資料模式</div>
       </div>
     </div>
 
     <div class="grid-cards">
       <button class="card metric-card" data-metric="totalQueries">
-        <h3><span class="heading-inline">查詢總量 <span class="info-icon" data-info="totalQueries" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="totalQueriesTitle">查詢總量 <span class="info-icon" data-info="totalQueries" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="totalQueries">0</div>
         <div class="subtext" data-i18n="totalQueriesSub">所選期間內總查詢次數</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="activeUsers">
-        <h3><span class="heading-inline">活躍使用者 <span class="info-icon" data-info="activeUsers" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="activeUsersTitle">活躍使用者 <span class="info-icon" data-info="activeUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="activeUsers">0</div>
         <div class="subtext" data-i18n="activeUsersSub">所選期間內至少查詢一次</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="successRate">
-        <h3><span class="heading-inline">成功率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="successRateTitle">成功率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="successRate">0%</div>
         <div class="subtext" data-i18n="successRateSub">成功回傳結果 / 全部查詢</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="avgResponse">
-        <h3><span class="heading-inline">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="avgResponseTitle">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="avgResponse">0 ms</div>
         <div class="subtext" data-i18n="avgResponseSub">已排除小於 50 ms 的瞬時回應</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="instantResponses">
-        <h3><span class="heading-inline">瞬時回應筆數 <span class="info-icon" data-info="instantResponses" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="instantResponsesTitle">瞬時回應筆數 <span class="info-icon" data-info="instantResponses" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="instantResponses">0</div>
-        <div class="subtext">小於 50 ms 的瞬時回應次數</div>
+        <div class="subtext" data-i18n="instantResponsesSub">小於 50 ms 的瞬時回應次數</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="newUsers">
-        <h3><span class="heading-inline">新使用者 <span class="info-icon" data-info="newUsers" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="newUsersTitle">新使用者 <span class="info-icon" data-info="newUsers" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="newUsers">0</div>
         <div class="subtext" data-i18n="newUsersSub">首次使用者數</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="retentionRate">
-        <h3><span class="heading-inline">回訪率 <span class="info-icon" data-info="retentionRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="retentionRateTitle">回訪率 <span class="info-icon" data-info="retentionRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="retentionRate">0%</div>
         <div class="subtext" data-i18n="retentionRateSub">曾在不同日期再次使用</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="noResultCount">
-        <h3><span class="heading-inline">查無結果次數 <span class="info-icon" data-info="noResultCount" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="noResultCountTitle">查無結果次數 <span class="info-icon" data-info="noResultCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="noResultCount">0</div>
         <div class="subtext" data-i18n="noResultCountSub">結果數量 = 0</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="errorCount">
-        <h3><span class="heading-inline">錯誤次數 <span class="info-icon" data-info="errorCount" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="errorCountTitle">錯誤次數 <span class="info-icon" data-info="errorCount" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="errorCount">0</div>
         <div class="subtext" data-i18n="errorCountSub">系統或 API 失敗</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
@@ -749,14 +781,14 @@
 
     <div class="grid-main">
       <div class="chart-box">
-        <h2><span class="heading-inline">使用趨勢 <span class="info-icon" data-info="trendChart" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="usageTrend">使用趨勢 <span class="info-icon" data-info="trendChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="trendChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <h2><span class="heading-inline">熱門區域 <span class="info-icon" data-info="hotAreaList" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="hotAreas">熱門區域 <span class="info-icon" data-info="hotAreaList" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="hot-area-box">
           <div class="list" id="hotAreaList"></div>
         </div>
@@ -765,14 +797,14 @@
 
     <div class="grid-charts">
       <div class="chart-box">
-        <h2><span class="heading-inline">時段分布 <span class="info-icon" data-info="hourChart" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="hourDistribution">時段分布 <span class="info-icon" data-info="hourChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="hourChart"></canvas>
         </div>
       </div>
 
       <div class="chart-box">
-        <h2><span class="heading-inline">查詢類型分布 <span class="info-icon" data-info="typeChart" role="button" tabindex="0">ⓘ</span></span></h2>
+        <h2><span class="heading-inline" data-i18n="queryTypeDistribution">查詢類型分布 <span class="info-icon" data-info="typeChart" role="button" tabindex="0">ⓘ</span></span></h2>
         <div class="chart-container">
           <canvas id="typeChart"></canvas>
         </div>
@@ -780,7 +812,7 @@
     </div>
 
     <div class="table-wrap">
-      <h2><span class="heading-inline">最近事件紀錄 <span class="info-icon" data-info="eventTable" role="button" tabindex="0">ⓘ</span></span></h2>
+      <h2><span class="heading-inline" data-i18n="recentEvents">最近事件紀錄 <span class="info-icon" data-info="eventTable" role="button" tabindex="0">ⓘ</span></span></h2>
       <table>
         <colgroup>
           <col style="width: 20%">
@@ -823,34 +855,37 @@
       zh: {
         dashboardTitle: 'Toilet Bot 儀表板',
         dashboardSubtitle: '流量、活躍、回訪、查詢成功率、回應時間、熱門區域與錯誤監控',
-        lineInsightStatus: 'LINE 官方資料：每日更新一次',
+        dateLabel: '日期',
+        sectionNote: '以下區間切換只影響系統查詢資料，不會改變上方 LINE 官方統計。',
+        lineFollowersTitle: 'LINE 好友數',
+        lineTargetedTitle: '目標好友數',
+        lineBlocksTitle: '封鎖數',
+        lineBlockRateTitle: '封鎖率',
+        lineFollowersSub: '官方帳號目前好友數',
+        lineTargetedSub: '可用於人口統計分析的人數',
+        lineBlocksSub: '官方帳號封鎖數',
+        lineBlockRateSub: '封鎖數 / 好友數',
         lineGender: 'LINE 性別分布',
         lineAge: 'LINE 年齡分布',
         lineArea: 'LINE 地區分布',
-        lineDeviceSubscription: 'LINE 裝置 / 關係期間',
-        lineFollowers: 'LINE 好友數',
-        lineFollowersSub: '官方帳號目前好友數',
-        lineTargeted: '目標好友數',
-        lineTargetedSub: '可用於人口統計分析的人數',
-        lineBlocks: '封鎖數',
-        lineBlocksSub: '官方帳號封鎖數',
-        lineBlockRate: '封鎖率',
-        lineBlockRateSub: '封鎖數 / 好友數',
-        totalQueries: '查詢總量',
+        lineDevicePeriod: 'LINE 裝置 / 關係期間',
+        totalQueriesTitle: '查詢總量',
+        activeUsersTitle: '活躍使用者',
+        successRateTitle: '成功率',
+        avgResponseTitle: '平均回應時間',
+        instantResponsesTitle: '瞬時回應筆數',
+        newUsersTitle: '新使用者',
+        retentionRateTitle: '回訪率',
+        noResultCountTitle: '查無結果次數',
+        errorCountTitle: '錯誤次數',
         totalQueriesSub: '所選期間內總查詢次數',
-        activeUsers: '活躍使用者',
         activeUsersSub: '所選期間內至少查詢一次',
-        successRate: '成功率',
         successRateSub: '成功回傳結果 / 全部查詢',
-        avgResponse: '平均回應時間',
         avgResponseSub: '已排除小於 50 ms 的瞬時回應',
-        newUsers: '新使用者',
+        instantResponsesSub: '小於 50 ms 的瞬時回應次數',
         newUsersSub: '首次使用者數',
-        retentionRate: '回訪率',
         retentionRateSub: '曾在不同日期再次使用',
-        noResultCount: '查無結果次數',
         noResultCountSub: '結果數量 = 0',
-        errorCount: '錯誤次數',
         errorCountSub: '系統或 API 失敗',
         clickForDetails: '點擊查看明細',
         usageTrend: '使用趨勢',
@@ -863,20 +898,27 @@
         thResultCount: '結果數',
         thResponseTime: '回應時間',
         thStatus: '狀態',
-        dateLabel: '日期',
-        applyDate: '套用日期',
         range_1h: '1小時',
         range_1d: '1日',
         range_7d: '7日',
         range_30d: '30日',
         range_1y: '1年',
+        lineDailyStatus: 'LINE 官方資料：每日更新一次',
+        lineLoadedAtPrefix: 'LINE 官方資料：每日更新一次｜上次載入 ',
+        lineLoadFailed: 'LINE 官方資料讀取失敗',
         statusPrefix: '目前區間',
         realDataMode: '真實資料模式',
+        datePrefix: '日期',
+        loadFailed: '資料讀取失敗',
+        success: '成功',
+        failed: '失敗',
+        eventTypes: {location_query:'定位查詢', text_query:'文字查詢', search_result:'點擊結果', error:'錯誤'},
         detailTitles: {
           totalQueries: '查詢總量明細',
           activeUsers: '活躍使用者明細',
           successRate: '成功率明細',
           avgResponse: '平均回應時間明細',
+          instantResponses: '瞬時回應筆數明細',
           newUsers: '新使用者明細',
           retentionRate: '回訪率明細',
           noResultCount: '查無結果次數明細',
@@ -886,34 +928,37 @@
       en: {
         dashboardTitle: 'Toilet Bot Dashboard',
         dashboardSubtitle: 'Traffic, activity, retention, query success rate, response time, hot areas, and error monitoring',
-        lineInsightStatus: 'LINE official insights: updated daily',
+        dateLabel: 'Date',
+        sectionNote: 'The range selector below only affects system query data and does not change the LINE official statistics above.',
+        lineFollowersTitle: 'LINE Friends',
+        lineTargetedTitle: 'Targeted Reaches',
+        lineBlocksTitle: 'Blocks',
+        lineBlockRateTitle: 'Block Rate',
+        lineFollowersSub: 'Current friend count of the official account',
+        lineTargetedSub: 'Users available for demographic analysis',
+        lineBlocksSub: 'Official account block count',
+        lineBlockRateSub: 'Blocks / Friends',
         lineGender: 'LINE Gender Distribution',
         lineAge: 'LINE Age Distribution',
         lineArea: 'LINE Area Distribution',
-        lineDeviceSubscription: 'LINE Device / Relationship Period',
-        lineFollowers: 'LINE Friends',
-        lineFollowersSub: 'Current friend count of the official account',
-        lineTargeted: 'Targeted Reaches',
-        lineTargetedSub: 'Users available for demographic analysis',
-        lineBlocks: 'Blocks',
-        lineBlocksSub: 'Official account block count',
-        lineBlockRate: 'Block Rate',
-        lineBlockRateSub: 'Blocks / Friends',
-        totalQueries: 'Total Queries',
+        lineDevicePeriod: 'LINE Device / Relationship Period',
+        totalQueriesTitle: 'Total Queries',
+        activeUsersTitle: 'Active Users',
+        successRateTitle: 'Success Rate',
+        avgResponseTitle: 'Average Response Time',
+        instantResponsesTitle: 'Instant Responses',
+        newUsersTitle: 'New Users',
+        retentionRateTitle: 'Retention Rate',
+        noResultCountTitle: 'No-result Count',
+        errorCountTitle: 'Error Count',
         totalQueriesSub: 'Total queries in the selected period',
-        activeUsers: 'Active Users',
         activeUsersSub: 'Users with at least one query in the selected period',
-        successRate: 'Success Rate',
         successRateSub: 'Successful results / all queries',
-        avgResponse: 'Average Response Time',
         avgResponseSub: 'Excludes instant responses under 50 ms',
-        newUsers: 'New Users',
+        instantResponsesSub: 'Count of responses under 50 ms',
         newUsersSub: 'First-time users',
-        retentionRate: 'Retention Rate',
         retentionRateSub: 'Used again on a different date',
-        noResultCount: 'No-result Count',
         noResultCountSub: 'Result count = 0',
-        errorCount: 'Error Count',
         errorCountSub: 'System or API failures',
         clickForDetails: 'Click for details',
         usageTrend: 'Usage Trend',
@@ -926,20 +971,27 @@
         thResultCount: 'Result Count',
         thResponseTime: 'Response Time',
         thStatus: 'Status',
-        dateLabel: 'Date',
-        applyDate: 'Apply Date',
         range_1h: '1 Hour',
         range_1d: '1 Day',
         range_7d: '7 Days',
         range_30d: '30 Days',
         range_1y: '1 Year',
+        lineDailyStatus: 'LINE official data: updated daily',
+        lineLoadedAtPrefix: 'LINE official data: updated daily | Last loaded ',
+        lineLoadFailed: 'Failed to load LINE official data',
         statusPrefix: 'Current Range',
         realDataMode: 'Real data mode',
+        datePrefix: 'Date',
+        loadFailed: 'Failed to load data',
+        success: 'Success',
+        failed: 'Failed',
+        eventTypes: {location_query:'Location Query', text_query:'Text Query', search_result:'Result Click', error:'Error'},
         detailTitles: {
           totalQueries: 'Total Queries Details',
           activeUsers: 'Active Users Details',
           successRate: 'Success Rate Details',
           avgResponse: 'Average Response Time Details',
+          instantResponses: 'Instant Responses Details',
           newUsers: 'New Users Details',
           retentionRate: 'Retention Rate Details',
           noResultCount: 'No-result Details',
@@ -949,34 +1001,37 @@
       ja: {
         dashboardTitle: 'Toilet Bot ダッシュボード',
         dashboardSubtitle: 'トラフィック、アクティブ率、再訪率、検索成功率、応答時間、人気エリア、エラー監視',
-        lineInsightStatus: 'LINE公式データ：1日1回更新',
+        dateLabel: '日付',
+        sectionNote: '以下の期間切替はシステム検索データのみに影響し、上部のLINE公式統計は変更しません。',
+        lineFollowersTitle: 'LINE 友だち数',
+        lineTargetedTitle: '対象友だち数',
+        lineBlocksTitle: 'ブロック数',
+        lineBlockRateTitle: 'ブロック率',
+        lineFollowersSub: '公式アカウントの現在の友だち数',
+        lineTargetedSub: '属性分析に使える人数',
+        lineBlocksSub: '公式アカウントのブロック数',
+        lineBlockRateSub: 'ブロック数 / 友だち数',
         lineGender: 'LINE 性別分布',
         lineAge: 'LINE 年齢分布',
         lineArea: 'LINE 地域分布',
-        lineDeviceSubscription: 'LINE 端末 / 関係期間',
-        lineFollowers: 'LINE 友だち数',
-        lineFollowersSub: '公式アカウントの現在の友だち数',
-        lineTargeted: '対象友だち数',
-        lineTargetedSub: '属性分析に使える人数',
-        lineBlocks: 'ブロック数',
-        lineBlocksSub: '公式アカウントのブロック数',
-        lineBlockRate: 'ブロック率',
-        lineBlockRateSub: 'ブロック数 / 友だち数',
-        totalQueries: '検索総数',
+        lineDevicePeriod: 'LINE 端末 / 関係期間',
+        totalQueriesTitle: '検索総数',
+        activeUsersTitle: 'アクティブユーザー',
+        successRateTitle: '成功率',
+        avgResponseTitle: '平均応答時間',
+        instantResponsesTitle: '瞬時応答件数',
+        newUsersTitle: '新規ユーザー',
+        retentionRateTitle: '再訪率',
+        noResultCountTitle: '結果なし回数',
+        errorCountTitle: 'エラー回数',
         totalQueriesSub: '選択期間内の総検索回数',
-        activeUsers: 'アクティブユーザー',
         activeUsersSub: '選択期間内に1回以上検索した人数',
-        successRate: '成功率',
         successRateSub: '結果を返した回数 / 全検索回数',
-        avgResponse: '平均応答時間',
         avgResponseSub: '50 ms 未満の瞬時応答を除外',
-        newUsers: '新規ユーザー',
+        instantResponsesSub: '50 ms 未満の応答回数',
         newUsersSub: '初回利用者数',
-        retentionRate: '再訪率',
         retentionRateSub: '別の日に再度利用した割合',
-        noResultCount: '結果なし回数',
         noResultCountSub: '結果数 = 0',
-        errorCount: 'エラー回数',
         errorCountSub: 'システムまたはAPIの失敗',
         clickForDetails: 'クリックして詳細を見る',
         usageTrend: '利用推移',
@@ -989,20 +1044,27 @@
         thResultCount: '結果数',
         thResponseTime: '応答時間',
         thStatus: '状態',
-        dateLabel: '日付',
-        applyDate: '日付を適用',
         range_1h: '1時間',
         range_1d: '1日',
         range_7d: '7日',
         range_30d: '30日',
         range_1y: '1年',
+        lineDailyStatus: 'LINE公式データ：1日1回更新',
+        lineLoadedAtPrefix: 'LINE公式データ：1日1回更新｜最終読込 ',
+        lineLoadFailed: 'LINE公式データの読み込みに失敗しました',
         statusPrefix: '表示期間',
         realDataMode: '実データモード',
+        datePrefix: '日付',
+        loadFailed: 'データの読み込みに失敗しました',
+        success: '成功',
+        failed: '失敗',
+        eventTypes: {location_query:'位置検索', text_query:'テキスト検索', search_result:'結果クリック', error:'エラー'},
         detailTitles: {
           totalQueries: '検索総数の詳細',
           activeUsers: 'アクティブユーザー詳細',
           successRate: '成功率詳細',
           avgResponse: '平均応答時間詳細',
+          instantResponses: '瞬時応答件数詳細',
           newUsers: '新規ユーザー詳細',
           retentionRate: '再訪率詳細',
           noResultCount: '結果なし回数詳細',
@@ -1012,7 +1074,7 @@
     };
 
     function detectLang() {
-      const raw = (navigator.language || 'zh-TW').toLowerCase();
+      const raw = (navigator.language || navigator.userLanguage || 'zh-TW').toLowerCase();
       if (raw.startsWith('ja')) return 'ja';
       if (raw.startsWith('en')) return 'en';
       return 'zh';
@@ -1042,6 +1104,7 @@
 
     const USE_MOCK = false;
     let currentRange = '1h';
+    let currentAnchorDate = '';
     let trendChart = null;
     let hourChart = null;
     let typeChart = null;
@@ -1054,6 +1117,8 @@
     const modalSubtitle = document.getElementById('modalSubtitle');
     const modalBody = document.getElementById('modalBody');
     const closeModalBtn = document.getElementById('closeModalBtn');
+    const dateFilter = document.getElementById('dateFilter');
+    const anchorDateInput = document.getElementById('anchorDate');
 
 
     const infoTextMap = {
@@ -1087,9 +1152,17 @@
         rangeButtons.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentRange = btn.dataset.range;
+        syncDateFilterVisibility();
         await refreshDashboard();
       });
     });
+
+    if (anchorDateInput) {
+      anchorDateInput.addEventListener('change', async () => {
+        currentAnchorDate = anchorDateInput.value || '';
+        await refreshDashboard();
+      });
+    }
 
     metricCards.forEach(card => {
       card.addEventListener('click', () => {
@@ -1189,13 +1262,28 @@
       }[range] || range;
     }
 
+
+    function getTaiwanTodayString() {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      return formatter.format(new Date());
+    }
+
+    function syncDateFilterVisibility() {
+      if (!dateFilter) return;
+      if (currentRange === '1h') {
+        dateFilter.classList.add('hidden');
+      } else {
+        dateFilter.classList.remove('hidden');
+      }
+    }
+
     function translateEventType(type) {
-      const map = {
-        location_query: '定位查詢',
-        text_query: '文字查詢',
-        search_result: '點擊結果',
-        error: '錯誤'
-      };
+      const map = (I18N[currentLang] && I18N[currentLang].eventTypes) || I18N.zh.eventTypes;
       return map[type] || type;
     }
 
@@ -1354,7 +1442,11 @@
     }
 
     async function getDashboardData(range) {
-      const res = await fetch(`/api/dashboard?range=${range}`);
+      const params = new URLSearchParams({ range });
+      if (range !== '1h' && currentAnchorDate) {
+        params.set('anchor_date', currentAnchorDate);
+      }
+      const res = await fetch(`/api/dashboard?${params.toString()}`);
       if (!res.ok) throw new Error('API 讀取失敗');
       return await res.json();
     }
@@ -1454,18 +1546,8 @@
       const detail = currentDashboardData.detail[metric];
       if (!detail) return;
 
-      const titleMap = {
-        totalQueries: '查詢總量明細',
-        activeUsers: '活躍使用者明細',
-        successRate: '成功率明細',
-        avgResponse: '平均回應時間明細',
-        instantResponses: '瞬時回應筆數明細',
-        newUsers: '新使用者明細',
-        retentionRate: '回訪率明細',
-        noResultCount: '查無結果次數明細',
-        errorCount: '錯誤次數明細'
-      };
-      modalTitle.textContent = titleMap[metric] || '指標明細';
+      const detailTitles = (I18N[currentLang] && I18N[currentLang].detailTitles) || I18N.zh.detailTitles;
+      modalTitle.textContent = detailTitles[metric] || 'Details';
       modalSubtitle.textContent = `目前區間：${rangeLabel(currentRange)}`;
 
       let html = '';
@@ -1549,10 +1631,10 @@
         renderInsightList('appTypeList', data.appType ?? []);
         renderInsightList('subscriptionList', data.subscriptionPeriod ?? []);
         const updatedAt = new Date().toLocaleString('zh-TW');
-        document.getElementById('lineDataStatus').textContent = `LINE 官方資料：每日更新一次｜上次載入 ${updatedAt}`;
+        document.getElementById('lineDataStatus').textContent = `${tr('lineLoadedAtPrefix')}${updatedAt}`;
       } catch (err) {
         console.error(err);
-        document.getElementById('lineDataStatus').textContent = 'LINE 官方資料讀取失敗';
+        document.getElementById('lineDataStatus').textContent = tr('lineLoadFailed');
       }
     }
     
@@ -1637,8 +1719,8 @@
           <td class="mono" title="${resultText}">${resultText}</td>
           <td class="mono" title="${responseText}">${responseText}</td>
           <td>
-            <span class="pill ${e.success ? '' : 'error'}" title="${e.success ? '成功' : '失敗'}">
-              ${e.success ? '成功' : '失敗'}
+            <span class="pill ${e.success ? '' : 'error'}" title="${e.success ? tr('success') : tr('failed')}">
+              ${e.success ? tr('success') : tr('failed')}
             </span>
           </td>
         `;
@@ -1658,13 +1740,20 @@
         renderAreaList(data.areas);
         renderEvents(data.events);
 
-        document.getElementById('dataStatus').textContent = `目前區間：${rangeLabel(currentRange)}｜真實資料模式`;
+        const picked = (currentRange !== '1h' && currentAnchorDate) ? `｜${tr('datePrefix')}：${currentAnchorDate}` : '';
+        document.getElementById('dataStatus').textContent = `${tr('statusPrefix')}：${rangeLabel(currentRange)}｜${tr('realDataMode')}${picked}`;
       } catch (err) {
         console.error(err);
-        document.getElementById('dataStatus').textContent = '資料讀取失敗';
+        document.getElementById('dataStatus').textContent = tr('loadFailed');
       }
     }
 
+    if (anchorDateInput) {
+      anchorDateInput.value = getTaiwanTodayString();
+      currentAnchorDate = anchorDateInput.value;
+    }
+    syncDateFilterVisibility();
+    applyI18n();
     refreshDashboard();
     refreshLineInsights();
     setInterval(refreshDashboard, 30000);
