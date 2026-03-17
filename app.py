@@ -4899,7 +4899,7 @@ def _dashboard_range_to_sqlite(range_key: str):
 
 def _bucket_label(dt_obj, range_key):
     if dt_obj.tzinfo is None:
-        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+        dt_obj = dt_obj.replace(tzinfo=TW_TZ)
     dt_obj = dt_obj.astimezone(TW_TZ)
 
     if range_key == "1h":
@@ -4941,7 +4941,7 @@ def _generate_dashboard_data(range_key="1h"):
             if isinstance(e.get("created_at"), datetime):
                 dt = e["created_at"]
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=TW_TZ)
                 dt = dt.astimezone(TW_TZ)
                 e["created_at"] = dt.isoformat()
     else:
@@ -4999,7 +4999,7 @@ def _generate_dashboard_data(range_key="1h"):
                 if isinstance(first_seen, str):
                     first_seen = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
                 if first_seen.tzinfo is None:
-                    first_seen = first_seen.replace(tzinfo=timezone.utc)
+                    first_seen = first_seen.replace(tzinfo=TW_TZ)
 
                 if first_seen >= start:
                     new_users += 1
@@ -5036,7 +5036,7 @@ def _generate_dashboard_data(range_key="1h"):
         try:
             dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
             if dt_obj.tzinfo is None:
-                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                dt_obj = dt_obj.replace(tzinfo=TW_TZ)
         except Exception:
             continue
         label = _bucket_label(dt_obj, range_key)
