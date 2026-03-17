@@ -4799,31 +4799,71 @@ _DASHBOARD_RANGE_SECONDS = {
     "1y": 365 * 86400,
 }
 
-def _dashboard_range_to_sqlite(range_key: str):
+def _dashboard_range_to_sqlite(range_key: str, anchor_date_str: str | None = None):
     now = datetime.now(TW_TZ)
+    anchor_date = None
+
+    if anchor_date_str and range_key != "1h":
+        try:
+            anchor_date = datetime.strptime(anchor_date_str, "%Y-%m-%d").date()
+        except Exception:
+            anchor_date = None
 
     if range_key == "1h":
         start = now - timedelta(hours=1)
+        end = now
         bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
-        start = now - timedelta(days=1)
+        if anchor_date is None:
+            anchor_date = now.date()
+        start = datetime.combine(anchor_date, datetime.min.time(), tzinfo=TW_TZ)
+        end = start + timedelta(days=1) - timedelta(microseconds=1)
         bucket = "hour"
-        labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
+        labels = [f"{(start + timedelta(hours=i)).strftime('%m/%d %H:00')}" for i in range(24)]
     elif range_key == "7d":
-        start = now - timedelta(days=7)
+        if anchor_date is None:
+            anchor_date = now.date()
+        end_day = datetime.combine(anchor_date, datetime.max.time(), tzinfo=TW_TZ)
+        start_day = datetime.combine(anchor_date - timedelta(days=6), datetime.min.time(), tzinfo=TW_TZ)
+        start = start_day
+        end = end_day
         bucket = "day"
-        labels = [f"{i+1}" for i in range(7)]
+        labels = [f"{(start_day + timedelta(days=i)).strftime('%m/%d')}" for i in range(7)]
     elif range_key == "30d":
-        start = now - timedelta(days=30)
+        if anchor_date is None:
+            anchor_date = now.date()
+        end_day = datetime.combine(anchor_date, datetime.max.time(), tzinfo=TW_TZ)
+        start_day = datetime.combine(anchor_date - timedelta(days=29), datetime.min.time(), tzinfo=TW_TZ)
+        start = start_day
+        end = end_day
         bucket = "day"
-        labels = [f"{i+1}" for i in range(30)]
+        labels = [f"{(start_day + timedelta(days=i)).strftime('%m/%d')}" for i in range(30)]
     else:
-        start = now - timedelta(days=365)
+        if anchor_date is None:
+            anchor_date = now.date()
+        month_start = datetime(anchor_date.year, anchor_date.month, 1, tzinfo=TW_TZ)
+        start = month_start
+        for _ in range(11):
+            prev_month_end = start - timedelta(days=1)
+            start = datetime(prev_month_end.year, prev_month_end.month, 1, tzinfo=TW_TZ)
+        end = now if (anchor_date.year == now.year and anchor_date.month == now.month) else (
+            datetime(anchor_date.year + (1 if anchor_date.month == 12 else 0),
+                     1 if anchor_date.month == 12 else anchor_date.month + 1,
+                     1,
+                     tzinfo=TW_TZ) - timedelta(microseconds=1)
+        )
         bucket = "month"
-        labels = [f"{i+1}月" for i in range(12)]
+        labels = []
+        cursor = datetime(start.year, start.month, 1, tzinfo=TW_TZ)
+        while cursor <= end and len(labels) < 12:
+            labels.append(cursor.strftime('%Y/%m'))
+            if cursor.month == 12:
+                cursor = datetime(cursor.year + 1, 1, 1, tzinfo=TW_TZ)
+            else:
+                cursor = datetime(cursor.year, cursor.month + 1, 1, tzinfo=TW_TZ)
 
-    return start, now, bucket, labels
+    return start, end, bucket, labels
 
 def _bucket_label(dt_obj, range_key):
     if dt_obj.tzinfo is None:
@@ -4833,13 +4873,13 @@ def _bucket_label(dt_obj, range_key):
     if range_key == "1h":
         return f"{(dt_obj.minute // 5) * 5}分"
     if range_key == "1d":
-        return f"{dt_obj.hour:02d}:00"
+        return dt_obj.strftime("%m/%d %H:00")
     if range_key in ("7d", "30d"):
-        return f"{dt_obj.day}"
-    return f"{dt_obj.month}月"
+        return dt_obj.strftime("%m/%d")
+    return dt_obj.strftime("%Y/%m")
 
-def _generate_dashboard_data(range_key="1h"):
-    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
+def _generate_dashboard_data(range_key="1h", anchor_date=None):
+    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key, anchor_date)
 
     if POSTGRES_ENABLED:
         conn = _pg_connect()
@@ -5113,9 +5153,10 @@ def dashboard_page():
 @app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     range_key = (request.args.get("range") or "1h").strip()
+    anchor_date = (request.args.get("anchor_date") or "").strip() or None
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-    return jsonify(_generate_dashboard_data(range_key))
+    return jsonify(_generate_dashboard_data(range_key, anchor_date))
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])

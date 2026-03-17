@@ -94,6 +94,34 @@
       color: #fff;
     }
 
+
+    .date-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    .date-filter label {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .date-filter input[type="date"] {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0 10px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .date-filter.hidden {
+      display: none;
+    }
+
     .status {
       display: inline-flex;
       align-items: center;
@@ -678,6 +706,10 @@
         <button class="range-btn" data-range="7d">7日</button>
         <button class="range-btn" data-range="30d">30日</button>
         <button class="range-btn" data-range="1y">1年</button>
+        <div class="date-filter hidden" id="dateFilter">
+          <label for="anchorDate">日期</label>
+          <input type="date" id="anchorDate" />
+        </div>
         <div class="status" id="dataStatus">目前：真實資料模式</div>
       </div>
     </div>
@@ -820,6 +852,7 @@
   <script>
     const USE_MOCK = false;
     let currentRange = '1h';
+    let currentAnchorDate = '';
     let trendChart = null;
     let hourChart = null;
     let typeChart = null;
@@ -832,6 +865,8 @@
     const modalSubtitle = document.getElementById('modalSubtitle');
     const modalBody = document.getElementById('modalBody');
     const closeModalBtn = document.getElementById('closeModalBtn');
+    const dateFilter = document.getElementById('dateFilter');
+    const anchorDateInput = document.getElementById('anchorDate');
 
 
     const infoTextMap = {
@@ -865,9 +900,17 @@
         rangeButtons.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentRange = btn.dataset.range;
+        syncDateFilterVisibility();
         await refreshDashboard();
       });
     });
+
+    if (anchorDateInput) {
+      anchorDateInput.addEventListener('change', async () => {
+        currentAnchorDate = anchorDateInput.value || '';
+        await refreshDashboard();
+      });
+    }
 
     metricCards.forEach(card => {
       card.addEventListener('click', () => {
@@ -965,6 +1008,26 @@
         '30d': '30日',
         '1y': '1年'
       }[range] || range;
+    }
+
+
+    function getTaiwanTodayString() {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      return formatter.format(new Date());
+    }
+
+    function syncDateFilterVisibility() {
+      if (!dateFilter) return;
+      if (currentRange === '1h') {
+        dateFilter.classList.add('hidden');
+      } else {
+        dateFilter.classList.remove('hidden');
+      }
     }
 
     function translateEventType(type) {
@@ -1132,7 +1195,11 @@
     }
 
     async function getDashboardData(range) {
-      const res = await fetch(`/api/dashboard?range=${range}`);
+      const params = new URLSearchParams({ range });
+      if (range !== '1h' && currentAnchorDate) {
+        params.set('anchor_date', currentAnchorDate);
+      }
+      const res = await fetch(`/api/dashboard?${params.toString()}`);
       if (!res.ok) throw new Error('API 讀取失敗');
       return await res.json();
     }
@@ -1436,13 +1503,19 @@
         renderAreaList(data.areas);
         renderEvents(data.events);
 
-        document.getElementById('dataStatus').textContent = `目前區間：${rangeLabel(currentRange)}｜真實資料模式`;
+        const picked = (currentRange !== '1h' && currentAnchorDate) ? `｜日期：${currentAnchorDate}` : '';
+        document.getElementById('dataStatus').textContent = `目前區間：${rangeLabel(currentRange)}｜真實資料模式${picked}`;
       } catch (err) {
         console.error(err);
         document.getElementById('dataStatus').textContent = '資料讀取失敗';
       }
     }
 
+    if (anchorDateInput) {
+      anchorDateInput.value = getTaiwanTodayString();
+      currentAnchorDate = anchorDateInput.value;
+    }
+    syncDateFilterVisibility();
     refreshDashboard();
     refreshLineInsights();
     setInterval(refreshDashboard, 30000);
