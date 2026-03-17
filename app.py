@@ -5055,10 +5055,11 @@ def _generate_dashboard_data(range_key="1h"):
         try:
             dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
 
+            # 只有沒有時區才補台灣時間
             if dt_obj.tzinfo is None:
-                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                dt_obj = dt_obj.replace(tzinfo=TW_TZ)
 
-            dt_obj = dt_obj.astimezone(TW_TZ)
+            hour = dt_obj.hour
 
             hourly_map[f"{dt_obj.hour:02d}:00"] += 1
         except Exception:
