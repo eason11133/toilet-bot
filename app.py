@@ -1864,7 +1864,7 @@ def log_analytics_event(
                 float(lon) if lon is not None else None,
                 area_name,
                 query_text,
-                created_at or datetime.utcnow()
+                created_at or datetime.now(TW_TZ)
             ))
             conn.commit()
             conn.close()
