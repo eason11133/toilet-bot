@@ -439,6 +439,132 @@ TEXTS.update({
     }
 })
 
+# === 外部語言包（lang/zh.json, lang/en.json）===
+LANG_DIR = os.path.join(os.path.dirname(__file__), "lang")
+
+def _load_lang_pack(lang_code: str):
+    try:
+        path = os.path.join(LANG_DIR, f"{lang_code}.json")
+        if not os.path.exists(path):
+            return {"texts": {}, "literals": {}}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"texts": {}, "literals": {}}
+        return {
+            "texts": data.get("texts", {}) or {},
+            "literals": data.get("literals", {}) or {}
+        }
+    except Exception as e:
+        logging.warning(f"load lang pack failed ({lang_code}): {e}")
+        return {"texts": {}, "literals": {}}
+
+_LANG_PACKS = {
+    "zh": _load_lang_pack("zh"),
+    "en": _load_lang_pack("en"),
+}
+
+def _lang_text(key: str, lang: str):
+    pack = _LANG_PACKS.get(lang, {})
+    texts = pack.get("texts", {}) if isinstance(pack, dict) else {}
+    if key in texts:
+        return texts.get(key)
+    return None
+
+def _translate_literal_runtime(text: str, lang: str):
+    if not isinstance(text, str) or not text:
+        return text
+    pack = _LANG_PACKS.get(lang, {})
+    literals = pack.get("literals", {}) if isinstance(pack, dict) else {}
+    if not literals:
+        return text
+
+    # 先 exact match，再做長字串優先的子字串替換
+    if text in literals:
+        return literals[text]
+
+    out = text
+    try:
+        for src, dst in sorted(literals.items(), key=lambda kv: len(kv[0]), reverse=True):
+            if src and src in out:
+                out = out.replace(src, dst)
+    except Exception:
+        return text
+    return out
+
+def _localize_line_message_object(obj, lang: str):
+    """
+    針對 LINE message object 做遞迴在地化。
+    - 會翻譯 TextSendMessage / FlexSendMessage / QuickReply label 等顯示文字
+    - 不翻譯 postback data / URI / MessageAction.text，避免功能被翻壞
+    """
+    if obj is None:
+        return obj
+
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if isinstance(node, tuple):
+            for item in node:
+                walk(item)
+            return
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if isinstance(v, str):
+                    # 避免翻掉功能欄位
+                    if k in ("data", "uri"):
+                        continue
+                    node[k] = _translate_literal_runtime(v, lang)
+                else:
+                    walk(v)
+            return
+
+        if hasattr(node, "__dict__"):
+            cls_name = node.__class__.__name__
+            for attr, value in vars(node).items():
+                if attr.startswith("_"):
+                    continue
+
+                if isinstance(value, str):
+                    # 避免翻壞功能用文字
+                    if attr in ("data", "uri"):
+                        continue
+                    if cls_name == "MessageAction" and attr == "text":
+                        continue
+                    # 顯示文字可翻
+                    if attr in ("text", "alt_text", "label", "title", "placeholder", "display_text"):
+                        try:
+                            setattr(node, attr, _translate_literal_runtime(value, lang))
+                        except Exception:
+                            pass
+                else:
+                    walk(value)
+
+    walk(obj)
+    return obj
+
+def _localize_outgoing_messages(messages, uid=None, lang=None):
+    target_lang = resolve_lang(uid=uid, lang=lang)
+    if target_lang == "zh":
+        return messages
+
+    if messages is None:
+        return messages
+    if not isinstance(messages, list):
+        messages = [messages]
+
+    out = []
+    for msg in messages:
+        try:
+            out.append(_localize_line_message_object(msg, target_lang))
+        except Exception:
+            out.append(msg)
+    return out
+
 
 # =========================
 # ✅ 統一語言/翻譯入口（唯一入口）
@@ -473,29 +599,36 @@ def T(key_or_zh, uid=None, en=None, lang=None, **fmt):
     """
     ✅ 統一翻譯函式（全案唯一入口）
     用法：
-    1) key 模式（推薦）：T("no_result", uid=uid)  → 從 TEXTS 抓 zh/en
+    1) key 模式（推薦）：T("no_result", uid=uid)  → 從外部語言包 / TEXTS 抓 zh/en
     2) zh/en 模式（相容舊碼）：T("附近沒有廁所", uid=uid, en="No toilets nearby")
     3) API 模式：T("missing_params", lang=_api_lang())
     4) 支援 format：T("added_fav_ok", uid=uid, name="xxx")
     """
     l = resolve_lang(uid=uid, lang=lang)
 
-    # key 模式：en is None，且 key 在 TEXTS
-    if en is None and isinstance(key_or_zh, str) and key_or_zh in TEXTS:
-        s = TEXTS[key_or_zh].get(l, TEXTS[key_or_zh].get("zh", "")) or ""
+    # key 模式：先查外部語言包，再 fallback 到內建 TEXTS
+    if en is None and isinstance(key_or_zh, str):
+        from_pack = _lang_text(key_or_zh, l)
+        if from_pack is not None:
+            s = from_pack
+        elif key_or_zh in TEXTS:
+            s = TEXTS[key_or_zh].get(l, TEXTS[key_or_zh].get("zh", "")) or ""
+        else:
+            s = key_or_zh or ""
     else:
         # zh/en 模式（相容）
         s = (en if l == "en" else key_or_zh) if en is not None else (key_or_zh or "")
 
-    # format（容錯）
+    # 最後做一次 literal runtime 替換，補齊未完全 key 化的字串
+    s = _translate_literal_runtime(s, l)
+
     try:
         return s.format(**fmt)
     except Exception:
         return s
 
-# ---- 舊函式相容層（全部導到 T）----
-
 def t(key, uid):
+
     return T(key, uid=uid)
 
 def L(uid, zh_or_key, en=None):
@@ -1391,6 +1524,10 @@ def safe_reply(event, messages):
         logging.warning(f"[safe_reply] messages too many ({len(messages)}), truncating to {LINE_REPLY_MAX}.")
         messages = messages[:LINE_REPLY_MAX]
 
+    # 根據使用者語言做最後一層在地化，盡量避免漏網之魚
+    uid = getattr(getattr(event, "source", None), "user_id", None)
+    messages = _localize_outgoing_messages(messages, uid=uid)
+
     # 沒有 reply_token（或事件不支援 reply）就不送，避免用 push
     reply_token = getattr(event, "reply_token", None)
     if not reply_token:
@@ -1419,126 +1556,6 @@ def safe_reply(event, messages):
         logging.error(f"[safe_reply] unexpected error: {ex}", exc_info=True)
         return
 
-# === 更精準的防重複（新） ===
-
-_DEDUPE_LOCK = threading.Lock()
-
-# 事件類型專屬時間窗（秒）— 可用環境變數調整
-TEXT_DEDUPE_WINDOW = int(os.getenv("TEXT_DEDUPE_WINDOW", "15"))
-LOC_DEDUPE_WINDOW  = int(os.getenv("LOC_DEDUPE_WINDOW",  "10"))
-PB_DEDUPE_WINDOW   = int(os.getenv("PB_DEDUPE_WINDOW",   "120"))
-
-# 定位事件短時間重複的距離閾值（公尺）
-LOC_DEDUPE_DISTANCE_M = float(os.getenv("LOC_DEDUPE_DISTANCE_M", "8"))
-
-# 最近處理事件時間索引
-_RECENT_EVENTS = getattr(globals(), "_RECENT_EVENTS", {})  # 若前面已有同名 dict，沿用
-
-def _now():
-    return time.time()
-
-def _purge_expired(now_ts: float):
-    """輕量清理：移除超過最大去重窗的舊記錄，避免 dict 無限成長"""
-    max_win = max(TEXT_DEDUPE_WINDOW, LOC_DEDUPE_WINDOW, PB_DEDUPE_WINDOW, 180)
-    cutoff = now_ts - float(max_win)
-    for k, ts in list(_RECENT_EVENTS.items()):
-        if ts < cutoff:
-            _RECENT_EVENTS.pop(k, None)
-
-def _event_type_and_key(event):
-    """回傳 (etype, key, window_sec)
-
-    ✅ 去重 key 優先順序：
-    1) webhook_event_id（若 SDK 有帶）
-    2) message.id（MessageEvent）
-    3) fallback：user_id + payload + timestamp（同一事件重送 timestamp 通常相同）
-    """
-    uid = getattr(getattr(event, "source", None), "user_id", "") or ""
-    ts = getattr(event, "timestamp", 0) or 0  # ms
-    weid = getattr(event, "webhook_event_id", None) or getattr(event, "webhookEventId", None)
-
-    # Message id
-    mid = None
-    try:
-        mid = getattr(getattr(event, "message", None), "id", None)
-    except Exception:
-        pass
-
-    # Text
-    if isinstance(getattr(event, "message", None), TextMessage):
-        etype = "text"
-        window = TEXT_DEDUPE_WINDOW
-        txt = (getattr(event.message, "text", "") or "").strip().lower()
-        if weid:
-            key = f"weid:{weid}"
-        elif mid:
-            key = f"mid:{mid}"
-        else:
-            key = f"text|{uid}|{txt}|ts:{ts}"
-        return etype, key, window
-
-    # Location
-    if isinstance(getattr(event, "message", None), LocationMessage):
-        etype = "loc"
-        window = LOC_DEDUPE_WINDOW
-        lat = getattr(event.message, "latitude", None)
-        lon = getattr(event.message, "longitude", None)
-        base = f"loc|{uid}|{norm_coord(lat)}:{norm_coord(lon)}|ts:{ts}"
-        if weid:
-            key = f"weid:{weid}"
-        elif mid:
-            key = f"mid:{mid}"
-        else:
-            key = base
-        return etype, key, window
-
-    # Postback（沒有 message）
-    etype = "pb"
-    window = PB_DEDUPE_WINDOW
-    data = getattr(getattr(event, "postback", None), "data", "") or ""
-    if weid:
-        key = f"weid:{weid}"
-    else:
-        key = f"pb|{uid}|{data}|ts:{ts}"
-    return etype, key, window
-
-def is_duplicate_and_mark_event(event) -> bool:
-    now_ts = _now()
-    etype, key, window = _event_type_and_key(event)
-
-    # 為 Location 加上「距離 + 時間」規則
-    if etype == "loc":
-        try:
-            uid = event.source.user_id
-            lat = float(event.message.latitude)
-            lon = float(event.message.longitude)
-            last = get_user_location(uid)
-        except Exception:
-            last = None
-        else:
-            if last:
-                try:
-                    d = haversine(lat, lon, float(last[0]), float(last[1]))
-                except Exception:
-                    d = 1e9
-                with _DEDUPE_LOCK:
-                    last_ts = _RECENT_EVENTS.get(f"loc_ts|{uid}", 0.0)
-                    if (now_ts - last_ts) < LOC_DEDUPE_WINDOW and d <= LOC_DEDUPE_DISTANCE_M:
-                        logging.info(f"🔁 skip duplicate loc: uid={uid} d={int(d)}m Δt={round(now_ts-last_ts,2)}s")
-                        return True
-                    _RECENT_EVENTS[f"loc_ts|{uid}"] = now_ts  # 更新最後定位時間
-
-    # 一般路徑：key + window
-    with _DEDUPE_LOCK:
-        last_ts = _RECENT_EVENTS.get(key)
-        if last_ts is not None and (now_ts - last_ts) < window:
-            logging.info(f"🔁 skip duplicate {etype}: key={key}")
-            return True
-        _RECENT_EVENTS[key] = now_ts
-        _purge_expired(now_ts)
-
-    return False
-
 def _too_old_to_reply(event, limit_seconds=None):
     try:
         if limit_seconds is None:
@@ -1555,6 +1572,8 @@ def _too_old_to_reply(event, limit_seconds=None):
 
 def reply_only(event, messages):
     try:
+        uid = getattr(getattr(event, "source", None), "user_id", None)
+        messages = _localize_outgoing_messages(messages, uid=uid)
         line_bot_api.reply_message(event.reply_token, messages)
     except LineBotApiError as e:
         msg_txt = ""
@@ -1657,11 +1676,7 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
 def ensure_consent_or_prompt(user_id: str):
     if has_consented(user_id):
         return None
-    tip = (
-        "🛡️ 使用前請先完成同意：\n"
-        f"{CONSENT_PAGE_URL}\n\n"
-        "若不同意，部分功能將無法提供。"
-    )
+    tip = T("consent_required", uid=user_id, url=CONSENT_PAGE_URL)
     return TextSendMessage(text=tip)
 
 # === 從 Google Sheets 查使用者新增廁所 ===
@@ -4799,71 +4814,31 @@ _DASHBOARD_RANGE_SECONDS = {
     "1y": 365 * 86400,
 }
 
-def _dashboard_range_to_sqlite(range_key: str, anchor_date_str: str | None = None):
+def _dashboard_range_to_sqlite(range_key: str):
     now = datetime.now(TW_TZ)
-    anchor_date = None
-
-    if anchor_date_str and range_key != "1h":
-        try:
-            anchor_date = datetime.strptime(anchor_date_str, "%Y-%m-%d").date()
-        except Exception:
-            anchor_date = None
 
     if range_key == "1h":
         start = now - timedelta(hours=1)
-        end = now
         bucket = "5min"
         labels = [f"{i*5}分" for i in range(12)]
     elif range_key == "1d":
-        if anchor_date is None:
-            anchor_date = now.date()
-        start = datetime.combine(anchor_date, datetime.min.time(), tzinfo=TW_TZ)
-        end = start + timedelta(days=1) - timedelta(microseconds=1)
+        start = now - timedelta(days=1)
         bucket = "hour"
-        labels = [f"{(start + timedelta(hours=i)).strftime('%m/%d %H:00')}" for i in range(24)]
+        labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
     elif range_key == "7d":
-        if anchor_date is None:
-            anchor_date = now.date()
-        end_day = datetime.combine(anchor_date, datetime.max.time(), tzinfo=TW_TZ)
-        start_day = datetime.combine(anchor_date - timedelta(days=6), datetime.min.time(), tzinfo=TW_TZ)
-        start = start_day
-        end = end_day
+        start = now - timedelta(days=7)
         bucket = "day"
-        labels = [f"{(start_day + timedelta(days=i)).strftime('%m/%d')}" for i in range(7)]
+        labels = [f"{i+1}" for i in range(7)]
     elif range_key == "30d":
-        if anchor_date is None:
-            anchor_date = now.date()
-        end_day = datetime.combine(anchor_date, datetime.max.time(), tzinfo=TW_TZ)
-        start_day = datetime.combine(anchor_date - timedelta(days=29), datetime.min.time(), tzinfo=TW_TZ)
-        start = start_day
-        end = end_day
+        start = now - timedelta(days=30)
         bucket = "day"
-        labels = [f"{(start_day + timedelta(days=i)).strftime('%m/%d')}" for i in range(30)]
+        labels = [f"{i+1}" for i in range(30)]
     else:
-        if anchor_date is None:
-            anchor_date = now.date()
-        month_start = datetime(anchor_date.year, anchor_date.month, 1, tzinfo=TW_TZ)
-        start = month_start
-        for _ in range(11):
-            prev_month_end = start - timedelta(days=1)
-            start = datetime(prev_month_end.year, prev_month_end.month, 1, tzinfo=TW_TZ)
-        end = now if (anchor_date.year == now.year and anchor_date.month == now.month) else (
-            datetime(anchor_date.year + (1 if anchor_date.month == 12 else 0),
-                     1 if anchor_date.month == 12 else anchor_date.month + 1,
-                     1,
-                     tzinfo=TW_TZ) - timedelta(microseconds=1)
-        )
+        start = now - timedelta(days=365)
         bucket = "month"
-        labels = []
-        cursor = datetime(start.year, start.month, 1, tzinfo=TW_TZ)
-        while cursor <= end and len(labels) < 12:
-            labels.append(cursor.strftime('%Y/%m'))
-            if cursor.month == 12:
-                cursor = datetime(cursor.year + 1, 1, 1, tzinfo=TW_TZ)
-            else:
-                cursor = datetime(cursor.year, cursor.month + 1, 1, tzinfo=TW_TZ)
+        labels = [f"{i+1}月" for i in range(12)]
 
-    return start, end, bucket, labels
+    return start, now, bucket, labels
 
 def _bucket_label(dt_obj, range_key):
     if dt_obj.tzinfo is None:
@@ -4873,13 +4848,13 @@ def _bucket_label(dt_obj, range_key):
     if range_key == "1h":
         return f"{(dt_obj.minute // 5) * 5}分"
     if range_key == "1d":
-        return dt_obj.strftime("%m/%d %H:00")
+        return f"{dt_obj.hour:02d}:00"
     if range_key in ("7d", "30d"):
-        return dt_obj.strftime("%m/%d")
-    return dt_obj.strftime("%Y/%m")
+        return f"{dt_obj.day}"
+    return f"{dt_obj.month}月"
 
-def _generate_dashboard_data(range_key="1h", anchor_date=None):
-    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key, anchor_date)
+def _generate_dashboard_data(range_key="1h"):
+    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
 
     if POSTGRES_ENABLED:
         conn = _pg_connect()
@@ -4941,9 +4916,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
     response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
-    instant_response_count = len([v for v in response_values if v < 50])
-    response_values_for_avg = [v for v in response_values if v >= 50]
-    avg_response = round(sum(response_values_for_avg) / len(response_values_for_avg)) if response_values_for_avg else (round(sum(response_values) / len(response_values)) if response_values else 0)
+    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
@@ -5051,6 +5024,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     for e in visible_events[:10]:
         event_rows.append({
             "time": e.get("created_at", ""),
+            "user_id": e.get("user_id", "") or "-",
             "event_type": e.get("event_type", ""),
             "result_count": e.get("result_count", 0) or 0,
             "response_time_ms": e.get("response_time_ms", 0) or 0,
@@ -5068,7 +5042,6 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             "activeUsers": active_users,
             "successRate": success_rate,
             "avgResponse": avg_response,
-            "instantResponses": instant_response_count,
             "newUsers": new_users,
             "retentionRate": retention_rate,
             "noResultCount": no_result_count,
@@ -5111,15 +5084,10 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
                 "successRate": success_rate
             },
             "avgResponse": {
-                "min": min(response_values_for_avg) if response_values_for_avg else (min(response_values) if response_values else 0),
+                "min": min(response_values) if response_values else 0,
                 "median": median_value,
                 "p95": p95_value,
                 "max": max(response_values) if response_values else 0
-            },
-            "instantResponses": {
-                "count": instant_response_count,
-                "thresholdMs": 50,
-                "rate": f"{(instant_response_count / total_queries * 100):.1f}" if total_queries else "0.0"
             },
             "newUsers": {
                 "newUsers": new_users,
@@ -5153,10 +5121,9 @@ def dashboard_page():
 @app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     range_key = (request.args.get("range") or "1h").strip()
-    anchor_date = (request.args.get("anchor_date") or "").strip() or None
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-    return jsonify(_generate_dashboard_data(range_key, anchor_date))
+    return jsonify(_generate_dashboard_data(range_key))
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
@@ -5741,12 +5708,12 @@ def handle_postback(event):
 
     if data == "set_lang:en":
         set_user_lang(uid, "en")
-        safe_reply(event, TextSendMessage(text="✅ Language switched to English"))
+        safe_reply(event, TextSendMessage(text=T("lang_switched_en", lang="en")))
         return
 
     if data == "set_lang:zh":
         set_user_lang(uid, "zh")
-        safe_reply(event, TextSendMessage(text="✅ 已切換為中文"))
+        safe_reply(event, TextSendMessage(text=T("lang_switched_zh", lang="zh")))
         return
 
     # =========================
