@@ -1505,17 +1505,75 @@
       };
     }
 
+    function buildFallbackLabels(range, count, anchorDate) {
+      const safeCount = Math.max(0, Number(count) || 0);
+      if (!safeCount) return [];
+
+      if (range === '1h') {
+        return Array.from({ length: safeCount }, (_, i) => `${i * 5}分`);
+      }
+
+      if (range === '1d') {
+        return Array.from({ length: safeCount }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+      }
+
+      if (range === '7d' || range === '30d') {
+        const end = anchorDate ? new Date(`${anchorDate}T00:00:00+08:00`) : new Date();
+        if (Number.isNaN(end.getTime())) {
+          return Array.from({ length: safeCount }, (_, i) => `第${i + 1}天`);
+        }
+        const days = safeCount;
+        const start = new Date(end.getTime());
+        start.setDate(start.getDate() - (days - 1));
+        return Array.from({ length: days }, (_, i) => {
+          const d = new Date(start.getTime());
+          d.setDate(start.getDate() + i);
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${m}/${day}`;
+        });
+      }
+
+      if (range === '1y') {
+        return Array.from({ length: safeCount }, (_, i) => `M${i + 1}`);
+      }
+
+      return Array.from({ length: safeCount }, (_, i) => String(i + 1));
+    }
+
+    function normalizeLabels(rawLabels, count, range, anchorDate) {
+      const labels = Array.isArray(rawLabels) ? rawLabels.map(v => (v ?? '').toString().trim()) : [];
+      const targetCount = Math.max(0, Number(count) || labels.length || 0);
+      const nonEmpty = labels.filter(Boolean);
+      const unique = new Set(nonEmpty);
+      const duplicated = nonEmpty.length > 1 && unique.size <= 1;
+      const wrongLength = targetCount > 0 && labels.length !== targetCount;
+      const missing = labels.length === 0 || nonEmpty.length === 0;
+
+      if (missing || duplicated || wrongLength) {
+        return buildFallbackLabels(range, targetCount || labels.length, anchorDate);
+      }
+
+      return labels;
+    }
+
     function renderTrendChart(trend) {
+      const safeTrend = trend || {};
+      const queryData = Array.isArray(safeTrend.queries) ? safeTrend.queries : [];
+      const userData = Array.isArray(safeTrend.users) ? safeTrend.users : [];
+      const pointCount = Math.max(queryData.length, userData.length, Array.isArray(safeTrend.labels) ? safeTrend.labels.length : 0);
+      const labels = normalizeLabels(safeTrend.labels, pointCount, currentRange, currentAnchorDate);
+
       if (trendChart) trendChart.destroy();
 
       trendChart = new Chart(document.getElementById('trendChart'), {
         type: 'line',
         data: {
-          labels: trend.labels,
+          labels,
           datasets: [
             {
               label: '查詢量',
-              data: trend.queries,
+              data: queryData,
               tension: 0.25,
               pointRadius: 3,
               pointHoverRadius: 5,
@@ -1523,7 +1581,7 @@
             },
             {
               label: '活躍使用者',
-              data: trend.users,
+              data: userData,
               tension: 0.25,
               pointRadius: 3,
               pointHoverRadius: 5,
@@ -1639,6 +1697,10 @@
     }
     
     function renderHourChart(hourly) {
+      const safeHourly = hourly || {};
+      const values = Array.isArray(safeHourly.values) ? safeHourly.values : [];
+      const labels = normalizeLabels(safeHourly.labels, values.length, '1d', currentAnchorDate);
+
       if (hourChart) hourChart.destroy();
 
       const options = createCommonChartOptions();
@@ -1647,10 +1709,10 @@
       hourChart = new Chart(document.getElementById('hourChart'), {
         type: 'bar',
         data: {
-          labels: hourly.labels,
+          labels,
           datasets: [{
             label: '查詢量',
-            data: hourly.values,
+            data: values,
             borderWidth: 0,
             borderRadius: 6
           }]
@@ -1710,10 +1772,10 @@
       tbody.innerHTML = '';
 
       events.forEach(e => {
-        const row = document.createElement('tr');
+        const tr = document.createElement('tr');
         const resultText = isMissingMetric(e.result_count) ? '—' : e.result_count;
         const responseText = isMissingMetric(e.response_time_ms) ? '—' : `${e.response_time_ms} ms`;
-        row.innerHTML = `
+        tr.innerHTML = `
           <td class="mono" title="${e.time}">${e.time}</td>
           <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
           <td class="mono" title="${resultText}">${resultText}</td>
@@ -1724,7 +1786,7 @@
             </span>
           </td>
         `;
-        tbody.appendChild(row);
+        tbody.appendChild(tr);
       });
     }
 
@@ -1733,12 +1795,12 @@
         const data = await getDashboardData(currentRange);
         currentDashboardData = data;
 
-        updateSummary(data.summary);
-        renderTrendChart(data.trend);
-        renderHourChart(data.hourly);
-        renderTypeChart(data.typeData);
-        renderAreaList(data.areas);
-        renderEvents(data.events);
+        updateSummary(data.summary || {});
+        renderTrendChart(data.trend || data.usageTrend || {});
+        renderHourChart(data.hourly || data.hourlyDistribution || {});
+        renderTypeChart(data.typeData || data.queryTypeDistribution || { labels: [], values: [] });
+        renderAreaList(data.areas || data.hotAreas || []);
+        renderEvents(data.events || data.recentEvents || []);
 
         const picked = (currentRange !== '1h' && currentAnchorDate) ? `｜${tr('datePrefix')}：${currentAnchorDate}` : '';
         document.getElementById('dataStatus').textContent = `${tr('statusPrefix')}：${rangeLabel(currentRange)}｜${tr('realDataMode')}${picked}`;
