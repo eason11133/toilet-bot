@@ -4932,11 +4932,13 @@ def _bucket_label(dt_obj, range_key):
 
     if range_key == "1h":
         return f"{(dt_obj.minute // 5) * 5}分"
-    if range_key == "1d":
+    elif range_key == "1d":
         return f"{dt_obj.hour:02d}:00"
-    if range_key in ("7d", "30d"):
+    elif range_key in ("7d", "30d"):
         return dt_obj.strftime("%m/%d")
-    return dt_obj.strftime("%Y-%m")
+    elif range_key == "1y":
+        return dt_obj.strftime("%Y-%m")
+    return None
 
 def _generate_dashboard_data(range_key="1h", anchor_date=None):
     start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key, anchor_date)
@@ -5062,22 +5064,29 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
     for e in events:
         try:
-            dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
+            raw_time = e.get("created_at") or e.get("time")
+            if not raw_time:
+                continue
+
+            dt_obj = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
             if dt_obj.tzinfo is None:
                 dt_obj = dt_obj.replace(tzinfo=TW_TZ)
             else:
                 dt_obj = dt_obj.astimezone(TW_TZ)
 
-            hourly_map[f"{dt_obj.hour:02d}:00"] += 1
+            label = _bucket_label(dt_obj, range_key)
+            if label not in trend_map_queries:
+                continue
+
+            if e.get("event_type") == "location_query" and int(e.get("response_time_ms") or 0) > 0:
+                trend_map_queries[label] += 1
+
+            uid = (e.get("user_id") or "").strip()
+            if uid:
+                trend_map_users[label].add(uid)
+
         except Exception:
             continue
-        label = _bucket_label(dt_obj, range_key)
-        if label not in trend_map_queries:
-            continue
-        if e["event_type"] == "location_query" and int(e.get("response_time_ms") or 0) > 0:
-            trend_map_queries[label] += 1
-        if e.get("user_id"):
-            trend_map_users[label].add(e["user_id"])
 
     trend_queries = [trend_map_queries[label] for label in default_labels]
     trend_users = [len(trend_map_users[label]) for label in default_labels]
@@ -5085,15 +5094,19 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     hourly_map = {f"{i:02d}:00": 0 for i in range(24)}
     for e in events:
         try:
-            dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
+            raw_time = e.get("created_at") or e.get("time")
+            if not raw_time:
+                continue
 
-            # 只有沒有時區才補台灣時間
+            dt_obj = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
             if dt_obj.tzinfo is None:
                 dt_obj = dt_obj.replace(tzinfo=TW_TZ)
+            else:
+                dt_obj = dt_obj.astimezone(TW_TZ)
 
-            hour = dt_obj.hour
-
-            hourly_map[f"{dt_obj.hour:02d}:00"] += 1
+            hourly_key = f"{dt_obj.hour:02d}:00"
+            if hourly_key in hourly_map:
+                hourly_map[hourly_key] += 1
         except Exception:
             continue
 
