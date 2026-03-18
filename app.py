@@ -4871,48 +4871,75 @@ _DASHBOARD_RANGE_SECONDS = {
     "1y": 365 * 86400,
 }
 
-def _dashboard_range_to_sqlite(range_key: str):
+def _dashboard_range_to_sqlite(range_key: str, anchor_date: str = None):
+    if anchor_date:
+        try:
+            base = datetime.strptime(anchor_date, "%Y-%m-%d").replace(tzinfo=TW_TZ)
+        except Exception:
+            base = datetime.now(TW_TZ)
+    else:
+        base = datetime.now(TW_TZ)
+
     now = datetime.now(TW_TZ)
 
     if range_key == "1h":
-        end = now.replace(minute=0, second=0, microsecond=0)
+        # 1h 維持即時最近一小時
+        end = now
         start = end - timedelta(hours=1)
         bucket = "5min"
-        labels = [f"{i*5}分" for i in range(12)]
+        labels = [f"{i * 5}分" for i in range(12)]
+
     elif range_key == "1d":
-        start = now - timedelta(days=1)
+        # 1d = 指定那一天 00:00 ~ 23:59:59
+        start = base.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
         bucket = "hour"
         labels = [f"{str(i).zfill(2)}:00" for i in range(24)]
-    elif range_key == "7d":
-        start = now - timedelta(days=7)
-        bucket = "day"
-        labels = [f"{i+1}" for i in range(7)]
-    elif range_key == "30d":
-        start = now - timedelta(days=30)
-        bucket = "day"
-        labels = [f"{i+1}" for i in range(30)]
-    else:
-        start = now - timedelta(days=365)
-        bucket = "month"
-        labels = [f"{i+1}月" for i in range(12)]
 
-    return start, now, bucket, labels
+    elif range_key == "7d":
+        # 以 anchor_date 為結尾日
+        end = base.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start = end - timedelta(days=7)
+        bucket = "day"
+        labels = [(start + timedelta(days=i)).strftime("%m/%d") for i in range(7)]
+
+    elif range_key == "30d":
+        end = base.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start = end - timedelta(days=30)
+        bucket = "day"
+        labels = [(start + timedelta(days=i)).strftime("%m/%d") for i in range(30)]
+
+    else:  # 1y
+        end = base.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start = end - timedelta(days=365)
+        bucket = "month"
+        labels = []
+        cur = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        while cur < end:
+            labels.append(cur.strftime("%Y-%m"))
+            if cur.month == 12:
+                cur = cur.replace(year=cur.year + 1, month=1)
+            else:
+                cur = cur.replace(month=cur.month + 1)
+
+    return start, end, bucket, labels
 
 def _bucket_label(dt_obj, range_key):
     if dt_obj.tzinfo is None:
         dt_obj = dt_obj.replace(tzinfo=TW_TZ)
-    dt_obj = dt_obj.astimezone(TW_TZ)
+    else:
+        dt_obj = dt_obj.astimezone(TW_TZ)
 
     if range_key == "1h":
         return f"{(dt_obj.minute // 5) * 5}分"
     if range_key == "1d":
         return f"{dt_obj.hour:02d}:00"
     if range_key in ("7d", "30d"):
-        return f"{dt_obj.day}"
-    return f"{dt_obj.month}月"
+        return dt_obj.strftime("%m/%d")
+    return dt_obj.strftime("%Y-%m")
 
-def _generate_dashboard_data(range_key="1h"):
-    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key)
+def _generate_dashboard_data(range_key="1h", anchor_date=None):
+    start, end, bucket, default_labels = _dashboard_range_to_sqlite(range_key, anchor_date)
 
     if POSTGRES_ENABLED:
         conn = _pg_connect()
@@ -5038,6 +5065,10 @@ def _generate_dashboard_data(range_key="1h"):
             dt_obj = datetime.fromisoformat(str(e["created_at"]).replace("Z", "+00:00"))
             if dt_obj.tzinfo is None:
                 dt_obj = dt_obj.replace(tzinfo=TW_TZ)
+            else:
+                dt_obj = dt_obj.astimezone(TW_TZ)
+
+            hourly_map[f"{dt_obj.hour:02d}:00"] += 1
         except Exception:
             continue
         label = _bucket_label(dt_obj, range_key)
@@ -5182,11 +5213,14 @@ def dashboard_page():
 
 
 @app.route("/api/dashboard", methods=["GET"])
+@app.route("/api/dashboard", methods=["GET"])
 def api_dashboard():
     range_key = (request.args.get("range") or "1h").strip()
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
-    return jsonify(_generate_dashboard_data(range_key))
+
+    anchor_date = (request.args.get("anchor_date") or "").strip() or None
+    return jsonify(_generate_dashboard_data(range_key, anchor_date))
 
 # === Webhook ===
 @app.route("/callback", methods=["POST"])
