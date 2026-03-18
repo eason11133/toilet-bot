@@ -1772,10 +1772,10 @@
       tbody.innerHTML = '';
 
       events.forEach(e => {
-        const tr = document.createElement('tr');
+        const row = document.createElement('tr');
         const resultText = isMissingMetric(e.result_count) ? '—' : e.result_count;
         const responseText = isMissingMetric(e.response_time_ms) ? '—' : `${e.response_time_ms} ms`;
-        tr.innerHTML = `
+        row.innerHTML = `
           <td class="mono" title="${e.time}">${e.time}</td>
           <td title="${translateEventType(e.event_type)}">${translateEventType(e.event_type)}</td>
           <td class="mono" title="${resultText}">${resultText}</td>
@@ -1786,7 +1786,7 @@
             </span>
           </td>
         `;
-        tbody.appendChild(tr);
+        tbody.appendChild(row);
       });
     }
 
