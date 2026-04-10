@@ -5002,8 +5002,12 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
     success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
 
-    response_values = [int(e["response_time_ms"]) for e in events if e.get("response_time_ms") is not None]
-    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+    response_values = [int(e["response_time_ms"]) for e in valid_query_events if e.get("response_time_ms") is not None]
+
+    instant_responses = [t for t in response_values if t < 50]
+    valid_responses = [t for t in response_values if t >= 50]
+
+    avg_response = round(sum(valid_responses) / len(valid_responses)) if valid_responses else 0
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
     error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
@@ -5138,7 +5142,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             "success": bool(int(e.get("success") or 0))
         })
 
-    response_sorted = sorted(response_values)
+    response_sorted = sorted(valid_responses)
     median_value = response_sorted[len(response_sorted)//2] if response_sorted else 0
     p95_index = min(len(response_sorted)-1, int(len(response_sorted)*0.95)) if response_sorted else 0
     p95_value = response_sorted[p95_index] if response_sorted else 0
@@ -5152,7 +5156,8 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             "newUsers": new_users,
             "retentionRate": retention_rate,
             "noResultCount": no_result_count,
-            "errorCount": error_count
+            "errorCount": error_count,
+            "instant_responses": len(instant_responses)
         },
         "trend": {
             "labels": default_labels,
