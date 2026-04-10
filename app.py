@@ -5149,14 +5149,13 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
     return {
         "summary": {
-            "totalQueries": total_queries,
-            "activeUsers": active_users,
-            "successRate": success_rate,
-            "avgResponse": avg_response,
-            "newUsers": new_users,
-            "retentionRate": retention_rate,
-            "noResultCount": no_result_count,
-            "errorCount": error_count,
+            "total_queries": total_queries,
+            "active_users": active_users,
+            "success_rate": success_rate,
+            "avg_response": avg_response,
+            "no_result_count": no_result_count,
+            "error_count": error_count,
+            "retention_rate": retention_rate,
             "instant_responses": len(instant_responses)
         },
         "trend": {
