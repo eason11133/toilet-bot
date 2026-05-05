@@ -2187,7 +2187,7 @@ def query_saved_toilets(user_lat, user_lon, radius=500):
             FROM user_toilets
             WHERE lat BETWEEN %s AND %s
               AND lon BETWEEN %s AND %s
-              AND COALESCE(verification_status, 'pending') = 'approved'
+              AND COALESCE(verification_status, 'pending') <> 'rejected'
             ORDER BY created_at DESC
             LIMIT 500
         """, (min_lat, max_lat, min_lon, max_lon))
@@ -6375,8 +6375,8 @@ def submit_toilet():
         conn.close()
         try: _CACHE.clear()
         except Exception: pass
-        logging.info(f"📝 submit_toilet 已寫入 Neon id={new_id} name={name} status=pending")
-        return {"success": True, "message": f"✅ 已收到 {name}，待管理者確認後會顯示在查詢結果中", "id": new_id, "verification_status": "pending"}
+        logging.info(f"📝 submit_toilet 已寫入 Neon id={new_id} name={name} status=pending_visible")
+        return {"success": True, "message": f"✅ 已收到 {name}，已加入查詢資料；若審核後發現錯誤會移除", "id": new_id, "verification_status": "pending"}
 
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
