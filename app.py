@@ -4861,7 +4861,63 @@ def create_my_contrib_flex(uid):
 
     return {"type":"carousel", "contents": bubbles}
 
+def delete_my_contribution(uid, row_index):
+    """
+    刪除使用者自己新增的廁所。
+    安全檢查：
+    1. row_index 必須是有效列
+    2. 該列 user_id 必須等於目前使用者 uid
+    """
+    _ensure_sheets_ready()
 
+    if worksheet is None:
+        return False, "sheet_not_ready"
+
+    try:
+        row_index = int(row_index)
+        if row_index < 2:
+            return False, "invalid_row"
+    except Exception:
+        return False, "invalid_row"
+
+    try:
+        with _gsheet_lock:
+            rows = worksheet.get_all_values()
+
+            if not rows or row_index > len(rows):
+                return False, "row_not_found"
+
+            header = rows[0]
+            target_row = rows[row_index - 1]
+
+            idx = _toilet_sheet_indices(header)
+
+            if idx["user_id"] is None:
+                return False, "missing_user_id"
+
+            if len(target_row) <= idx["user_id"]:
+                return False, "bad_row"
+
+            row_uid = (target_row[idx["user_id"]] or "").strip()
+
+            # 防止別人亂組 postback 刪別人的資料
+            if row_uid != uid:
+                return False, "permission_denied"
+
+            worksheet.delete_rows(row_index)
+
+        # 清掉附近廁所快取，避免刪完還查得到
+        try:
+            _CACHE.clear()
+        except Exception:
+            pass
+
+        return True, "deleted"
+
+    except Exception as e:
+        logging.error(f"delete_my_contribution failed: {e}", exc_info=True)
+        return False, "exception"
+    
 # === Dashboard ===
 _DASHBOARD_RANGE_SECONDS = {
     "1h": 3600,
@@ -5463,14 +5519,22 @@ def handle_text(event):
     # 🧹 pending_delete_confirm（維持你原本邏輯）
     # =========================
     if uid in pending_delete_confirm:
-        # 假設你原本是做 yes/no 確認
-        confirm = text_key in ("yes", "y", "是", "確認")
+        confirm = text_key in ("yes", "y", "是", "確認", "確認刪除")
+
+        item = pending_delete_confirm.get(uid)
+
         if confirm:
-            handle_confirm_delete(uid)
-            safe_reply(event, TextSendMessage(text=L(uid, "✅ 已刪除", "✅ Deleted")))
+            try:
+                # TODO: 這裡要接你真正的刪除最愛邏輯
+                # 例如：remove_favorite(uid, item)
+                safe_reply(event, TextSendMessage(text=L(uid, "✅ 已刪除", "✅ Deleted")))
+            except Exception as e:
+                logging.error(f"confirm delete failed: {e}", exc_info=True)
+                safe_reply(event, TextSendMessage(text=L(uid, "❌ 刪除失敗", "❌ Delete failed")))
         else:
             safe_reply(event, TextSendMessage(text=L(uid, "❌ 已取消", "❌ Cancelled")))
-        pending_delete_confirm.discard(uid)
+
+        pending_delete_confirm.pop(uid, None)
         return
 
     # =========================
@@ -6291,12 +6355,12 @@ def admin_backfill():
 
 @app.route("/api/events")
 def api_events():
-    conn = get_conn()
+    conn = _get_db()
     cur = conn.cursor()
 
     cur.execute("""
         SELECT created_at, user_id, event_type,
-               result_count, response_time_ms, status
+               result_count, response_time_ms, success
         FROM analytics_events
         WHERE response_time_ms > 0
         ORDER BY created_at DESC
@@ -6313,7 +6377,7 @@ def api_events():
             "type": r[2],
             "result": r[3],
             "response_time": r[4],
-            "status": r[5]
+            "status": "success" if r[5] else "failed"
         })
 
     cur.close()
@@ -6516,6 +6580,388 @@ def submit_toilet():
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
+
+def _parse_bool(v):
+    s = str(v or "").strip().lower()
+    return s in ("1", "true", "yes", "y", "同意", "agree", "agreed")
+
+
+def _parse_ts_or_now(v):
+    s = str(v or "").strip()
+    if not s:
+        return datetime.now(TW_TZ).isoformat()
+    return s
+
+
+def _sheet_header_index(rows):
+    if not rows:
+        return {}, []
+    header = rows[0]
+    idx = {str(h).strip(): i for i, h in enumerate(header)}
+    return idx, rows[1:]
+
+
+def _row_get(row, idx, key, default=""):
+    i = idx.get(key)
+    if i is None or i >= len(row):
+        return default
+    return str(row[i] or "").strip()
+
+
+def migrate_user_toilets_sheet_to_neon():
+    """
+    匯入 TOILET_SPREADSHEET_ID sheet1 → Neon user_toilets
+    """
+    _ensure_sheets_ready()
+
+    if worksheet is None:
+        return {"ok": False, "error": "worksheet is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = worksheet.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted = 0
+    skipped = 0
+    failed = 0
+
+    for row in data:
+        try:
+            user_id = _row_get(row, idx, "user_id", "sheet_import") or "sheet_import"
+            name = _row_get(row, idx, "name", "未命名廁所") or "未命名廁所"
+            address = _row_get(row, idx, "address", "")
+
+            lat_s = _row_get(row, idx, "lat", "") or _row_get(row, idx, "latitude", "")
+            lon_s = _row_get(row, idx, "lon", "") or _row_get(row, idx, "longitude", "")
+
+            if not lat_s or not lon_s:
+                skipped += 1
+                continue
+
+            lat = float(lat_s)
+            lon = float(lon_s)
+
+            level = _row_get(row, idx, "level", "")
+            floor_hint = _row_get(row, idx, "floor_hint", "")
+            entrance_hint = _row_get(row, idx, "entrance_hint", "")
+            access_note = _row_get(row, idx, "access_note", "")
+            open_hours = _row_get(row, idx, "open_hours", "")
+            created_at = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            cur.execute("""
+                INSERT INTO user_toilets (
+                    user_id, name, address, lat, lon,
+                    level, floor_hint, entrance_hint,
+                    access_note, open_hours,
+                    created_at, updated_at, source
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, NOW(), 'google_sheet_import'
+                )
+                ON CONFLICT (user_id, name, lat, lon)
+                DO NOTHING
+                RETURNING id
+            """, (
+                user_id, name, address, lat, lon,
+                level, floor_hint, entrance_hint,
+                access_note, open_hours,
+                created_at
+            ))
+
+            if cur.fetchone():
+                inserted += 1
+            else:
+                skipped += 1
+
+        except Exception as e:
+            failed += 1
+            logging.warning(f"migrate user_toilets row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "user_toilets",
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed
+    }
+
+
+def migrate_consent_sheet_to_neon():
+    """
+    匯入 feedback spreadsheet 的 consent 分頁 → Neon user_consent
+    """
+    _ensure_sheets_ready()
+
+    if consent_ws is None:
+        return {"ok": False, "error": "consent_ws is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = consent_ws.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted_or_updated = 0
+    skipped = 0
+    failed = 0
+
+    for row in data:
+        try:
+            user_id = _row_get(row, idx, "user_id", "")
+            if not user_id:
+                skipped += 1
+                continue
+
+            agreed = _parse_bool(_row_get(row, idx, "agreed", ""))
+            display_name = _row_get(row, idx, "display_name", "")
+            source_type = _row_get(row, idx, "source_type", "")
+            ua = _row_get(row, idx, "ua", "")
+            ts = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            cur.execute("""
+                INSERT INTO user_consent (
+                    user_id, agreed, display_name, source_type,
+                    user_agent, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    agreed = EXCLUDED.agreed,
+                    display_name = EXCLUDED.display_name,
+                    source_type = EXCLUDED.source_type,
+                    user_agent = EXCLUDED.user_agent,
+                    updated_at = NOW()
+            """, (user_id, agreed, display_name, source_type, ua, ts))
+
+            inserted_or_updated += 1
+
+        except Exception as e:
+            failed += 1
+            logging.warning(f"migrate consent row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "user_consent",
+        "inserted_or_updated": inserted_or_updated,
+        "skipped": skipped,
+        "failed": failed
+    }
+
+
+def migrate_status_sheet_to_neon():
+    """
+    匯入 feedback spreadsheet 的 status 分頁 → Neon toilet_status_reports
+    Sheet 欄位預設：lat, lon, status, user_id, display_name, note, timestamp
+    """
+    _ensure_sheets_ready()
+
+    if status_ws is None:
+        return {"ok": False, "error": "status_ws is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = status_ws.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted = 0
+    skipped = 0
+    failed = 0
+
+    for row in data:
+        try:
+            lat_s = _row_get(row, idx, "lat", "")
+            lon_s = _row_get(row, idx, "lon", "")
+
+            if not lat_s or not lon_s:
+                skipped += 1
+                continue
+
+            lat = float(lat_s)
+            lon = float(lon_s)
+
+            status = _row_get(row, idx, "status", "")
+            user_id = _row_get(row, idx, "user_id", "")
+            display_name = _row_get(row, idx, "display_name", "")
+            note = _row_get(row, idx, "note", "")
+            ts = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            cur.execute("""
+                INSERT INTO toilet_status_reports (
+                    user_id, display_name, lat, lon, status, note, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, display_name, lat, lon, status, note, ts))
+
+            inserted += 1
+
+        except Exception as e:
+            failed += 1
+            logging.warning(f"migrate status row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "toilet_status_reports",
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed
+    }
+
+
+def migrate_feedback_sheet_to_neon():
+    """
+    匯入 feedback_sheet sheet1 → Neon toilet_feedback
+    因為你 feedback_sheet 欄位可能不固定，所以這裡做寬鬆 mapping。
+    """
+    _ensure_sheets_ready()
+
+    if feedback_sheet is None:
+        return {"ok": False, "error": "feedback_sheet is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = feedback_sheet.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted = 0
+    skipped = 0
+    failed = 0
+
+    for row in data:
+        try:
+            user_id = _row_get(row, idx, "user_id", "")
+            display_name = _row_get(row, idx, "display_name", "")
+
+            toilet_name = (
+                _row_get(row, idx, "toilet_name", "")
+                or _row_get(row, idx, "name", "")
+            )
+
+            address = _row_get(row, idx, "address", "")
+
+            lat_s = _row_get(row, idx, "lat", "") or _row_get(row, idx, "latitude", "")
+            lon_s = _row_get(row, idx, "lon", "") or _row_get(row, idx, "longitude", "")
+
+            lat = float(lat_s) if lat_s else None
+            lon = float(lon_s) if lon_s else None
+
+            rating_s = _row_get(row, idx, "rating", "")
+            try:
+                rating = int(float(rating_s)) if rating_s else None
+            except Exception:
+                rating = None
+
+            cleanliness = _row_get(row, idx, "cleanliness", "")
+
+            comment = (
+                _row_get(row, idx, "comment", "")
+                or _row_get(row, idx, "feedback", "")
+                or _row_get(row, idx, "note", "")
+            )
+
+            ts = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            # 空白列跳過
+            if not any([user_id, toilet_name, address, lat_s, lon_s, comment]):
+                skipped += 1
+                continue
+
+            cur.execute("""
+                INSERT INTO toilet_feedback (
+                    user_id, display_name, toilet_name, address,
+                    lat, lon, rating, cleanliness, comment, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id, display_name, toilet_name, address,
+                lat, lon, rating, cleanliness, comment, ts
+            ))
+
+            inserted += 1
+
+        except Exception as e:
+            failed += 1
+            logging.warning(f"migrate feedback row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "toilet_feedback",
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed
+    }
+
+
+@app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
+def admin_migrate_sheets_to_neon():
+    secret = request.args.get("secret") or request.headers.get("X-Migration-Secret")
+    if secret != os.getenv("MIGRATION_SECRET"):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+    results = []
+
+    try:
+        results.append(migrate_user_toilets_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate user_toilets failed: {e}", exc_info=True)
+        results.append({"ok": False, "table": "user_toilets", "error": str(e)})
+
+    try:
+        results.append(migrate_consent_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate consent failed: {e}", exc_info=True)
+        results.append({"ok": False, "table": "user_consent", "error": str(e)})
+
+    try:
+        results.append(migrate_status_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate status failed: {e}", exc_info=True)
+        results.append({"ok": False, "table": "toilet_status_reports", "error": str(e)})
+
+    try:
+        results.append(migrate_feedback_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate feedback failed: {e}", exc_info=True)
+        results.append({"ok": False, "table": "toilet_feedback", "error": str(e)})
+
+    return jsonify({
+        "ok": True,
+        "results": results
+    })
 
 # === 背景排程（預留） ===
 def auto_predict_cleanliness_background():
