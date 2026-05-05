@@ -828,11 +828,15 @@ def add_security_headers(resp):
 # === 就緒檢查端點（新增） ===
 @app.route("/readyz", methods=["GET", "HEAD"])
 def readyz():
-    """Readiness check: Neon/Postgres is the primary store now."""
-    ok = POSTGRES_ENABLED
+    _ensure_sheets_ready()
+    ok = (worksheet is not None) and (feedback_sheet is not None) and (consent_ws is not None)
     status = 200 if ok else 503
-    msg = "ready" if ok else "not-ready: postgres disabled"
-    headers = {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+    msg = "ready" if ok else "not-ready"
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+    }
     if request.method == "HEAD":
         return Response(status=204 if ok else 503, headers=headers)
     return Response(msg, status=status, headers=headers)
@@ -994,42 +998,8 @@ def init_persistent_store():
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
         """)
-        # 補齊已存在資料表的欄位（Neon 主儲存）
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'neon'")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'pending'")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verification_score INTEGER DEFAULT 0")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verification_reason TEXT")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verified_by TEXT")
-        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS reject_reason TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_lat_lon ON user_toilets(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_created_at ON user_toilets(created_at)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_verification ON user_toilets(verification_status)")
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_consent (
-            user_id TEXT PRIMARY KEY,
-            agreed BOOLEAN NOT NULL DEFAULT FALSE,
-            display_name TEXT,
-            source_type TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS toilet_status_reports (
-            id BIGSERIAL PRIMARY KEY,
-            user_id TEXT,
-            display_name TEXT,
-            lat DOUBLE PRECISION,
-            lon DOUBLE PRECISION,
-            status TEXT,
-            note TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_lat_lon ON toilet_status_reports(lat, lon)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_created_at ON toilet_status_reports(created_at)")
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS favorites (
@@ -1062,7 +1032,6 @@ if not os.path.exists(TOILETS_FILE_PATH):
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-USE_GOOGLE_SHEETS = os.getenv("USE_GOOGLE_SHEETS", "0") == "1"  # 主流程已搬到 Neon；預設停用 Google Sheets
 TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
 FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"
 
@@ -1404,9 +1373,6 @@ def sort_toilets(toilets):
 # === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
     global gc, worksheet, feedback_sheet, consent_ws, status_ws
-    if not USE_GOOGLE_SHEETS:
-        logging.info("⏭️ Google Sheets disabled; using Neon as primary store.")
-        return
     try:
         if not GSHEET_CREDENTIALS_JSON:
             logging.critical("❌ 缺少 GSHEET_CREDENTIALS_JSON")
@@ -1443,8 +1409,6 @@ def init_gsheet():
         return
 
 def _ensure_sheets_ready():
-    if not USE_GOOGLE_SHEETS:
-        return
     if any(x is None for x in (worksheet, feedback_sheet, consent_ws)):
         try:
             init_gsheet()
@@ -1688,59 +1652,82 @@ _consent_cache = {}   # user_id -> (ts, bool)
 _CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
 
 def has_consented(user_id: str) -> bool:
-    """Read consent from Neon user_consent. Google Sheets is no longer in the main path."""
-    if not user_id:
-        return False
-    if not POSTGRES_ENABLED:
-        logging.warning("Postgres not enabled for consent")
+    _ensure_sheets_ready()
+    if not user_id or consent_ws is None:
         return False
     try:
+        if not user_id or consent_ws is None:
+            return False
         now = time.time()
         hit = _consent_cache.get(user_id)
         if hit and (now - hit[0] < _CONSENT_TTL):
-            return bool(hit[1])
+            return hit[1]
 
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("SELECT agreed FROM user_consent WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        conn.close()
-
-        ok = bool(row and row[0])
+        rows = consent_ws.get_all_values()
+        if not rows or len(rows) < 2:
+            _consent_cache[user_id] = (now, False)
+            return False
+        header = rows[0]; data = rows[1:]
+        try:
+            i_uid = header.index("user_id")
+            i_ag  = header.index("agreed")
+        except ValueError:
+            _consent_cache[user_id] = (now, False)
+            return False
+        ok = False
+        for r in data:
+            if len(r) <= max(i_uid, i_ag):
+                continue
+            if (r[i_uid] or "").strip() == user_id and _booly(r[i_ag]):
+                ok = True
+                break
         _consent_cache[user_id] = (now, ok)
         return ok
     except Exception as e:
-        logging.warning(f"查詢 Neon 同意資料失敗: {e}")
+        logging.warning(f"查詢同意失敗: {e}")
         return False
-
 
 def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: str, ua: str, ts_iso: str):
-    """Write consent to Neon user_consent. Google Sheets is no longer in the main path."""
-    if not user_id:
-        return False
-    if not POSTGRES_ENABLED:
-        logging.warning("Postgres not enabled for consent")
+    _ensure_sheets_ready()
+    if consent_ws is None:
         return False
     try:
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO user_consent (user_id, agreed, display_name, source_type, user_agent, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-            ON CONFLICT (user_id)
-            DO UPDATE SET
-                agreed = EXCLUDED.agreed,
-                display_name = EXCLUDED.display_name,
-                source_type = EXCLUDED.source_type,
-                user_agent = EXCLUDED.user_agent,
-                updated_at = NOW()
-        """, (user_id, bool(agreed), display_name or "", source_type or "", ua or ""))
-        conn.commit()
-        conn.close()
+        rows = consent_ws.get_all_values()
+        if not rows:
+            consent_ws.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
+            rows = [["user_id","agreed","display_name","source_type","ua","timestamp"]]
+        header = rows[0]; data = rows[1:]
+
+        idx = {h:i for i,h in enumerate(header)}
+        for k in ["user_id","agreed","display_name","source_type","ua","timestamp"]:
+            if k not in idx:
+                header.append(k); idx[k] = len(header)-1
+        if len(header) != len(rows[0]):
+            consent_ws.update("A1", [header])
+
+        row_to_update = None
+        for i, r in enumerate(data, start=2):
+            if len(r) > idx["user_id"] and (r[idx["user_id"]] or "").strip() == user_id:
+                row_to_update = i
+                break
+
+        row_values = [""] * len(header)
+        row_values[idx["user_id"]] = user_id or ""
+        row_values[idx["agreed"]] = "true" if agreed else "false"
+        row_values[idx["display_name"]] = display_name or ""
+        row_values[idx["source_type"]] = source_type or ""
+        row_values[idx["ua"]] = ua or ""
+        row_values[idx["timestamp"]] = ts_iso or datetime.now(TW_TZ).isoformat()
+
+        if row_to_update:
+            consent_ws.update(f"A{row_to_update}", [row_values])
+        else:
+            consent_ws.append_row(row_values, value_input_option="USER_ENTERED")
+        # 更新本機快取
         _consent_cache[user_id] = (time.time(), bool(agreed))
         return True
     except Exception as e:
-        logging.error(f"寫入/更新 Neon 同意資料失敗: {e}", exc_info=True)
+        logging.error(f"寫入/更新同意失敗: {e}")
         return False
 
 def ensure_consent_or_prompt(user_id: str):
@@ -2185,9 +2172,7 @@ def query_saved_toilets(user_lat, user_lon, radius=500):
         cur.execute("""
             SELECT user_id, name, address, lat, lon, level, floor_hint, entrance_hint, access_note, open_hours, created_at
             FROM user_toilets
-            WHERE lat BETWEEN %s AND %s
-              AND lon BETWEEN %s AND %s
-              AND COALESCE(verification_status, 'pending') <> 'rejected'
+            WHERE lat BETWEEN %s AND %s AND lon BETWEEN %s AND %s
             ORDER BY created_at DESC
             LIMIT 500
         """, (min_lat, max_lat, min_lon, max_lon))
@@ -2445,9 +2430,10 @@ def nearby_toilets():
 
     public_csv_toilets = query_public_csv_toilets(user_lat, user_lon, radius=500) or []
     saved_toilets = query_saved_toilets(user_lat, user_lon, radius=500) or []
+    sheet_toilets = query_sheet_toilets(user_lat, user_lon, radius=500) or []
     osm_toilets = query_overpass_toilets(user_lat, user_lon, radius=500) or []
 
-    all_toilets = _merge_and_dedupe_lists(public_csv_toilets, saved_toilets, osm_toilets)
+    all_toilets = _merge_and_dedupe_lists(public_csv_toilets, saved_toilets, sheet_toilets, osm_toilets)
     sort_toilets(all_toilets)
 
     if not all_toilets:
@@ -3001,26 +2987,115 @@ def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
 _feedback_index_cache = {"ts": 0, "data": {}}
 # _FEEDBACK_INDEX_TTL is defined in global config section (see above)
 def build_feedback_index():
-    """Feedback feature is disabled; keep interface returning empty indicators."""
-    return {}
+    _ensure_sheets_ready()
+    if feedback_sheet is None:
+        return {}
+
+    global _feedback_index_cache
+
+    now = time.time()
+    # ⚠️ 注意這裡用的是「有底線」的 TTL 變數
+    if (now - _feedback_index_cache["ts"] < _FEEDBACK_INDEX_TTL) and _feedback_index_cache["data"]:
+        return _feedback_index_cache["data"]
+
+    # 可調：最多聚合多少個座標點，避免 bucket 爆掉
+    try:
+        FEEDBACK_INDEX_MAX_KEYS = int(os.getenv("FEEDBACK_INDEX_MAX_KEYS", "800"))
+    except Exception:
+        FEEDBACK_INDEX_MAX_KEYS = 800
+
+    try:
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
+            _feedback_index_cache = {"ts": now, "data": {}}
+            return {}
+
+        idx = _feedback_indices(header)
+        i_lat = idx.get("lat"); i_lon = idx.get("lon")
+        if i_lat is None or i_lon is None:
+            _feedback_index_cache = {"ts": now, "data": {}}
+            return {}
+        
+        bucket = {}
+        for r in data:
+            # 基本長度檢查
+            if max(i_lat, i_lon) >= len(r):
+                continue
+            try:
+                lat_s = norm_coord(r[i_lat])
+                lon_s = norm_coord(r[i_lon])
+            except Exception:
+                continue
+            if not lat_s or not lon_s:
+                continue
+
+            key = (lat_s, lon_s)
+
+            # 控制 key 數量上限：已有的可以累加，新 key 超過上限就跳過
+            if key not in bucket and len(bucket) >= FEEDBACK_INDEX_MAX_KEYS:
+                continue
+
+            rec = bucket.setdefault(
+                key,
+                {"paper_has": 0, "paper_no": 0, "acc_has": 0, "acc_no": 0, "sum": 0.0, "n": 0}
+            )
+
+            sc, rr, pp, aa = _pred_from_row(r, idx)
+
+            # 紙巾／無障礙累計
+            if pp == "有":
+                rec["paper_has"] += 1
+            elif pp == "沒有":
+                rec["paper_no"] += 1
+
+            if aa == "有":
+                rec["acc_has"] += 1
+            elif aa == "沒有":
+                rec["acc_no"] += 1
+
+            # 分數累計
+            if isinstance(sc, (int, float)):
+                try:
+                    rec["sum"] += float(sc)
+                    rec["n"] += 1
+                except Exception:
+                    pass
+
+        # 輸出
+        out = {}
+        for key, v in bucket.items():
+            paper_total = v["paper_has"] + v["paper_no"]
+            access_total = v["acc_has"] + v["acc_no"]
+            paper = "有" if (paper_total > 0 and v["paper_has"] >= v["paper_no"]) else ("沒有" if paper_total > 0 else "?")
+            access = "有" if (access_total > 0 and v["acc_has"] >= v["acc_no"]) else ("沒有" if access_total > 0 else "?")
+            avg = round(v["sum"] / v["n"], 2) if v["n"] > 0 else None
+            out[key] = {"paper": paper, "access": access, "avg": avg}
+
+        _feedback_index_cache = {"ts": now, "data": out}
+        return out
+
+    except Exception as e:
+        logging.warning(f"建立指示燈索引失敗：{e}")
+        _feedback_index_cache["ts"] = now
+        _feedback_index_cache["data"] = {}
+        return {}
 
 def submit_status_update(lat, lon, status_text, user_id="", display_name="", note=""):
-    """Write toilet status reports to Neon."""
-    if not POSTGRES_ENABLED:
+    _ensure_sheets_ready()
+    if status_ws is None:
         return False
     try:
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO toilet_status_reports (user_id, display_name, lat, lon, status, note, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW())
-        """, (user_id or "", display_name or "", float(lat), float(lon), (status_text or "").strip(), (note or "").strip()))
-        conn.commit()
-        conn.close()
-        _status_index_cache["ts"] = 0
+        row = [
+            norm_coord(lat), norm_coord(lon),
+            status_text.strip(), user_id or "", display_name or "",
+            (note or "").strip(),
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        status_ws.append_row(row, value_input_option="USER_ENTERED")
+        _status_index_cache["ts"] = 0  # 立刻失效快取
         return True
     except Exception as e:
-        logging.error(f"寫入 Neon 狀態失敗: {e}", exc_info=True)
+        logging.error(f"寫入狀態失敗: {e}")
         return False
 
 def _is_close_m(lat1, lon1, lat2, lon2, th=_STATUS_NEAR_M):
@@ -3030,51 +3105,87 @@ def _is_close_m(lat1, lon1, lat2, lon2, th=_STATUS_NEAR_M):
         return False
 
 def build_status_index():
-    """Build recent status index from Neon toilet_status_reports."""
-    if not POSTGRES_ENABLED:
+    _ensure_sheets_ready()
+    if status_ws is None:
         return {}
+
     now = time.time()
+    # ✅ 修正：使用有底線的 TTL 變數（你前面定義的是 _STATUS_INDEX_TTL）
     if (now - _status_index_cache["ts"] < _STATUS_INDEX_TTL) and _status_index_cache["data"]:
         return _status_index_cache["data"]
+
+    # 上限保護，避免大量新座標把記憶體撐爆（可用環境變數覆寫）
     try:
         STATUS_INDEX_MAX_KEYS = int(os.getenv("STATUS_INDEX_MAX_KEYS", "800"))
     except Exception:
         STATUS_INDEX_MAX_KEYS = 800
+
     out = {}
     try:
-        conn = _pg_connect()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT lat, lon, status, created_at
-            FROM toilet_status_reports
-            WHERE created_at >= NOW() - (%s || ' hours')::interval
-            ORDER BY created_at DESC
-            LIMIT 4000
-        """, (str(_STATUS_TTL_HOURS),))
-        rows = cur.fetchall()
-        conn.close()
+        header, data = _get_header_and_tail(status_ws, MAX_SHEET_ROWS)
+        if not header or not data:
+            _status_index_cache.update(ts=now, data={})
+            return {}
+
+        idx = {h: i for i, h in enumerate(header)}
+        i_lat = idx.get("lat"); i_lon = idx.get("lon")
+        i_status = idx.get("status"); i_ts = idx.get("timestamp")
+        if None in (i_lat, i_lon, i_status):
+            _status_index_cache.update(ts=now, data={})
+            return {}
+
+        def fresh(ts_s: str) -> bool:
+            if not ts_s:
+                return False
+            try:
+                dt = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
+                return (datetime.utcnow() - dt).total_seconds() <= _STATUS_TTL_HOURS * 3600
+            except Exception:
+                return False
+
+        # 以「已合併清單」維護代表點；每筆資料只與既有代表點比 35m（_STATUS_NEAR_M）內是否更新
         merged = []
-        for r in rows:
-            lat_s, lon_s = norm_coord(r.get("lat")), norm_coord(r.get("lon"))
-            st = (r.get("status") or "").strip()
-            ts = r.get("created_at")
-            ts_s = ts.isoformat() if hasattr(ts, "isoformat") else str(ts or "")
-            if not st:
+        for r in data:
+            # 邊界保護
+            if max(i_lat, i_lon, i_status) >= len(r):
                 continue
+
+            lat_s, lon_s = norm_coord(r[i_lat]), norm_coord(r[i_lon])
+            st = (r[i_status] or "").strip()
+            ts = (r[i_ts] if i_ts is not None and i_ts < len(r) else "")
+
+            if not fresh(ts):
+                continue
+
             placed = False
+            # 嘗試合併到既有代表點（距離 <= _STATUS_NEAR_M）
             for m in merged:
                 if _is_close_m(lat_s, lon_s, m["lat"], m["lon"]):
+                    # 取較新的那筆
+                    if ts > m["ts"]:
+                        m.update(lat=lat_s, lon=lon_s, status=st, ts=ts)
                     placed = True
                     break
-            if not placed and len(merged) < STATUS_INDEX_MAX_KEYS:
-                merged.append({"lat": lat_s, "lon": lon_s, "status": st, "ts": ts_s})
+
+            if not placed:
+                # 上限保護：超過上限不再加入新群組，但仍允許更新既有群組（見上面）
+                if len(merged) < STATUS_INDEX_MAX_KEYS:
+                    merged.append({"lat": lat_s, "lon": lon_s, "status": st, "ts": ts})
+                else:
+                    # 已滿就略過新位置，避免無上限成長
+                    continue
+
+        # 轉成輸出格式
         for m in merged:
             out[(m["lat"], m["lon"])] = {"status": m["status"], "ts": m["ts"]}
+
         _status_index_cache.update(ts=now, data=out)
         return out
+
     except Exception as e:
-        logging.warning(f"建立 Neon 狀態索引失敗：{e}")
-        _status_index_cache.update(ts=now, data={})
+        logging.warning(f"建立狀態索引失敗：{e}")
+        _status_index_cache["ts"] = now
+        _status_index_cache["data"] = {}
         return {}
 
 # ==== 環境變數（統一 LIFF 讀取）====
@@ -3134,36 +3245,35 @@ def badges_liff_page():
 
 # ==== 小工具：讀取狀態表並彙總 ====
 def _read_status_rows():
-    """Read status rows from Neon for achievements/badges pages."""
-    if not POSTGRES_ENABLED:
-        return []
     try:
-        conn = _pg_connect()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT lat, lon, status, user_id, display_name, created_at
-            FROM toilet_status_reports
-            ORDER BY created_at DESC
-            LIMIT 4000
-        """)
-        rows = cur.fetchall()
-        conn.close()
+        _ensure_sheets_ready()
+        ws = status_ws
+        if not ws:
+            return []
+        try:
+            header, data = _get_header_and_tail(ws)
+        except Exception:
+            header, data = _get_header_and_tail(ws, MAX_SHEET_ROWS)
+            if not header:
+                return []
+
+        ix = {h: i for i, h in enumerate(header)}
         out = []
-        for r in rows:
-            ts = r.get("created_at")
+        for r in data:
+            def g(k):
+                i = ix.get(k); 
+                return (r[i].strip() if (i is not None and i < len(r)) else "")
             out.append({
-                "lat": norm_coord(r.get("lat")),
-                "lon": norm_coord(r.get("lon")),
-                "status": r.get("status") or "",
-                "user_id": r.get("user_id") or "",
-                "display_name": r.get("display_name") or "",
-                "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts or ""),
+                "lat": g("lat"), "lon": g("lon"),
+                "status": g("status"),
+                "user_id": g("user_id"),
+                "display_name": g("display_name"),
+                "timestamp": g("timestamp"),
             })
         return out
     except Exception as e:
-        logging.error(f"_read_status_rows Neon error: {e}")
+        logging.error(f"_read_status_rows error: {e}")
         return []
-
 def _parse_ts(ts: str):
     try:
         s = (ts or "").strip()
@@ -4570,7 +4680,30 @@ def create_toilet_flex_messages(toilets, uid=None):
             "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
         })
 
-        # Feedback/AI feedback summary buttons removed: feedback feature is disabled.
+        actions.append({
+            "type": "uri",
+            "label": L(uid, "查詢回饋", "View feedback"),
+            "uri": _append_uid_lang(f"{base}/toilet_feedback_by_coord/{lat_s}/{lon_s}", uid, _user_lang_q(uid))
+        })
+
+        addr_raw = toilet.get('address') or ""
+        addr_param = quote(addr_raw or "-")
+        actions.append({
+            "type": "uri",
+            "label": L(uid, "廁所回饋", "Leave feedback"),
+            "uri": (
+                f"{base}/feedback_form/"
+                f"{quote(title)}/{addr_param}"
+                f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
+            )
+        })
+
+        ai_uri = f"{base}/ai_feedback_summary_page/{lat_s}/{lon_s}" + (f"?uid={quote(uid)}" if uid else "")
+        actions.append({
+            "type": "uri",
+            "label": L(uid, "AI 回饋摘要", "AI summary"),
+            "uri": ai_uri
+        })
 
         if toilet.get("type") == "favorite" and uid:
             actions.append({
@@ -4630,104 +4763,161 @@ def create_toilet_flex_messages(toilets, uid=None):
 
 # === 列出 我的貢獻 & 刪除 ===
 def get_user_contributions(uid):
-    """List current user's submitted toilets from Neon."""
+    _ensure_sheets_ready()
+    if worksheet is None:
+        return []
     items = []
-    if not uid or not POSTGRES_ENABLED:
-        return items
     try:
-        conn = _pg_connect()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT id, name, address, lat, lon, created_at, verification_status
-            FROM user_toilets
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-            LIMIT 20
-        """, (uid,))
-        rows = cur.fetchall()
-        conn.close()
-        for r in rows:
-            ts = r.get("created_at")
-            status = r.get("verification_status") or "pending"
+        rows = worksheet.get_all_values()
+        if not rows or len(rows) < 2:
+            return items
+        header = rows[0]; data = rows[1:]
+        idx = _toilet_sheet_indices(header)
+        for i, r in enumerate(data, start=2):
+            if idx["user_id"] is None: break
+            if len(r) <= idx["user_id"]: continue
+            if r[idx["user_id"]] != uid: continue
+            try:
+                lat = float(r[idx["lat"]]); lon = float(r[idx["lon"]])
+            except:
+                continue
             items.append({
-                "id": r.get("id"),
-                "name": r.get("name") or "無名稱",
-                "address": r.get("address") or "",
-                "lat": float(norm_coord(r.get("lat"))),
-                "lon": float(norm_coord(r.get("lon"))),
-                "created": ts.isoformat() if hasattr(ts, "isoformat") else str(ts or ""),
-                "verification_status": status,
+                "row_index": i,
+                "name": (r[idx["name"]] if idx["name"] is not None and len(r)>idx["name"] else "無名稱"),
+                "address": (r[idx["address"]] if idx["address"] is not None and len(r)>idx["address"] else ""),
+                "lat": float(norm_coord(lat)),
+                "lon": float(norm_coord(lon)),
+                "created": (r[idx["created"]] if idx["created"] is not None and len(r)>idx["created"] else ""),
             })
         return items
     except Exception as e:
-        logging.error(f"讀取 Neon 我的貢獻失敗：{e}", exc_info=True)
+        logging.error(f"讀取我的貢獻失敗：{e}")
         return items
-
 
 def create_my_contrib_flex(uid):
     contribs = get_user_contributions(uid)
     if not contribs:
         return None
-    status_label = {
-        "pending": L(uid, "待審核", "Pending"),
-        "approved": L(uid, "已通過", "Approved"),
-        "rejected": L(uid, "未通過", "Rejected"),
-        "likely": L(uid, "待確認", "Likely"),
-    }
+
     bubbles = []
     for it in contribs[:10]:
         lat_s = norm_coord(it["lat"])
         lon_s = norm_coord(it["lon"])
-        st = it.get("verification_status") or "pending"
+        addr_raw = it.get('address','') or ""
+        addr_param = quote(addr_raw or "-")
+
         actions = [
-            {"type": "uri", "label": L(uid, "導航", "Navigate"), "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"},
-            {"type": "postback", "label": L(uid, "刪除此貢獻", "Delete this contribution"), "data": f"confirm_delete_my_toilet:{it['id']}"}
+            {
+                "type": "uri",
+                "label": L(uid, "導航", "Navigate"),
+                "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
+            },
+            {
+                "type": "uri",
+                "label": L(uid, "查詢回饋（座標）", "View feedback (coord)"),
+                "uri": _append_uid_lang(f"https://school-i9co.onrender.com/toilet_feedback_by_coord/{lat_s}/{lon_s}", uid, _user_lang_q(uid))
+            },
+            {
+                "type": "uri",
+                "label": L(uid, "廁所回饋", "Leave feedback"),
+                "uri": (
+                    f"https://school-i9co.onrender.com/feedback_form/{quote(it['name'])}/{addr_param}"
+                    f"?lat={lat_s}&lon={lon_s}&address={quote(addr_raw)}"
+                )
+            },
+            {
+                "type": "postback",
+                "label": L(uid, "刪除此貢獻", "Delete this contribution"),
+                "data": f"confirm_delete_my_toilet:{it['row_index']}"
+            }
         ]
+
         bubble = {
             "type": "bubble",
-            "body": {"type": "box", "layout": "vertical", "contents": [
-                {"type": "text", "text": it["name"], "size": "lg", "weight": "bold", "wrap": True},
-                {"type": "text", "text": it.get("address") or L(uid, "（無地址）", "(No address)"), "size": "sm", "color": "#666666", "wrap": True},
-                {"type": "text", "text": L(uid, f"狀態：{status_label.get(st, st)}", f"Status: {status_label.get(st, st)}"), "size": "xs", "color": "#999999", "wrap": True},
-                {"type": "text", "text": it.get("created", ""), "size": "xs", "color": "#999999", "wrap": True}
-            ]},
-            "footer": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-                {"type": "button", "style": "primary", "height": "sm", "action": actions[0]},
-                {"type": "button", "style": "secondary", "height": "sm", "action": actions[1]},
-            ]}
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": it["name"], "size": "lg", "weight": "bold", "wrap": True},
+                    {"type": "text", "text": it.get("address") or L(uid, "（無地址）", "(No address)"),
+                     "size": "sm", "color": "#666666", "wrap": True},
+                    {"type": "text", "text": it.get("created",""), "size": "xs", "color": "#999999"}
+                ]
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "contents": [
+                    {"type": "button", "style": "primary", "height": "sm", "action": actions[0]}
+                ] + [
+                    {"type": "button", "style": "secondary", "height": "sm", "action": a}
+                    for a in actions[1:]
+                ]
+            }
         }
+
         bubbles.append(bubble)
-    return {"type": "carousel", "contents": bubbles}
 
+    return {"type":"carousel", "contents": bubbles}
 
-def delete_my_contribution(uid, toilet_id):
-    """Delete current user's submitted toilet from Neon."""
-    if not uid or not toilet_id or not POSTGRES_ENABLED:
-        return False, "missing_or_postgres_disabled"
+def delete_my_contribution(uid, row_index):
+    """
+    刪除使用者自己新增的廁所。
+    安全檢查：
+    1. row_index 必須是有效列
+    2. 該列 user_id 必須等於目前使用者 uid
+    """
+    _ensure_sheets_ready()
+
+    if worksheet is None:
+        return False, "sheet_not_ready"
+
     try:
-        toilet_id = int(toilet_id)
+        row_index = int(row_index)
+        if row_index < 2:
+            return False, "invalid_row"
     except Exception:
-        return False, "invalid_id"
+        return False, "invalid_row"
+
     try:
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            DELETE FROM user_toilets
-            WHERE id = %s AND user_id = %s
-            RETURNING id
-        """, (toilet_id, uid))
-        row = cur.fetchone()
-        conn.commit()
-        conn.close()
-        try: _CACHE.clear()
-        except Exception: pass
-        if row:
-            return True, "deleted"
-        return False, "not_found_or_permission_denied"
+        with _gsheet_lock:
+            rows = worksheet.get_all_values()
+
+            if not rows or row_index > len(rows):
+                return False, "row_not_found"
+
+            header = rows[0]
+            target_row = rows[row_index - 1]
+
+            idx = _toilet_sheet_indices(header)
+
+            if idx["user_id"] is None:
+                return False, "missing_user_id"
+
+            if len(target_row) <= idx["user_id"]:
+                return False, "bad_row"
+
+            row_uid = (target_row[idx["user_id"]] or "").strip()
+
+            # 防止別人亂組 postback 刪別人的資料
+            if row_uid != uid:
+                return False, "permission_denied"
+
+            worksheet.delete_rows(row_index)
+
+        # 清掉附近廁所快取，避免刪完還查得到
+        try:
+            _CACHE.clear()
+        except Exception:
+            pass
+
+        return True, "deleted"
+
     except Exception as e:
         logging.error(f"delete_my_contribution failed: {e}", exc_info=True)
         return False, "exception"
-
+    
 # === Dashboard ===
 _DASHBOARD_RANGE_SECONDS = {
     "1h": 3600,
@@ -5164,6 +5354,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
     try:
         futures.append(("csv",   _pool.submit(query_public_csv_toilets, lat, lon, radius)))
         futures.append(("saved", _pool.submit(query_saved_toilets,      lat, lon, radius)))
+        futures.append(("sheet", _pool.submit(query_sheet_toilets,      lat, lon, radius)))
         futures.append(("osm",   _pool.submit(query_overpass_toilets,   lat, lon, radius)))
 
         for name, fut in futures:
@@ -5171,6 +5362,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
                 res = fut.result(timeout=LOC_QUERY_TIMEOUT_SEC)
                 if   name == "csv":   csv_res   = res or []
                 elif name == "saved": saved_res = res or []
+                elif name == "sheet": sheet_res = res or []
                 else:                  osm_res   = res or []
             except FuturesTimeoutError:
                 logging.warning(f"{name} 查詢逾時")
@@ -5182,7 +5374,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
             if not fut.done():
                 fut.cancel()
 
-    quick = _merge_and_dedupe_lists(csv_res, saved_res, osm_res)
+    quick = _merge_and_dedupe_lists(csv_res, saved_res, sheet_res, osm_res)
     sort_toilets(quick)
     result = quick[:LOC_MAX_RESULTS]
 
@@ -5324,7 +5516,28 @@ def handle_text(event):
         cmd = TEXT_TO_CMD.get(text_key)
 
     # =========================
-    # ✅ cmd 分派（原本邏輯全部保留）    # =========================
+    # 🧹 pending_delete_confirm（維持你原本邏輯）
+    # =========================
+    if uid in pending_delete_confirm:
+        confirm = text_key in ("yes", "y", "是", "確認", "確認刪除")
+
+        item = pending_delete_confirm.get(uid)
+
+        if confirm:
+            try:
+                # TODO: 這裡要接你真正的刪除最愛邏輯
+                # 例如：remove_favorite(uid, item)
+                safe_reply(event, TextSendMessage(text=L(uid, "✅ 已刪除", "✅ Deleted")))
+            except Exception as e:
+                logging.error(f"confirm delete failed: {e}", exc_info=True)
+                safe_reply(event, TextSendMessage(text=L(uid, "❌ 刪除失敗", "❌ Delete failed")))
+        else:
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 已取消", "❌ Cancelled")))
+
+        pending_delete_confirm.pop(uid, None)
+        return
+
+    # =========================
     # ✅ cmd 分派（原本邏輯全部保留）
     # =========================
     if cmd == "nearby":
@@ -5693,34 +5906,6 @@ def handle_postback(event):
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
-        return
-
-    # =========================
-    # 🗑️ 我的貢獻：確認 / 刪除 / 取消
-    # =========================
-    if data.startswith("confirm_delete_my_toilet:"):
-        toilet_id = data.split(":", 1)[1].strip()
-        safe_reply(event, TextSendMessage(
-            text=L(uid, "⚠️ 確定要刪除這筆你新增的廁所嗎？", "⚠️ Delete this submitted toilet?"),
-            quick_reply=QuickReply(items=[
-                QuickReplyButton(action=PostbackAction(label=L(uid, "確認刪除", "Confirm delete"), data=f"delete_my_toilet:{toilet_id}", display_text=L(uid, "確認刪除", "Confirm delete"))),
-                QuickReplyButton(action=PostbackAction(label=L(uid, "取消", "Cancel"), data="cancel_delete_my_toilet", display_text=L(uid, "取消", "Cancel"))),
-            ])
-        ))
-        return
-
-    if data.startswith("delete_my_toilet:"):
-        toilet_id = data.split(":", 1)[1].strip()
-        ok, reason = delete_my_contribution(uid, toilet_id)
-        if ok:
-            safe_reply(event, TextSendMessage(text=L(uid, "✅ 已刪除你新增的廁所", "✅ Deleted.")))
-        else:
-            logging.warning(f"delete_my_toilet failed: uid={uid} id={toilet_id} reason={reason}")
-            safe_reply(event, TextSendMessage(text=L(uid, "❌ 刪除失敗，資料可能不存在或不是你新增的", "❌ Delete failed.")))
-        return
-
-    if data == "cancel_delete_my_toilet":
-        safe_reply(event, TextSendMessage(text=L(uid, "已取消刪除", "Delete cancelled.")))
         return
     
     try:
@@ -6295,7 +6480,9 @@ def api_line_insights():
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
     if not POSTGRES_ENABLED:
-        return {"success": False, "message": "資料庫尚未啟用，無法新增廁所"}, 503
+        _ensure_sheets_ready()
+        if worksheet is None:
+            return {"success": False, "message": "雲端表格暫時無法連線，請稍後再試"}, 503
     try:
         data = request.get_json(force=True, silent=False) or {}
         logging.info(f"📥 收到表單資料: {data}")
@@ -6338,55 +6525,551 @@ def submit_toilet():
 
         lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
 
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO user_toilets (
-                user_id, name, address, lat, lon,
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO user_toilets (
+                    user_id, name, address, lat, lon,
+                    level, floor_hint, entrance_hint,
+                    access_note, open_hours, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                uid, name, addr, float(lat_s), float(lon_s),
                 level, floor_hint, entrance_hint,
                 access_note, open_hours,
-                verification_status, verification_score,
-                created_at, updated_at, source
-            )
-            VALUES (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s,
-                %s, %s,
-                'pending', 0,
-                NOW(), NOW(), 'neon'
-            )
-            ON CONFLICT (user_id, name, lat, lon)
-            DO UPDATE SET
-                address = EXCLUDED.address,
-                level = EXCLUDED.level,
-                floor_hint = EXCLUDED.floor_hint,
-                entrance_hint = EXCLUDED.entrance_hint,
-                access_note = EXCLUDED.access_note,
-                open_hours = EXCLUDED.open_hours,
-                updated_at = NOW()
-            RETURNING id
-        """, (
-            uid, name, addr, float(lat_s), float(lon_s),
-            level, floor_hint, entrance_hint,
-            access_note, open_hours,
-        ))
-        new_id = cur.fetchone()[0]
-        conn.commit()
-        conn.close()
-        try: _CACHE.clear()
-        except Exception: pass
-        logging.info(f"📝 submit_toilet 已寫入 Neon id={new_id} name={name} status=pending_visible")
-        return {"success": True, "message": f"✅ 已收到 {name}，已加入查詢資料；若審核後發現錯誤會移除", "id": new_id, "verification_status": "pending"}
+                datetime.utcnow(), datetime.utcnow()
+            ))
+            new_id = cur.fetchone()[0]
+            conn.commit()
+            conn.close()
+            logging.info(f"📝 submit_toilet 已寫入 Postgres id={new_id} name={name}")
+            return {"success": True, "message": f"✅ 已新增廁所 {name}", "id": new_id}
+
+        # 佈局表頭 & 寫入欄位
+        header = ensure_toilet_sheet_header(worksheet)
+        idx = {h: i for i, h in enumerate(header)}
+
+        row_values = [""] * len(header)
+        def put(col, val):
+            if col in idx:
+                row_values[idx[col]] = val
+
+        put("user_id", uid)
+        put("name", name)
+        put("address", addr)
+        put("lat", lat_s)
+        put("lon", lon_s)
+        put("level", level)
+        put("floor_hint", floor_hint)
+        put("entrance_hint", entrance_hint)
+        put("access_note", access_note)
+        put("open_hours", open_hours)
+        put("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+
+        status, note = _append_toilet_row_safely(worksheet, row_values)
+        logging.info(f"📝 submit_toilet 寫入狀態: {status} ({note}) name={name}")
+
+        if status == "ok":
+            return {"success": True, "message": f"✅ 已新增廁所 {name}"}
+        else:
+            return {"success": True, "message": f"✅ 已暫存 {name}（雲端表已滿，稍後可批次補寫）"}
 
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
 
-# === Migration endpoints removed after Google Sheets → Neon migration completed ===
-@app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
-def admin_migrate_sheets_to_neon_disabled():
-    return jsonify({"ok": False, "error": "migration endpoint disabled"}), 410
+def _parse_bool(v):
+    s = str(v or "").strip().lower()
+    return s in ("1", "true", "yes", "y", "同意", "agree", "agreed")
 
+
+def _row_get_by_index(row, i, default=""):
+    try:
+        if i is None or i < 0 or i >= len(row):
+            return default
+        return str(row[i] or "").strip()
+    except Exception:
+        return default
+
+
+def _safe_float(v):
+    try:
+        s = str(v or "").strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _parse_ts_or_now(v):
+    """
+    修正 Google Sheet 裡常見的不完整時間：
+    2025-09-21 12:0  → 2025-09-21 12:00:00
+    2025-09-21 15:3  → 2025-09-21 15:03:00
+    2025-09-21 18:3  → 2025-09-21 18:03:00
+    """
+    s = str(v or "").strip()
+
+    if not s:
+        return datetime.now(TW_TZ).isoformat()
+
+    try:
+        # 2025-09-21 12:0
+        if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{1,2}$", s):
+            d, hm = s.split()
+            h, m = hm.split(":")
+            return f"{d} {int(h):02d}:{int(m):02d}:00"
+
+        # 2025-09-21 12:0:5
+        if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{1,2}:\d{1,2}$", s):
+            d, hms = s.split()
+            h, m, sec = hms.split(":")
+            return f"{d} {int(h):02d}:{int(m):02d}:{int(sec):02d}"
+
+        return s
+
+    except Exception:
+        return datetime.now(TW_TZ).isoformat()
+
+
+def _sheet_header_index(rows):
+    """
+    建立 header index。
+    注意：如果 header 有重複欄位，例如 access_note 出現兩次，取第一個出現的。
+    """
+    if not rows:
+        return {}, []
+
+    header = rows[0]
+    idx = {}
+
+    for i, h in enumerate(header):
+        key = str(h or "").strip()
+        if key and key not in idx:
+            idx[key] = i
+
+    return idx, rows[1:]
+
+
+def _row_get(row, idx, key, default=""):
+    i = idx.get(key)
+    if i is None or i >= len(row):
+        return default
+    return str(row[i] or "").strip()
+
+
+def migrate_user_toilets_sheet_to_neon():
+    """
+    匯入 TOILET_SPREADSHEET_ID sheet1 → Neon user_toilets
+
+    支援兩種格式：
+
+    新格式：
+    name, address, lat, lon, timestamp, ..., user_id, level, floor_hint
+
+    舊格式：
+    A欄可能是 user_id
+    B欄 name
+    C欄 address
+    D欄 lat
+    E欄 lon
+    F欄 timestamp
+    """
+    _ensure_sheets_ready()
+
+    if worksheet is None:
+        return {"ok": False, "error": "worksheet is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = worksheet.get_all_values() or []
+
+    if not rows or len(rows) < 2:
+        return {
+            "ok": True,
+            "table": "user_toilets",
+            "inserted": 0,
+            "skipped": 0,
+            "failed": 0,
+            "message": "no rows"
+        }
+
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted = 0
+    skipped = 0
+    failed = 0
+    fail_examples = []
+
+    for row in data:
+        try:
+            # =========================
+            # 1. 先用 header 讀新格式
+            # =========================
+            name = _row_get(row, idx, "name", "")
+            address = _row_get(row, idx, "address", "")
+
+            lat_s = (
+                _row_get(row, idx, "lat", "")
+                or _row_get(row, idx, "latitude", "")
+            )
+
+            lon_s = (
+                _row_get(row, idx, "lon", "")
+                or _row_get(row, idx, "longitude", "")
+            )
+
+            timestamp = _row_get(row, idx, "timestamp", "")
+            user_id = _row_get(row, idx, "user_id", "")
+
+            # =========================
+            # 2. fallback：支援舊格式
+            # =========================
+            # 你的 Sheet 看起來有些列第一欄是 user_id / web / 123
+            if not user_id:
+                possible_old_uid = _row_get_by_index(row, 0, "")
+                if possible_old_uid and possible_old_uid.lower() not in ("name", "address", "lat", "lon"):
+                    user_id = possible_old_uid
+
+            if not name:
+                name = _row_get_by_index(row, 1, "")
+
+            if not address:
+                address = _row_get_by_index(row, 2, "")
+
+            if not lat_s:
+                lat_s = _row_get_by_index(row, 3, "")
+
+            if not lon_s:
+                lon_s = _row_get_by_index(row, 4, "")
+
+            if not timestamp:
+                timestamp = _row_get_by_index(row, 5, "")
+
+            # =========================
+            # 3. 必要欄位檢查
+            # =========================
+            if not name or not lat_s or not lon_s:
+                skipped += 1
+                continue
+
+            lat = _safe_float(lat_s)
+            lon = _safe_float(lon_s)
+
+            if lat is None or lon is None:
+                skipped += 1
+                continue
+
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                skipped += 1
+                continue
+
+            if not user_id:
+                user_id = "sheet_import"
+
+            # =========================
+            # 4. 其他欄位
+            # =========================
+            level = _row_get(row, idx, "level", "")
+            floor_hint = _row_get(row, idx, "floor_hint", "")
+            entrance_hint = _row_get(row, idx, "entrance_hint", "")
+            access_note = _row_get(row, idx, "access_note", "")
+            open_hours = _row_get(row, idx, "open_hours", "")
+            created_at = _parse_ts_or_now(timestamp)
+
+            # =========================
+            # 5. 寫入 Neon
+            # =========================
+            cur.execute("""
+                INSERT INTO user_toilets (
+                    user_id, name, address, lat, lon,
+                    level, floor_hint, entrance_hint,
+                    access_note, open_hours,
+                    created_at, updated_at, source
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, NOW(), 'google_sheet_import'
+                )
+                ON CONFLICT (user_id, name, lat, lon)
+                DO NOTHING
+                RETURNING id
+            """, (
+                user_id,
+                name,
+                address,
+                lat,
+                lon,
+                level,
+                floor_hint,
+                entrance_hint,
+                access_note,
+                open_hours,
+                created_at
+            ))
+
+            if cur.fetchone():
+                inserted += 1
+            else:
+                skipped += 1
+
+        except Exception as e:
+            failed += 1
+
+            if len(fail_examples) < 10:
+                fail_examples.append({
+                    "error": str(e),
+                    "row_preview": row[:15]
+                })
+
+            logging.warning(f"migrate user_toilets row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "user_toilets",
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed,
+        "fail_examples": fail_examples
+    }
+
+
+def migrate_consent_sheet_to_neon():
+    """
+    匯入 feedback spreadsheet 的 consent 分頁 → Neon user_consent
+    """
+    _ensure_sheets_ready()
+
+    if consent_ws is None:
+        return {"ok": False, "error": "consent_ws is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = consent_ws.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted_or_updated = 0
+    skipped = 0
+    failed = 0
+    fail_examples = []
+
+    for row in data:
+        try:
+            user_id = _row_get(row, idx, "user_id", "")
+
+            if not user_id:
+                skipped += 1
+                continue
+
+            agreed = _parse_bool(_row_get(row, idx, "agreed", ""))
+            display_name = _row_get(row, idx, "display_name", "")
+            source_type = _row_get(row, idx, "source_type", "")
+            ua = _row_get(row, idx, "ua", "")
+            ts = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            cur.execute("""
+                INSERT INTO user_consent (
+                    user_id, agreed, display_name, source_type,
+                    user_agent, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    agreed = EXCLUDED.agreed,
+                    display_name = EXCLUDED.display_name,
+                    source_type = EXCLUDED.source_type,
+                    user_agent = EXCLUDED.user_agent,
+                    updated_at = NOW()
+            """, (
+                user_id,
+                agreed,
+                display_name,
+                source_type,
+                ua,
+                ts
+            ))
+
+            inserted_or_updated += 1
+
+        except Exception as e:
+            failed += 1
+
+            if len(fail_examples) < 10:
+                fail_examples.append({
+                    "error": str(e),
+                    "row_preview": row[:15]
+                })
+
+            logging.warning(f"migrate consent row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "user_consent",
+        "inserted_or_updated": inserted_or_updated,
+        "skipped": skipped,
+        "failed": failed,
+        "fail_examples": fail_examples
+    }
+
+
+def migrate_status_sheet_to_neon():
+    """
+    匯入 feedback spreadsheet 的 status 分頁 → Neon toilet_status_reports
+    Sheet 欄位預設：
+    lat, lon, status, user_id, display_name, note, timestamp
+    """
+    _ensure_sheets_ready()
+
+    if status_ws is None:
+        return {"ok": False, "error": "status_ws is None"}
+
+    if not POSTGRES_ENABLED:
+        return {"ok": False, "error": "POSTGRES_ENABLED is False"}
+
+    rows = status_ws.get_all_values() or []
+    idx, data = _sheet_header_index(rows)
+
+    conn = _pg_connect()
+    cur = conn.cursor()
+
+    inserted = 0
+    skipped = 0
+    failed = 0
+    fail_examples = []
+
+    for row in data:
+        try:
+            lat_s = _row_get(row, idx, "lat", "")
+            lon_s = _row_get(row, idx, "lon", "")
+
+            if not lat_s or not lon_s:
+                skipped += 1
+                continue
+
+            lat = _safe_float(lat_s)
+            lon = _safe_float(lon_s)
+
+            if lat is None or lon is None:
+                skipped += 1
+                continue
+
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                skipped += 1
+                continue
+
+            status = _row_get(row, idx, "status", "")
+            user_id = _row_get(row, idx, "user_id", "")
+            display_name = _row_get(row, idx, "display_name", "")
+            note = _row_get(row, idx, "note", "")
+            ts = _parse_ts_or_now(_row_get(row, idx, "timestamp", ""))
+
+            cur.execute("""
+                INSERT INTO toilet_status_reports (
+                    user_id, display_name, lat, lon, status, note, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id,
+                display_name,
+                lat,
+                lon,
+                status,
+                note,
+                ts
+            ))
+
+            inserted += 1
+
+        except Exception as e:
+            failed += 1
+
+            if len(fail_examples) < 10:
+                fail_examples.append({
+                    "error": str(e),
+                    "row_preview": row[:15]
+                })
+
+            logging.warning(f"migrate status row failed: {e}; row={row}")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "ok": True,
+        "table": "toilet_status_reports",
+        "inserted": inserted,
+        "skipped": skipped,
+        "failed": failed,
+        "fail_examples": fail_examples
+    }
+
+
+@app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
+def admin_migrate_sheets_to_neon():
+    secret = request.args.get("secret") or request.headers.get("X-Migration-Secret")
+
+    if secret != os.getenv("MIGRATION_SECRET"):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+    results = []
+
+    try:
+        results.append(migrate_user_toilets_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate user_toilets failed: {e}", exc_info=True)
+        results.append({
+            "ok": False,
+            "table": "user_toilets",
+            "error": str(e)
+        })
+
+    try:
+        results.append(migrate_consent_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate consent failed: {e}", exc_info=True)
+        results.append({
+            "ok": False,
+            "table": "user_consent",
+            "error": str(e)
+        })
+
+    try:
+        results.append(migrate_status_sheet_to_neon())
+    except Exception as e:
+        logging.error(f"migrate status failed: {e}", exc_info=True)
+        results.append({
+            "ok": False,
+            "table": "toilet_status_reports",
+            "error": str(e)
+        })
+
+    return jsonify({
+        "ok": True,
+        "results": results
+    })
 
 # === 背景排程（預留） ===
 def auto_predict_cleanliness_background():
