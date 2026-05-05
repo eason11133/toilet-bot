@@ -2309,59 +2309,150 @@ def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
 _FAV_LOCK = threading.Lock()
 
 def add_to_favorites(uid, toilet):
+    """Add a toilet to favorites.
+    Primary store: Neon/Postgres favorites table.
+    Fallback: local favorites.txt, only if Postgres is not enabled.
+    """
     try:
         if not uid or not toilet:
-            return
-        lat_s = norm_coord(toilet.get("lat"))
-        lon_s = norm_coord(toilet.get("lon"))
-        name  = (toilet.get("name") or "").strip()
-        addr  = toilet.get("address", "") or ""
-        if not name:
-            return
+            return False
 
+        name = (toilet.get("name") or "").strip()
+        lat = toilet.get("lat")
+        lon = toilet.get("lon")
+        address = toilet.get("address", "") or ""
+
+        if not name or lat is None or lon is None:
+            return False
+
+        lat_f = float(lat)
+        lon_f = float(lon)
+
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO favorites (user_id, name, lat, lon, address)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, name, lat, lon)
+                DO UPDATE SET address = COALESCE(NULLIF(EXCLUDED.address, ''), favorites.address)
+            """, (uid, name, lat_f, lon_f, address))
+            conn.commit()
+            conn.close()
+            return True
+
+        lat_s = norm_coord(lat_f)
+        lon_s = norm_coord(lon_f)
         with _FAV_LOCK:
-            with open(FAVORITES_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([uid, name, lat_s, lon_s, addr])
+            # avoid duplicate rows in fallback file
+            exists = False
+            if os.path.exists(FAVORITES_FILE_PATH):
+                with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) >= 4 and row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s:
+                            exists = True
+                            break
+            if not exists:
+                with open(FAVORITES_FILE_PATH, "a", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([uid, name, lat_s, lon_s, address])
+        return True
+
     except Exception as e:
-        logging.error(f"加入最愛失敗: {e}")
+        logging.error(f"加入最愛失敗: {e}", exc_info=True)
+        return False
+
 
 def remove_from_favorites(uid, name, lat, lon):
+    """Remove a favorite from Neon/Postgres, with local-file fallback."""
     try:
         if not uid or not name:
             return False
-        lat_s = norm_coord(lat)
-        lon_s = norm_coord(lon)
 
+        lat_f = float(lat)
+        lon_f = float(lon)
+
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                DELETE FROM favorites
+                WHERE user_id = %s
+                  AND name = %s
+                  AND lat = %s
+                  AND lon = %s
+                RETURNING id
+            """, (uid, name, lat_f, lon_f))
+            row = cur.fetchone()
+            conn.commit()
+            conn.close()
+            return bool(row)
+
+        lat_s = norm_coord(lat_f)
+        lon_s = norm_coord(lon_f)
         with _FAV_LOCK:
             rows = []
             changed = False
-            with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) < 5:
-                        rows.append(row)
-                        continue
-                    if not (row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s):
-                        rows.append(row)
-                    else:
-                        changed = True
-
+            if os.path.exists(FAVORITES_FILE_PATH):
+                with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) < 5:
+                            rows.append(row)
+                            continue
+                        if not (row[0] == uid and row[1] == name and row[2] == lat_s and row[3] == lon_s):
+                            rows.append(row)
+                        else:
+                            changed = True
             if changed:
                 with open(FAVORITES_FILE_PATH, "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerows(rows)
         return changed
+
     except Exception as e:
-        logging.error(f"移除最愛失敗: {e}")
+        logging.error(f"移除最愛失敗: {e}", exc_info=True)
         return False
 
+
 def get_user_favorites(uid):
+    """Read user's favorites.
+    Returned rows include type='favorite' so the Flex card shows '移除最愛'.
+    """
     favs = []
     if not uid:
         return favs
+
     try:
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT name, lat, lon, address, created_at
+                FROM favorites
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT 50
+            """, (uid,))
+            rows = cur.fetchall()
+            conn.close()
+
+            for r in rows:
+                favs.append({
+                    "user_id": uid,
+                    "name": r.get("name") or "",
+                    "lat": float(r.get("lat")),
+                    "lon": float(r.get("lon")),
+                    "address": r.get("address") or "",
+                    "type": "favorite",
+                    "source": "最愛",
+                })
+            return favs
+
         with _FAV_LOCK:
+            if not os.path.exists(FAVORITES_FILE_PATH):
+                return favs
             with open(FAVORITES_FILE_PATH, "r", encoding="utf-8", newline="") as f:
                 reader = csv.reader(f)
                 for row in reader:
@@ -2372,13 +2463,16 @@ def get_user_favorites(uid):
                     favs.append({
                         "user_id": row[0],
                         "name": row[1],
-                        "lat": row[2],
-                        "lon": row[3],
+                        "lat": float(row[2]),
+                        "lon": float(row[3]),
                         "address": row[4],
+                        "type": "favorite",
+                        "source": "最愛",
                     })
         return favs
+
     except Exception as e:
-        logging.error(f"讀取最愛失敗: {e}")
+        logging.error(f"讀取最愛失敗: {e}", exc_info=True)
         return favs
 
 def geocode_address(address):
@@ -5744,6 +5838,45 @@ def handle_postback(event):
 
     if data == "cancel_delete_my_toilet":
         safe_reply(event, TextSendMessage(text=L(uid, "已取消刪除", "Delete cancelled.")))
+        return
+
+    # =========================
+    # ⭐ 我的最愛：加入 / 移除
+    # data format from Flex:
+    #   add:{quoted_name}:{lat}:{lon}
+    #   remove_fav:{quoted_name}:{lat}:{lon}
+    # =========================
+    if data.startswith("add:"):
+        try:
+            _, name_q, lat_s, lon_s = data.split(":", 3)
+            name = unquote(name_q).strip()
+            ok = add_to_favorites(uid, {
+                "name": name,
+                "lat": lat_s,
+                "lon": lon_s,
+                "address": ""
+            })
+            if ok:
+                safe_reply(event, TextSendMessage(text=L(uid, "✅ 已加入最愛", "✅ Added to favorites")))
+            else:
+                safe_reply(event, TextSendMessage(text=L(uid, "❌ 加入最愛失敗", "❌ Failed to add favorite")))
+        except Exception as e:
+            logging.error(f"add favorite postback failed: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 加入最愛失敗", "❌ Failed to add favorite")))
+        return
+
+    if data.startswith("remove_fav:"):
+        try:
+            _, name_q, lat_s, lon_s = data.split(":", 3)
+            name = unquote(name_q).strip()
+            ok = remove_from_favorites(uid, name, lat_s, lon_s)
+            if ok:
+                safe_reply(event, TextSendMessage(text=L(uid, "✅ 已移除最愛", "✅ Removed from favorites")))
+            else:
+                safe_reply(event, TextSendMessage(text=L(uid, "❌ 移除失敗，可能已不在最愛中", "❌ Remove failed or already removed")))
+        except Exception as e:
+            logging.error(f"remove favorite postback failed: {e}", exc_info=True)
+            safe_reply(event, TextSendMessage(text=L(uid, "❌ 移除最愛失敗", "❌ Failed to remove favorite")))
         return
     
     try:
