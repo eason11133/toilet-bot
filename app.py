@@ -1401,6 +1401,131 @@ def sort_toilets(toilets):
     toilets.sort(key=lambda x: (int(x.get("distance", 1e9)), -_findability_bonus(x)))
     return toilets
 
+def _score_distance(distance_m):
+    """
+    距離分數：距離越近分數越高。
+    0m = 100 分，1000m 以上趨近 0 分。
+    """
+    try:
+        d = float(distance_m or 0)
+        return max(0, 100 - d / 10)
+    except Exception:
+        return 0
+
+
+def _score_trust(t):
+    """
+    資料可信度分數：
+    - 政府 CSV / OSM 資料可信度高
+    - 使用者新增 approved 次高
+    - 使用者新增 pending 可顯示但分數較低
+    - rejected 不應進入候選，保險起見給 0
+    """
+    source = (t.get("source") or t.get("type") or "").lower()
+    status = (t.get("verification_status") or "pending").lower()
+
+    if status == "rejected":
+        return 0
+
+    if source in ("public_csv", "government", "osm", "overpass"):
+        return 100
+
+    if status == "approved":
+        return 90
+
+    if status == "pending":
+        return 60
+
+    return 60
+
+
+def _score_info(t):
+    """
+    資訊完整度分數：越容易找到、越完整分數越高。
+    """
+    score = 0
+
+    if t.get("name"):
+        score += 20
+    if t.get("address"):
+        score += 30
+    if t.get("floor_hint") or t.get("level"):
+        score += 20
+    if t.get("entrance_hint"):
+        score += 15
+    if t.get("access_note"):
+        score += 10
+    if t.get("open_hours"):
+        score += 5
+
+    return min(score, 100)
+
+
+def _score_status(t):
+    """
+    即時狀態分數：
+    正常 / 恢復正常加分，暫停使用扣分。
+    如果沒有狀態資料，給中性分數。
+    """
+    s = (t.get("status") or t.get("status_text") or "").strip()
+
+    if not s:
+        return 70
+
+    bad_keywords = ["暫停", "故障", "維修", "關閉", "不能使用", "無法使用"]
+    good_keywords = ["正常", "恢復", "可使用"]
+
+    if any(k in s for k in bad_keywords):
+        return 0
+
+    if any(k in s for k in good_keywords):
+        return 100
+
+    return 70
+
+
+def compute_nts_score(t):
+    """
+    NTS 節點式廁所搜尋演算法總分。
+    """
+    distance_score = _score_distance(t.get("distance"))
+    trust_score = _score_trust(t)
+    info_score = _score_info(t)
+    status_score = _score_status(t)
+
+    final_score = (
+        0.60 * distance_score +
+        0.20 * trust_score +
+        0.10 * info_score +
+        0.10 * status_score
+    )
+
+    t["nts_score"] = round(final_score, 2)
+    t["distance_score"] = round(distance_score, 2)
+    t["trust_score"] = round(trust_score, 2)
+    t["info_score"] = round(info_score, 2)
+    t["status_score"] = round(status_score, 2)
+
+    return t["nts_score"]
+
+
+def sort_toilets_nts(toilets):
+    """
+    使用 NTS 分數排序。
+    rejected 資料不顯示，其餘依 NTS 分數由高到低排序。
+    """
+    clean = []
+    for t in toilets:
+        status = (t.get("verification_status") or "pending").lower()
+        if status == "rejected":
+            continue
+
+        compute_nts_score(t)
+        clean.append(t)
+
+    clean.sort(key=lambda x: (-x.get("nts_score", 0), x.get("distance", 999999)))
+    return clean
+
 # === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
     global gc, worksheet, feedback_sheet, consent_ws, status_ws
@@ -5300,7 +5425,13 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
                 fut.cancel()
 
     quick = _merge_and_dedupe_lists(csv_res, saved_res, osm_res)
-    sort_toilets(quick)
+    algo = os.getenv("TOILET_SORT_ALGO", "distance_only")
+
+    if algo == "nts_score":
+        quick = sort_toilets_nts(quick)
+    else:
+        sort_toilets(quick)
+
     result = quick[:LOC_MAX_RESULTS]
 
     # === 寫入 cache（Grid cache）===
