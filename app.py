@@ -7,6 +7,7 @@ import requests
 import traceback
 import heapq
 import math
+import uuid
 from collections import OrderedDict
 from math import radians, cos, sin, asin, sqrt
 from flask_cors import CORS
@@ -851,6 +852,32 @@ def healthz():
         return Response(status=204, headers=headers)
     return Response("ok", status=200, headers=headers)
 
+@app.route("/go_to_toilet")
+def go_to_toilet():
+    query_id = request.args.get("qid", "")
+    uid = request.args.get("uid", "")
+    toilet_id = request.args.get("tid", "")
+    lat = request.args.get("lat", "")
+    lon = request.args.get("lon", "")
+    name = request.args.get("name", "")
+
+    try:
+        log_user_action(
+            query_id=query_id,
+            uid=uid,
+            toilet_id=toilet_id,
+            action_type="click_navigation",
+            extra_info=json.dumps({
+                "lat": lat,
+                "lon": lon,
+                "name": name
+            }, ensure_ascii=False)
+        )
+    except Exception as e:
+        logging.warning(f"go_to_toilet log failed: {e}")
+
+    return redirect(f"https://www.google.com/maps/search/?api=1&query={lat},{lon}")
+
 # === 自我激活設定 ===
 KEEPALIVE_URL = (
     os.getenv("KEEPALIVE_URL")
@@ -955,9 +982,12 @@ def init_persistent_store():
         if DATABASE_URL and psycopg2 is None:
             logging.warning("DATABASE_URL 已設定，但缺少 psycopg2；請安裝 psycopg2-binary")
         return
+
     try:
         conn = _pg_connect()
         cur = conn.cursor()
+
+        # === Dashboard / analytics events ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS analytics_events (
             id BIGSERIAL PRIMARY KEY,
@@ -977,6 +1007,7 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
 
+        # === User-added toilets ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_toilets (
             id BIGSERIAL PRIMARY KEY,
@@ -994,6 +1025,7 @@ def init_persistent_store():
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
         """)
+
         # 補齊已存在資料表的欄位（Neon 主儲存）
         cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'neon'")
         cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'pending'")
@@ -1005,6 +1037,8 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_lat_lon ON user_toilets(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_created_at ON user_toilets(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_verification ON user_toilets(verification_status)")
+
+        # === User consent ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_consent (
             user_id TEXT PRIMARY KEY,
@@ -1016,6 +1050,8 @@ def init_persistent_store():
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
         """)
+
+        # === Toilet status reports ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS toilet_status_reports (
             id BIGSERIAL PRIMARY KEY,
@@ -1031,6 +1067,7 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_lat_lon ON toilet_status_reports(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_created_at ON toilet_status_reports(created_at)")
 
+        # === Favorites ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS favorites (
             id BIGSERIAL PRIMARY KEY,
@@ -1044,20 +1081,57 @@ def init_persistent_store():
         )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id)")
+
+        # === NTS 2.0：推薦結果紀錄 ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS recommendation_logs (
+            id BIGSERIAL PRIMARY KEY,
+            query_id TEXT NOT NULL,
+            user_id_hash TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            user_lat DOUBLE PRECISION,
+            user_lon DOUBLE PRECISION,
+            rank INTEGER,
+            toilet_id TEXT,
+            toilet_name TEXT,
+            distance_m DOUBLE PRECISION,
+            distance_score DOUBLE PRECISION,
+            trust_score DOUBLE PRECISION,
+            info_score DOUBLE PRECISION,
+            status_score DOUBLE PRECISION,
+            nts_score DOUBLE PRECISION,
+            source TEXT,
+            verification_status TEXT
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_query_id ON recommendation_logs(query_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_user_id_hash ON recommendation_logs(user_id_hash)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_created_at ON recommendation_logs(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_toilet_id ON recommendation_logs(toilet_id)")
+
+        # === NTS 2.0：使用者後續行為紀錄 ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_actions (
+            id BIGSERIAL PRIMARY KEY,
+            query_id TEXT,
+            user_id_hash TEXT,
+            toilet_id TEXT,
+            action_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            extra_info TEXT
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_query_id ON user_actions(query_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_user_id_hash ON user_actions(user_id_hash)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_created_at ON user_actions(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_action_type ON user_actions(action_type)")
+
         conn.commit()
         conn.close()
         logging.info("✅ Postgres persistent store ready")
+
     except Exception as e:
         logging.error(f"❌ init_persistent_store failed: {e}")
-
-PUBLIC_HEADERS = [
-    "country","city","village","number","name","address","administration",
-    "latitude","longitude","grade","type2","type","exec","diaper"
-]
-if not os.path.exists(TOILETS_FILE_PATH):
-    with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(PUBLIC_HEADERS)
 
 # === Google Sheets 設定 ===
 GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -1525,6 +1599,113 @@ def sort_toilets_nts(toilets):
 
     clean.sort(key=lambda x: (-x.get("nts_score", 0), x.get("distance", 999999)))
     return clean
+
+def make_query_id():
+    return "Q_" + uuid.uuid4().hex[:16]
+
+
+def _make_toilet_id(t):
+    """
+    給沒有固定 id 的政府/OSM 資料一個穩定識別碼。
+    user_toilets 若本來有 id，就優先用 id。
+    """
+    raw_id = t.get("id")
+    if raw_id not in (None, ""):
+        return str(raw_id)
+
+    name = str(t.get("name") or "")
+    lat = norm_coord(t.get("lat"))
+    lon = norm_coord(t.get("lon"))
+    source = str(t.get("source") or t.get("type") or "")
+    key = f"{source}|{name}|{lat}|{lon}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def log_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit=5):
+    """
+    記錄這次系統推薦了哪些結果。
+    """
+    if not POSTGRES_ENABLED:
+        return
+
+    try:
+        rows = []
+        user_id_hash = mask_user_id(uid)
+
+        for rank, t in enumerate((toilets or [])[:limit], start=1):
+            # 確保 NTS 四個節點分數存在
+            try:
+                if "nts_score" not in t:
+                    compute_nts_score(t)
+            except Exception:
+                pass
+
+            rows.append((
+                query_id,
+                user_id_hash,
+                float(user_lat),
+                float(user_lon),
+                rank,
+                _make_toilet_id(t),
+                t.get("name") or "",
+                float(t.get("distance", 0) or 0),
+                float(t.get("distance_score", 0) or 0),
+                float(t.get("trust_score", 0) or 0),
+                float(t.get("info_score", 0) or 0),
+                float(t.get("status_score", 0) or 0),
+                float(t.get("nts_score", 0) or 0),
+                t.get("source") or t.get("type") or "",
+                t.get("verification_status") or ""
+            ))
+
+        if not rows:
+            return
+
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.executemany("""
+            INSERT INTO recommendation_logs (
+                query_id, user_id_hash, user_lat, user_lon,
+                rank, toilet_id, toilet_name, distance_m,
+                distance_score, trust_score, info_score, status_score,
+                nts_score, source, verification_status
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, rows)
+        conn.commit()
+        conn.close()
+
+    except Exception as e:
+        logging.warning(f"log_recommendation_results failed: {e}", exc_info=True)
+
+
+def log_user_action(query_id, uid, toilet_id, action_type, extra_info=""):
+    """
+    記錄使用者後續行為，例如點導航、回報問題、加入最愛。
+    """
+    if not POSTGRES_ENABLED:
+        return
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_actions (
+                query_id, user_id_hash, toilet_id, action_type, extra_info
+            )
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            query_id or "",
+            mask_user_id(uid),
+            str(toilet_id or ""),
+            action_type,
+            extra_info or ""
+        ))
+        conn.commit()
+        conn.close()
+
+    except Exception as e:
+        logging.warning(f"log_user_action failed: {e}", exc_info=True)
 
 # === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
@@ -4667,7 +4848,7 @@ def _short_txt(s, n=60):
         return s
 
 # === 建立 Flex ===
-def create_toilet_flex_messages(toilets, uid=None):
+def create_toilet_flex_messages(toilets, uid=None, query_id=None):
     indicators = build_feedback_index()
     status_map = build_status_index()
 
@@ -4696,6 +4877,7 @@ def create_toilet_flex_messages(toilets, uid=None):
         lon_s = norm_coord(toilet['lon'])
         addr_text = toilet.get('address') or L(uid, "（無地址，使用座標）", "(No address, using coordinates)")
 
+        toilet_id = _make_toilet_id(toilet)
         # -------------------------
         # ✅ title（修正：不要先拼中文再 L）
         # -------------------------
@@ -4783,10 +4965,20 @@ def create_toilet_flex_messages(toilets, uid=None):
         # 按鈕
         base = _base_url()
 
+        nav_url = (
+            f"{base}/go_to_toilet"
+            f"?qid={quote(query_id or '')}"
+            f"&uid={quote(uid or '')}"
+            f"&tid={quote(toilet_id)}"
+            f"&lat={quote(lat_s)}"
+            f"&lon={quote(lon_s)}"
+            f"&name={quote(title)}"
+        )
+
         actions.append({
             "type": "uri",
             "label": L(uid, "導航", "Navigate"),
-            "uri": f"https://www.google.com/maps/search/?api=1&query={lat_s},{lon_s}"
+            "uri": nav_url
         })
 
         actions.append({
@@ -5390,10 +5582,13 @@ def get_user_loc_mode(uid):
 _pool = ThreadPoolExecutor(max_workers=2)
 
 def build_nearby_toilets(uid, lat, lon, radius=500):
-    # === Grid cache key（第一步）===
+    # 預設使用 NTS 排序；若要回到純距離排序，可設定 TOILET_SORT_ALGO=distance_only
+    algo = os.getenv("TOILET_SORT_ALGO", "nts_score").strip().lower()
+
+    # === Grid cache key（加入 algo，避免切換排序後吃到舊快取）===
     lat_g = grid_coord(lat)
     lon_g = grid_coord(lon)
-    query_key = f"nearby:{lat_g},{lon_g},{radius}"
+    query_key = f"nearby:{algo}:{lat_g},{lon_g},{radius}"
 
     cached = get_cached_data(query_key)
     if cached:
@@ -5425,12 +5620,11 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
                 fut.cancel()
 
     quick = _merge_and_dedupe_lists(csv_res, saved_res, osm_res)
-    algo = os.getenv("TOILET_SORT_ALGO", "distance_only")
 
-    if algo == "nts_score":
-        quick = sort_toilets_nts(quick)
-    else:
+    if algo == "distance_only":
         sort_toilets(quick)
+    else:
+        quick = sort_toilets_nts(quick)
 
     result = quick[:LOC_MAX_RESULTS]
 
@@ -5748,7 +5942,21 @@ def handle_location(event):
     area_name = get_area_name(lat, lon)
 
     try:
+        query_id = make_query_id()
+
         toilets = build_nearby_toilets(uid, lat, lon)
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+
+        if toilets:
+            log_recommendation_results(
+                query_id=query_id,
+                uid=uid,
+                user_lat=lat,
+                user_lon=lon,
+                toilets=toilets,
+                limit=5
+            )
+
         elapsed_ms = int((time.time() - start_ts) * 1000)
 
         if elapsed_ms > 0:
@@ -5764,8 +5972,8 @@ def handle_location(event):
             )
 
         if toilets:
-            # 先產出原本的廁所 carousel
-            msg = create_toilet_flex_messages(toilets, uid=uid)
+            # 產出廁所 carousel，並帶入 query_id，讓導航點擊可回連到本次推薦紀錄
+            msg = create_toilet_flex_messages(toilets, uid=uid, query_id=query_id)
 
             # 看目前是一般模式還是 AI 模式
             mode = get_user_loc_mode(uid)
@@ -5989,6 +6197,13 @@ def handle_postback(event):
             })
             if ok:
                 safe_reply(event, TextSendMessage(text=L(uid, "✅ 已加入最愛", "✅ Added to favorites")))
+                log_user_action(
+                    query_id="",
+                    uid=uid,
+                    toilet_id=f"{name}|{lat_s}|{lon_s}",
+                    action_type="add_favorite",
+                    extra_info=json.dumps({"name": name, "lat": lat_s, "lon": lon_s}, ensure_ascii=False)
+                )
             else:
                 safe_reply(event, TextSendMessage(text=L(uid, "❌ 加入最愛失敗", "❌ Failed to add favorite")))
         except Exception as e:
