@@ -878,222 +878,6 @@ def go_to_toilet():
 
     return redirect(f"https://www.google.com/maps/search/?api=1&query={lat},{lon}")
 
-@app.route("/api/nts-behavior")
-def api_nts_behavior():
-    """
-    NTS 行為分析 API
-    用法：
-    /api/nts-behavior
-    /api/nts-behavior?version=nts_1_0
-    /api/nts-behavior?version=trust_score_2_0
-    """
-    if not POSTGRES_ENABLED:
-        return jsonify({
-            "ok": False,
-            "error": "Postgres not enabled"
-        }), 503
-
-    version = (request.args.get("version") or "all").strip()
-    if not version:
-        version = "all"
-
-    try:
-        conn = _pg_connect()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # 1. 各版本資料量
-        cur.execute("""
-            SELECT
-                COALESCE(model_version, 'unknown') AS model_version,
-                COUNT(*) AS recommendation_rows,
-                COUNT(DISTINCT query_id) AS query_count
-            FROM recommendation_logs
-            GROUP BY COALESCE(model_version, 'unknown')
-            ORDER BY model_version
-        """)
-        version_counts = cur.fetchall()
-
-        # 2. 總覽 summary
-        cur.execute("""
-            WITH filtered AS (
-                SELECT *
-                FROM recommendation_logs
-                WHERE (%s = 'all' OR model_version = %s)
-            ),
-            clicks AS (
-                SELECT DISTINCT a.id
-                FROM user_actions a
-                JOIN filtered r
-                  ON a.query_id = r.query_id
-                 AND a.toilet_id = r.toilet_id
-                WHERE a.action_type = 'click_navigation'
-            )
-            SELECT
-                COUNT(*) AS recommendation_rows,
-                COUNT(DISTINCT query_id) AS query_count,
-                (SELECT COUNT(*) FROM clicks) AS navigation_clicks,
-                ROUND(
-                    (SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(*), 0) * 100,
-                    2
-                ) AS click_rate_by_recommendation_percent,
-                ROUND(
-                    (SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(DISTINCT query_id), 0) * 100,
-                    2
-                ) AS click_rate_by_query_percent
-            FROM filtered
-        """, (version, version))
-        summary = cur.fetchone()
-
-        # 3. 各 rank 點擊率
-        cur.execute("""
-            WITH filtered AS (
-                SELECT *
-                FROM recommendation_logs
-                WHERE (%s = 'all' OR model_version = %s)
-            ),
-            impressions AS (
-                SELECT
-                    rank,
-                    COUNT(*) AS shown_count
-                FROM filtered
-                GROUP BY rank
-            ),
-            clicks AS (
-                SELECT
-                    r.rank,
-                    COUNT(DISTINCT a.id) AS click_count
-                FROM user_actions a
-                JOIN filtered r
-                  ON a.query_id = r.query_id
-                 AND a.toilet_id = r.toilet_id
-                WHERE a.action_type = 'click_navigation'
-                GROUP BY r.rank
-            )
-            SELECT
-                i.rank,
-                i.shown_count,
-                COALESCE(c.click_count, 0) AS click_count,
-                ROUND(
-                    COALESCE(c.click_count, 0)::numeric / NULLIF(i.shown_count, 0) * 100,
-                    2
-                ) AS click_rate_percent
-            FROM impressions i
-            LEFT JOIN clicks c ON i.rank = c.rank
-            ORDER BY i.rank ASC
-        """, (version, version))
-        rank_click_rate = cur.fetchall()
-
-        # 4. NTS 分數區間點擊率
-        cur.execute("""
-            WITH filtered AS (
-                SELECT *
-                FROM recommendation_logs
-                WHERE (%s = 'all' OR model_version = %s)
-            ),
-            shown AS (
-                SELECT
-                    r.id,
-                    r.query_id,
-                    r.toilet_id,
-                    r.rank,
-                    r.nts_score,
-                    CASE
-                        WHEN a.id IS NULL THEN 0
-                        ELSE 1
-                    END AS clicked
-                FROM filtered r
-                LEFT JOIN user_actions a
-                  ON r.query_id = a.query_id
-                 AND r.toilet_id = a.toilet_id
-                 AND a.action_type = 'click_navigation'
-            ),
-            grouped AS (
-                SELECT
-                    CASE
-                        WHEN nts_score >= 90 THEN '90-100'
-                        WHEN nts_score >= 80 THEN '80-89'
-                        WHEN nts_score >= 70 THEN '70-79'
-                        WHEN nts_score >= 60 THEN '60-69'
-                        ELSE '<60'
-                    END AS nts_score_range,
-                    COUNT(*) AS shown_count,
-                    SUM(clicked) AS click_count,
-                    ROUND(
-                        SUM(clicked)::numeric / NULLIF(COUNT(*), 0) * 100,
-                        2
-                    ) AS click_rate_percent
-                FROM shown
-                GROUP BY
-                    CASE
-                        WHEN nts_score >= 90 THEN '90-100'
-                        WHEN nts_score >= 80 THEN '80-89'
-                        WHEN nts_score >= 70 THEN '70-79'
-                        WHEN nts_score >= 60 THEN '60-69'
-                        ELSE '<60'
-                    END
-            )
-            SELECT *
-            FROM grouped
-            ORDER BY
-                CASE nts_score_range
-                    WHEN '90-100' THEN 1
-                    WHEN '80-89' THEN 2
-                    WHEN '70-79' THEN 3
-                    WHEN '60-69' THEN 4
-                    ELSE 5
-                END
-        """, (version, version))
-        nts_score_click_rate = cur.fetchall()
-
-        # 5. 最近導航點擊紀錄
-        cur.execute("""
-            WITH filtered AS (
-                SELECT *
-                FROM recommendation_logs
-                WHERE (%s = 'all' OR model_version = %s)
-            )
-            SELECT
-                a.created_at AS action_time,
-                a.action_type,
-                r.model_version,
-                r.query_id,
-                r.rank,
-                r.toilet_name,
-                r.distance_m,
-                r.nts_score,
-                r.distance_score,
-                r.trust_score,
-                r.info_score,
-                r.status_score
-            FROM user_actions a
-            JOIN filtered r
-              ON a.query_id = r.query_id
-             AND a.toilet_id = r.toilet_id
-            WHERE a.action_type = 'click_navigation'
-            ORDER BY a.created_at DESC
-            LIMIT 20
-        """, (version, version))
-        recent_clicks = cur.fetchall()
-
-        conn.close()
-
-        return jsonify({
-            "ok": True,
-            "version": version,
-            "version_counts": version_counts,
-            "summary": summary,
-            "rank_click_rate": rank_click_rate,
-            "nts_score_click_rate": nts_score_click_rate,
-            "recent_clicks": recent_clicks
-        })
-
-    except Exception as e:
-        logging.error(f"/api/nts-behavior failed: {e}", exc_info=True)
-        return jsonify({
-            "ok": False,
-            "error": str(e)
-        }), 500
-    
 # === 自我激活設定 ===
 KEEPALIVE_URL = (
     os.getenv("KEEPALIVE_URL")
@@ -5747,6 +5531,317 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 @app.route("/dashboard", methods=["GET"])
 def dashboard_page():
     return render_template("dashboard.html")
+
+@app.route("/dashboard/nts", methods=["GET"])
+def dashboard_nts_page():
+    """獨立的 NTS 行為分析頁，不改動原本 dashboard.html。"""
+    html = """
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NTS 排序行為分析</title>
+  <style>
+    :root{--bg:#f4f6fb;--card:#fff;--text:#1f2937;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--good:#059669;--warn:#d97706;}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif;}
+    .wrap{max-width:1180px;margin:0 auto;padding:24px 18px 48px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}.title h1{margin:0;font-size:30px;letter-spacing:.02em}.title p{margin:8px 0 0;color:var(--muted)}
+    .nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn,.select{border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 14px;color:var(--text);text-decoration:none;font-weight:700}.btn:hover{border-color:var(--accent)}.select{min-width:220px}
+    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:18px 0}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{display:block}.nav{margin-top:12px}}
+    .card{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.k{color:var(--muted);font-size:13px;font-weight:700}.v{font-size:30px;font-weight:800;margin-top:8px}.s{font-size:13px;color:var(--muted);margin-top:8px}.section{background:var(--card);border-radius:18px;padding:18px;margin-top:16px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
+    .section h2{font-size:19px;margin:0 0 12px}.hint{color:var(--muted);font-size:13px;margin-bottom:12px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#374151;background:#f9fafb}.rate{font-weight:800;color:var(--good)}.empty{color:var(--muted);padding:18px}.bar{height:8px;background:#eef2ff;border-radius:999px;overflow:hidden;min-width:90px}.bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.split{grid-template-columns:1fr}}
+    .loading{color:var(--muted);padding:14px}.err{color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;padding:12px;border-radius:12px;display:none}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <h1>NTS 排序行為分析</h1>
+        <p>比較 NTS 1.0 與 Trust Score 2.0 在真實使用者導航點擊上的差異</p>
+      </div>
+      <div class="nav">
+        <a class="btn" href="/dashboard">← 回總覽儀表板</a>
+        <select id="versionSelect" class="select">
+          <option value="all">全部版本</option>
+          <option value="nts_1_0" selected>NTS 1.0 baseline</option>
+          <option value="trust_score_2_0">Trust Score 2.0</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="errorBox" class="err"></div>
+    <div id="loading" class="loading">載入 NTS 行為資料中...</div>
+
+    <div id="content" style="display:none">
+      <div class="grid">
+        <div class="card"><div class="k">查詢數</div><div id="qCount" class="v">--</div><div class="s">Distinct query_id</div></div>
+        <div class="card"><div class="k">推薦展示筆數</div><div id="recRows" class="v">--</div><div class="s">Top-k 推薦列數</div></div>
+        <div class="card"><div class="k">導航點擊數</div><div id="navClicks" class="v">--</div><div class="s">click_navigation</div></div>
+        <div class="card"><div class="k">查詢導航率</div><div id="queryRate" class="v">--</div><div class="s">點擊數 / 查詢數</div></div>
+        <div class="card"><div class="k">推薦點擊率</div><div id="recRate" class="v">--</div><div class="s">點擊數 / 展示筆數</div></div>
+      </div>
+
+      <div class="section">
+        <h2>版本資料量</h2>
+        <div class="hint">確認 NTS 1.0 與 Trust Score 2.0 是否分開累積資料。</div>
+        <div id="versionCounts"></div>
+      </div>
+
+      <div class="split">
+        <div class="section">
+          <h2>各 Rank 點擊率</h2>
+          <div class="hint">觀察使用者是否主要點擊排序前面的推薦結果。</div>
+          <div id="rankTable"></div>
+        </div>
+        <div class="section">
+          <h2>NTS 分數區間點擊率</h2>
+          <div class="hint">觀察 NTS 分數越高，導航點擊率是否越高。</div>
+          <div id="scoreTable"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>最近導航點擊紀錄</h2>
+        <div class="hint">檢查推薦結果與使用者點擊是否成功串接。</div>
+        <div id="recentTable"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
+function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+function bar(rate){ const v=Math.max(0, Math.min(100, Number(rate)||0)); return `<div class="bar"><span style="width:${v}%"></span></div>`; }
+function table(headers, rows, empty='目前沒有資料'){
+  if(!rows || rows.length===0) return `<div class="empty">${empty}</div>`;
+  return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+async function loadNtsBehavior(){
+  const version = $('versionSelect').value;
+  $('loading').style.display='block'; $('content').style.display='none'; $('errorBox').style.display='none';
+  try{
+    const res = await fetch(`/api/nts-behavior?version=${encodeURIComponent(version)}`, {cache:'no-store'});
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'API 回傳失敗');
+    const s = data.summary || {};
+    $('qCount').textContent = fmt(s.query_count);
+    $('recRows').textContent = fmt(s.recommendation_rows);
+    $('navClicks').textContent = fmt(s.navigation_clicks);
+    $('queryRate').textContent = pct(s.click_rate_by_query_percent);
+    $('recRate').textContent = pct(s.click_rate_by_recommendation_percent);
+
+    $('versionCounts').innerHTML = table(['版本','推薦展示','查詢數'], (data.version_counts||[]).map(r=>
+      `<tr><td><span class="tag">${esc(r.model_version)}</span></td><td>${fmt(r.recommendation_rows)}</td><td>${fmt(r.query_count)}</td></tr>`
+    ));
+    $('rankTable').innerHTML = table(['Rank','展示','點擊','點擊率',''], (data.rank_click_rate||[]).map(r=>
+      `<tr><td>${esc(r.rank)}</td><td>${fmt(r.shown_count)}</td><td>${fmt(r.click_count)}</td><td class="rate">${pct(r.click_rate_percent)}</td><td>${bar(r.click_rate_percent)}</td></tr>`
+    ));
+    $('scoreTable').innerHTML = table(['分數區間','展示','點擊','點擊率',''], (data.nts_score_click_rate||[]).map(r=>
+      `<tr><td>${esc(r.nts_score_range)}</td><td>${fmt(r.shown_count)}</td><td>${fmt(r.click_count)}</td><td class="rate">${pct(r.click_rate_percent)}</td><td>${bar(r.click_rate_percent)}</td></tr>`
+    ));
+    $('recentTable').innerHTML = table(['時間','版本','Rank','廁所','距離','NTS','Trust','Info','Status'], (data.recent_clicks||[]).map(r=>
+      `<tr><td>${esc(r.action_time)}</td><td>${esc(r.model_version)}</td><td>${esc(r.rank)}</td><td>${esc(r.toilet_name)}</td><td>${Number(r.distance_m||0).toFixed(1)}m</td><td>${esc(r.nts_score)}</td><td>${esc(r.trust_score)}</td><td>${esc(r.info_score)}</td><td>${esc(r.status_score)}</td></tr>`
+    ));
+    $('loading').style.display='none'; $('content').style.display='block';
+  }catch(e){
+    $('loading').style.display='none'; $('errorBox').style.display='block'; $('errorBox').textContent = '載入失敗：' + e.message;
+  }
+}
+$('versionSelect').addEventListener('change', loadNtsBehavior);
+document.addEventListener('DOMContentLoaded', loadNtsBehavior);
+</script>
+</body>
+</html>
+    """
+    return Response(html, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/api/nts-behavior")
+def api_nts_behavior():
+    """
+    NTS 行為分析 API
+    用法：
+    /api/nts-behavior
+    /api/nts-behavior?version=nts_1_0
+    /api/nts-behavior?version=trust_score_2_0
+    """
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "error": "Postgres not enabled"}), 503
+
+    version = (request.args.get("version") or "all").strip() or "all"
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute("""
+            SELECT
+                COALESCE(model_version, 'unknown') AS model_version,
+                COUNT(*) AS recommendation_rows,
+                COUNT(DISTINCT query_id) AS query_count
+            FROM recommendation_logs
+            GROUP BY COALESCE(model_version, 'unknown')
+            ORDER BY model_version
+        """)
+        version_counts = cur.fetchall()
+
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            clicks AS (
+                SELECT DISTINCT a.id
+                FROM user_actions a
+                JOIN filtered r
+                  ON a.query_id = r.query_id
+                 AND a.toilet_id = r.toilet_id
+                WHERE a.action_type = 'click_navigation'
+            )
+            SELECT
+                COUNT(*) AS recommendation_rows,
+                COUNT(DISTINCT query_id) AS query_count,
+                (SELECT COUNT(*) FROM clicks) AS navigation_clicks,
+                ROUND((SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS click_rate_by_recommendation_percent,
+                ROUND((SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(DISTINCT query_id), 0) * 100, 2) AS click_rate_by_query_percent
+            FROM filtered
+        """, (version, version))
+        summary = cur.fetchone()
+
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            impressions AS (
+                SELECT rank, COUNT(*) AS shown_count
+                FROM filtered
+                GROUP BY rank
+            ),
+            clicks AS (
+                SELECT r.rank, COUNT(DISTINCT a.id) AS click_count
+                FROM user_actions a
+                JOIN filtered r
+                  ON a.query_id = r.query_id
+                 AND a.toilet_id = r.toilet_id
+                WHERE a.action_type = 'click_navigation'
+                GROUP BY r.rank
+            )
+            SELECT
+                i.rank,
+                i.shown_count,
+                COALESCE(c.click_count, 0) AS click_count,
+                ROUND(COALESCE(c.click_count, 0)::numeric / NULLIF(i.shown_count, 0) * 100, 2) AS click_rate_percent
+            FROM impressions i
+            LEFT JOIN clicks c ON i.rank = c.rank
+            ORDER BY i.rank ASC
+        """, (version, version))
+        rank_click_rate = cur.fetchall()
+
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            shown AS (
+                SELECT
+                    r.id,
+                    r.query_id,
+                    r.toilet_id,
+                    r.rank,
+                    r.nts_score,
+                    CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS clicked
+                FROM filtered r
+                LEFT JOIN user_actions a
+                  ON r.query_id = a.query_id
+                 AND r.toilet_id = a.toilet_id
+                 AND a.action_type = 'click_navigation'
+            ),
+            grouped AS (
+                SELECT
+                    CASE
+                        WHEN nts_score >= 90 THEN '90-100'
+                        WHEN nts_score >= 80 THEN '80-89'
+                        WHEN nts_score >= 70 THEN '70-79'
+                        WHEN nts_score >= 60 THEN '60-69'
+                        ELSE '<60'
+                    END AS nts_score_range,
+                    COUNT(*) AS shown_count,
+                    SUM(clicked) AS click_count,
+                    ROUND(SUM(clicked)::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS click_rate_percent
+                FROM shown
+                GROUP BY
+                    CASE
+                        WHEN nts_score >= 90 THEN '90-100'
+                        WHEN nts_score >= 80 THEN '80-89'
+                        WHEN nts_score >= 70 THEN '70-79'
+                        WHEN nts_score >= 60 THEN '60-69'
+                        ELSE '<60'
+                    END
+            )
+            SELECT *
+            FROM grouped
+            ORDER BY
+                CASE nts_score_range
+                    WHEN '90-100' THEN 1
+                    WHEN '80-89' THEN 2
+                    WHEN '70-79' THEN 3
+                    WHEN '60-69' THEN 4
+                    ELSE 5
+                END
+        """, (version, version))
+        nts_score_click_rate = cur.fetchall()
+
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            )
+            SELECT
+                a.created_at AS action_time,
+                a.action_type,
+                r.model_version,
+                r.query_id,
+                r.rank,
+                r.toilet_name,
+                r.distance_m,
+                r.nts_score,
+                r.distance_score,
+                r.trust_score,
+                r.info_score,
+                r.status_score
+            FROM user_actions a
+            JOIN filtered r
+              ON a.query_id = r.query_id
+             AND a.toilet_id = r.toilet_id
+            WHERE a.action_type = 'click_navigation'
+            ORDER BY a.created_at DESC
+            LIMIT 20
+        """, (version, version))
+        recent_clicks = cur.fetchall()
+
+        conn.close()
+        return jsonify({
+            "ok": True,
+            "version": version,
+            "version_counts": version_counts,
+            "summary": summary,
+            "rank_click_rate": rank_click_rate,
+            "nts_score_click_rate": nts_score_click_rate,
+            "recent_clicks": recent_clicks
+        })
+
+    except Exception as e:
+        logging.error(f"/api/nts-behavior failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 
 @app.route("/api/dashboard", methods=["GET"])
