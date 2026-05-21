@@ -1006,23 +1006,34 @@ def api_nts_behavior():
                   ON r.query_id = a.query_id
                  AND r.toilet_id = a.toilet_id
                  AND a.action_type = 'click_navigation'
+            ),
+            grouped AS (
+                SELECT
+                    CASE
+                        WHEN nts_score >= 90 THEN '90-100'
+                        WHEN nts_score >= 80 THEN '80-89'
+                        WHEN nts_score >= 70 THEN '70-79'
+                        WHEN nts_score >= 60 THEN '60-69'
+                        ELSE '<60'
+                    END AS nts_score_range,
+                    COUNT(*) AS shown_count,
+                    SUM(clicked) AS click_count,
+                    ROUND(
+                        SUM(clicked)::numeric / NULLIF(COUNT(*), 0) * 100,
+                        2
+                    ) AS click_rate_percent
+                FROM shown
+                GROUP BY
+                    CASE
+                        WHEN nts_score >= 90 THEN '90-100'
+                        WHEN nts_score >= 80 THEN '80-89'
+                        WHEN nts_score >= 70 THEN '70-79'
+                        WHEN nts_score >= 60 THEN '60-69'
+                        ELSE '<60'
+                    END
             )
-            SELECT
-                CASE
-                    WHEN nts_score >= 90 THEN '90-100'
-                    WHEN nts_score >= 80 THEN '80-89'
-                    WHEN nts_score >= 70 THEN '70-79'
-                    WHEN nts_score >= 60 THEN '60-69'
-                    ELSE '<60'
-                END AS nts_score_range,
-                COUNT(*) AS shown_count,
-                SUM(clicked) AS click_count,
-                ROUND(
-                    SUM(clicked)::numeric / NULLIF(COUNT(*), 0) * 100,
-                    2
-                ) AS click_rate_percent
-            FROM shown
-            GROUP BY nts_score_range
+            SELECT *
+            FROM grouped
             ORDER BY
                 CASE nts_score_range
                     WHEN '90-100' THEN 1
