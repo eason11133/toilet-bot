@@ -878,6 +878,211 @@ def go_to_toilet():
 
     return redirect(f"https://www.google.com/maps/search/?api=1&query={lat},{lon}")
 
+@app.route("/api/nts-behavior")
+def api_nts_behavior():
+    """
+    NTS 行為分析 API
+    用法：
+    /api/nts-behavior
+    /api/nts-behavior?version=nts_1_0
+    /api/nts-behavior?version=trust_score_2_0
+    """
+    if not POSTGRES_ENABLED:
+        return jsonify({
+            "ok": False,
+            "error": "Postgres not enabled"
+        }), 503
+
+    version = (request.args.get("version") or "all").strip()
+    if not version:
+        version = "all"
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1. 各版本資料量
+        cur.execute("""
+            SELECT
+                COALESCE(model_version, 'unknown') AS model_version,
+                COUNT(*) AS recommendation_rows,
+                COUNT(DISTINCT query_id) AS query_count
+            FROM recommendation_logs
+            GROUP BY COALESCE(model_version, 'unknown')
+            ORDER BY model_version
+        """)
+        version_counts = cur.fetchall()
+
+        # 2. 總覽 summary
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            clicks AS (
+                SELECT DISTINCT a.id
+                FROM user_actions a
+                JOIN filtered r
+                  ON a.query_id = r.query_id
+                 AND a.toilet_id = r.toilet_id
+                WHERE a.action_type = 'click_navigation'
+            )
+            SELECT
+                COUNT(*) AS recommendation_rows,
+                COUNT(DISTINCT query_id) AS query_count,
+                (SELECT COUNT(*) FROM clicks) AS navigation_clicks,
+                ROUND(
+                    (SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(*), 0) * 100,
+                    2
+                ) AS click_rate_by_recommendation_percent,
+                ROUND(
+                    (SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(DISTINCT query_id), 0) * 100,
+                    2
+                ) AS click_rate_by_query_percent
+            FROM filtered
+        """, (version, version))
+        summary = cur.fetchone()
+
+        # 3. 各 rank 點擊率
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            impressions AS (
+                SELECT
+                    rank,
+                    COUNT(*) AS shown_count
+                FROM filtered
+                GROUP BY rank
+            ),
+            clicks AS (
+                SELECT
+                    r.rank,
+                    COUNT(DISTINCT a.id) AS click_count
+                FROM user_actions a
+                JOIN filtered r
+                  ON a.query_id = r.query_id
+                 AND a.toilet_id = r.toilet_id
+                WHERE a.action_type = 'click_navigation'
+                GROUP BY r.rank
+            )
+            SELECT
+                i.rank,
+                i.shown_count,
+                COALESCE(c.click_count, 0) AS click_count,
+                ROUND(
+                    COALESCE(c.click_count, 0)::numeric / NULLIF(i.shown_count, 0) * 100,
+                    2
+                ) AS click_rate_percent
+            FROM impressions i
+            LEFT JOIN clicks c ON i.rank = c.rank
+            ORDER BY i.rank ASC
+        """, (version, version))
+        rank_click_rate = cur.fetchall()
+
+        # 4. NTS 分數區間點擊率
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            ),
+            shown AS (
+                SELECT
+                    r.id,
+                    r.query_id,
+                    r.toilet_id,
+                    r.rank,
+                    r.nts_score,
+                    CASE
+                        WHEN a.id IS NULL THEN 0
+                        ELSE 1
+                    END AS clicked
+                FROM filtered r
+                LEFT JOIN user_actions a
+                  ON r.query_id = a.query_id
+                 AND r.toilet_id = a.toilet_id
+                 AND a.action_type = 'click_navigation'
+            )
+            SELECT
+                CASE
+                    WHEN nts_score >= 90 THEN '90-100'
+                    WHEN nts_score >= 80 THEN '80-89'
+                    WHEN nts_score >= 70 THEN '70-79'
+                    WHEN nts_score >= 60 THEN '60-69'
+                    ELSE '<60'
+                END AS nts_score_range,
+                COUNT(*) AS shown_count,
+                SUM(clicked) AS click_count,
+                ROUND(
+                    SUM(clicked)::numeric / NULLIF(COUNT(*), 0) * 100,
+                    2
+                ) AS click_rate_percent
+            FROM shown
+            GROUP BY nts_score_range
+            ORDER BY
+                CASE nts_score_range
+                    WHEN '90-100' THEN 1
+                    WHEN '80-89' THEN 2
+                    WHEN '70-79' THEN 3
+                    WHEN '60-69' THEN 4
+                    ELSE 5
+                END
+        """, (version, version))
+        nts_score_click_rate = cur.fetchall()
+
+        # 5. 最近導航點擊紀錄
+        cur.execute("""
+            WITH filtered AS (
+                SELECT *
+                FROM recommendation_logs
+                WHERE (%s = 'all' OR model_version = %s)
+            )
+            SELECT
+                a.created_at AS action_time,
+                a.action_type,
+                r.model_version,
+                r.query_id,
+                r.rank,
+                r.toilet_name,
+                r.distance_m,
+                r.nts_score,
+                r.distance_score,
+                r.trust_score,
+                r.info_score,
+                r.status_score
+            FROM user_actions a
+            JOIN filtered r
+              ON a.query_id = r.query_id
+             AND a.toilet_id = r.toilet_id
+            WHERE a.action_type = 'click_navigation'
+            ORDER BY a.created_at DESC
+            LIMIT 20
+        """, (version, version))
+        recent_clicks = cur.fetchall()
+
+        conn.close()
+
+        return jsonify({
+            "ok": True,
+            "version": version,
+            "version_counts": version_counts,
+            "summary": summary,
+            "rank_click_rate": rank_click_rate,
+            "nts_score_click_rate": nts_score_click_rate,
+            "recent_clicks": recent_clicks
+        })
+
+    except Exception as e:
+        logging.error(f"/api/nts-behavior failed: {e}", exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
+    
 # === 自我激活設定 ===
 KEEPALIVE_URL = (
     os.getenv("KEEPALIVE_URL")
