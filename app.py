@@ -1128,6 +1128,28 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_created_at ON user_actions(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_action_type ON user_actions(action_type)")
 
+        # === NTS 2.0：資料來源查詢耗時與 OSM fallback 紀錄 ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS source_query_logs (
+            id BIGSERIAL PRIMARY KEY,
+            query_id TEXT,
+            user_id_hash TEXT,
+            model_version TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            source_name TEXT NOT NULL,
+            used_osm BOOLEAN DEFAULT FALSE,
+            result_count INTEGER DEFAULT 0,
+            elapsed_ms INTEGER,
+            success BOOLEAN DEFAULT TRUE,
+            reason TEXT,
+            error_message TEXT
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_query_id ON source_query_logs(query_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_model_version ON source_query_logs(model_version)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_source_name ON source_query_logs(source_name)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_created_at ON source_query_logs(created_at)")
+
         conn.commit()
         conn.close()
         logging.info("✅ Postgres persistent store ready")
@@ -1491,29 +1513,89 @@ def _score_distance(distance_m):
 
 def _score_trust(t):
     """
-    資料可信度分數：
-    - 政府 CSV / OSM 資料可信度高
-    - 使用者新增 approved 次高
-    - 使用者新增 pending 可顯示但分數較低
-    - rejected 不應進入候選，保險起見給 0
+    Trust Score 2.0：資料可信度分數。
+
+    評估重點：
+    1. 資料來源
+    2. 後台驗證狀態
+    3. 後台 verification_score
+    4. 資訊完整度輔助
+    5. 資料新鮮度
     """
     source = (t.get("source") or t.get("type") or "").lower()
-    status = (t.get("verification_status") or "pending").lower()
+    status = (t.get("verification_status") or "").lower()
 
+    # rejected 直接視為不可信；sort_toilets_nts 也會排除 rejected，這裡再保險一次
     if status == "rejected":
         return 0
 
-    if source in ("public_csv", "government", "osm", "overpass"):
-        return 100
+    # === 1. 基礎來源分數 ===
+    if source in ("public_csv", "government"):
+        score = 85
+    elif source in ("osm", "overpass"):
+        score = 75
+    elif source in ("neon", "user_added", "user", "saved"):
+        score = 60
+    else:
+        score = 60
 
+    # === 2. 後台驗證狀態 ===
     if status == "approved":
-        return 90
+        score += 20
+    elif status == "pending":
+        score += 0
+    elif status in ("needs_review", "review"):
+        score -= 10
 
-    if status == "pending":
-        return 60
+    # === 3. 後台 verification_score 輔助 ===
+    try:
+        v_score = t.get("verification_score")
+        if v_score not in (None, ""):
+            v_score = float(v_score)
+            # verification_score 若是 0~100，轉成最多約 ±10 分影響
+            score += (v_score - 50) / 5
+    except Exception:
+        pass
 
-    return 60
+    # === 4. 資訊完整度輔助 ===
+    try:
+        completeness_bonus = 0
+        if t.get("address"):
+            completeness_bonus += 3
+        if t.get("floor_hint") or t.get("level"):
+            completeness_bonus += 3
+        if t.get("entrance_hint"):
+            completeness_bonus += 3
+        if t.get("open_hours"):
+            completeness_bonus += 2
+        score += completeness_bonus
+    except Exception:
+        pass
 
+    # === 5. 資料新鮮度 ===
+    try:
+        ts = t.get("updated_at") or t.get("created_at")
+        if ts:
+            if isinstance(ts, str):
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            else:
+                dt = ts
+
+            now = datetime.now(timezone.utc)
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+
+            age_days = (now - dt).days
+            if age_days > 730:
+                score -= 10
+            elif age_days > 365:
+                score -= 5
+            elif age_days <= 30:
+                score += 5
+    except Exception:
+        pass
+
+    return max(0, min(round(score, 2), 100))
 
 def _score_info(t):
     """
@@ -1539,26 +1621,44 @@ def _score_info(t):
 
 def _score_status(t):
     """
-    即時狀態分數：
-    正常 / 恢復正常加分，暫停使用扣分。
-    如果沒有狀態資料，給中性分數。
-    """
-    s = (t.get("status") or t.get("status_text") or "").strip()
+    Status Score 2.0：設施目前可用狀態分數。
 
+    評估重點：
+    1. 明確停用/故障/維修 → 大幅降分
+    2. 明確正常/可使用 → 加分
+    3. 沒有狀態 → 中性分數
+    4. 使用者文字回報與 note 一併判斷
+    """
+    texts = []
+    for key in ["status", "status_text", "note", "verification_reason", "reject_reason"]:
+        val = t.get(key)
+        if val:
+            texts.append(str(val))
+
+    s = " ".join(texts).strip()
     if not s:
         return 70
 
-    bad_keywords = ["暫停", "故障", "維修", "關閉", "不能使用", "無法使用"]
-    good_keywords = ["正常", "恢復", "可使用"]
+    bad_keywords = [
+        "暫停", "故障", "維修", "關閉", "不能使用", "無法使用",
+        "停用", "封閉", "施工", "撤除", "不存在", "錯誤", "rejected"
+    ]
+    warning_keywords = [
+        "不確定", "待確認", "可能", "髒", "很髒", "沒有衛生紙",
+        "位置不清楚", "入口不明", "找不到"
+    ]
+    good_keywords = [
+        "正常", "恢復", "可使用", "開放", "乾淨", "有衛生紙",
+        "確認可用", "已確認"
+    ]
 
     if any(k in s for k in bad_keywords):
         return 0
-
+    if any(k in s for k in warning_keywords):
+        return 45
     if any(k in s for k in good_keywords):
-        return 100
-
+        return 95
     return 70
-
 
 def compute_nts_score(t):
     """
@@ -1710,6 +1810,42 @@ def log_user_action(query_id, uid, toilet_id, action_type, extra_info=""):
 
     except Exception as e:
         logging.warning(f"log_user_action failed: {e}", exc_info=True)
+
+
+def log_source_query(query_id, uid, source_name, result_count=0, elapsed_ms=None, success=True, reason="", error_message="", used_osm=False):
+    """
+    記錄各資料來源查詢耗時與 OSM fallback 使用情形。
+    用來比較：不用 OSM / 使用 OSM 的次數與耗時。
+    """
+    if not POSTGRES_ENABLED:
+        return
+
+    try:
+        model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO source_query_logs (
+                query_id, user_id_hash, model_version, source_name,
+                used_osm, result_count, elapsed_ms, success, reason, error_message
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            query_id or "",
+            mask_user_id(uid),
+            model_version,
+            source_name,
+            bool(used_osm),
+            int(result_count or 0),
+            int(elapsed_ms) if elapsed_ms is not None else None,
+            bool(success),
+            reason or "",
+            str(error_message or "")[:500]
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"log_source_query failed: {e}", exc_info=True)
 
 # === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
 def init_gsheet():
@@ -5659,6 +5795,67 @@ document.addEventListener('DOMContentLoaded', loadNtsBehavior);
     return Response(html, mimetype="text/html; charset=utf-8")
 
 
+
+@app.route("/api/source-query-metrics")
+def api_source_query_metrics():
+    """
+    資料來源查詢耗時分析 API
+    用法：
+    /api/source-query-metrics
+    /api/source-query-metrics?version=trust_score_2_0
+    """
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "error": "Postgres not enabled"}), 503
+
+    version = (request.args.get("version") or "all").strip() or "all"
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute("""
+            SELECT
+                COALESCE(model_version, 'unknown') AS model_version,
+                source_name,
+                COUNT(*) AS call_count,
+                SUM(CASE WHEN used_osm THEN 1 ELSE 0 END) AS used_osm_count,
+                ROUND(AVG(elapsed_ms)::numeric, 2) AS avg_elapsed_ms,
+                MAX(elapsed_ms) AS max_elapsed_ms,
+                SUM(result_count) AS total_result_count,
+                SUM(CASE WHEN success THEN 1 ELSE 0 END) AS success_count
+            FROM source_query_logs
+            WHERE (%s = 'all' OR model_version = %s)
+            GROUP BY COALESCE(model_version, 'unknown'), source_name
+            ORDER BY model_version, source_name
+        """, (version, version))
+        by_source = cur.fetchall()
+
+        cur.execute("""
+            SELECT
+                COALESCE(model_version, 'unknown') AS model_version,
+                reason,
+                COUNT(*) AS count,
+                ROUND(AVG(elapsed_ms)::numeric, 2) AS avg_elapsed_ms
+            FROM source_query_logs
+            WHERE (%s = 'all' OR model_version = %s)
+              AND source_name = 'total'
+            GROUP BY COALESCE(model_version, 'unknown'), reason
+            ORDER BY model_version, reason
+        """, (version, version))
+        total_reason = cur.fetchall()
+
+        conn.close()
+        return jsonify({
+            "ok": True,
+            "version": version,
+            "by_source": by_source,
+            "total_reason": total_reason
+        })
+    except Exception as e:
+        logging.error(f"/api/source-query-metrics failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/nts-behavior")
 def api_nts_behavior():
     """
@@ -5899,40 +6096,104 @@ _pool = ThreadPoolExecutor(max_workers=2)
 def build_nearby_toilets(uid, lat, lon, radius=500):
     # 預設使用 NTS 排序；若要回到純距離排序，可設定 TOILET_SORT_ALGO=distance_only
     algo = os.getenv("TOILET_SORT_ALGO", "nts_score").strip().lower()
+    model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
 
-    # === Grid cache key（加入 algo，避免切換排序後吃到舊快取）===
+    # OSM fallback 策略：先查本地/Neon 資料，不足再查 OSM
+    try:
+        osm_fallback_min = int(os.getenv("OSM_FALLBACK_MIN_RESULTS", "2"))
+    except Exception:
+        osm_fallback_min = 2
+    osm_fallback_min = max(0, osm_fallback_min)
+    osm_enabled = os.getenv("OSM_FALLBACK_ENABLE", "1") == "1"
+
+    # === Grid cache key（加入 algo/model_version/OSM 策略，避免切換後吃到舊快取）===
     lat_g = grid_coord(lat)
     lon_g = grid_coord(lon)
-    query_key = f"nearby:{algo}:{lat_g},{lon_g},{radius}"
+    query_key = f"nearby:{algo}:{model_version}:osm{int(osm_enabled)}:min{osm_fallback_min}:{lat_g},{lon_g},{radius}"
 
     cached = get_cached_data(query_key)
     if cached:
         logging.debug(f"[cache hit] nearby {query_key}")
         return cached
 
-    futures = []
-    csv_res, saved_res, sheet_res, osm_res = [], [], [], []
+    query_id_for_source = "SRC_" + uuid.uuid4().hex[:16]
+    total_start = time.time()
+    csv_res, saved_res, osm_res = [], [], []
 
+    # === 第一階段：只查本地/Neon/政府資料，不先打 OSM，降低延遲 ===
+    futures = []
     try:
-        futures.append(("csv",   _pool.submit(query_public_csv_toilets, lat, lon, radius)))
-        futures.append(("saved", _pool.submit(query_saved_toilets,      lat, lon, radius)))
-        futures.append(("osm",   _pool.submit(query_overpass_toilets,   lat, lon, radius)))
+        futures.append(("csv", _pool.submit(query_public_csv_toilets, lat, lon, radius)))
+        futures.append(("saved", _pool.submit(query_saved_toilets, lat, lon, radius)))
 
         for name, fut in futures:
+            source_start = time.time()
             try:
                 res = fut.result(timeout=LOC_QUERY_TIMEOUT_SEC)
-                if   name == "csv":   csv_res   = res or []
-                elif name == "saved": saved_res = res or []
-                else:                  osm_res   = res or []
+                elapsed_ms = int((time.time() - source_start) * 1000)
+                if name == "csv":
+                    csv_res = res or []
+                else:
+                    saved_res = res or []
+                log_source_query(
+                    query_id=query_id_for_source,
+                    uid=uid,
+                    source_name=name,
+                    result_count=len(res or []),
+                    elapsed_ms=elapsed_ms,
+                    success=True,
+                    reason="primary_local_search",
+                    used_osm=False
+                )
             except FuturesTimeoutError:
+                elapsed_ms = int((time.time() - source_start) * 1000)
                 logging.warning(f"{name} 查詢逾時")
+                log_source_query(query_id_for_source, uid, name, 0, elapsed_ms, False, "timeout", "timeout", False)
             except Exception as e:
+                elapsed_ms = int((time.time() - source_start) * 1000)
                 logging.warning(f"{name} 查詢失敗: {e}")
-
+                log_source_query(query_id_for_source, uid, name, 0, elapsed_ms, False, "error", str(e), False)
     finally:
         for _, fut in futures:
             if not fut.done():
                 fut.cancel()
+
+    quick_no_osm = _merge_and_dedupe_lists(csv_res, saved_res)
+
+    # === 第二階段：候選不足才查 OSM ===
+    used_osm = False
+    if osm_enabled and len(quick_no_osm) < osm_fallback_min:
+        used_osm = True
+        source_start = time.time()
+        try:
+            osm_res = query_overpass_toilets(lat, lon, radius) or []
+            elapsed_ms = int((time.time() - source_start) * 1000)
+            log_source_query(
+                query_id=query_id_for_source,
+                uid=uid,
+                source_name="osm",
+                result_count=len(osm_res),
+                elapsed_ms=elapsed_ms,
+                success=True,
+                reason=f"fallback_candidates_lt_{osm_fallback_min}",
+                used_osm=True
+            )
+        except Exception as e:
+            elapsed_ms = int((time.time() - source_start) * 1000)
+            logging.warning(f"osm fallback 查詢失敗: {e}")
+            log_source_query(query_id_for_source, uid, "osm", 0, elapsed_ms, False, f"fallback_candidates_lt_{osm_fallback_min}", str(e), True)
+    else:
+        # 記錄 skipped，之後可統計省下多少 OSM 查詢
+        log_source_query(
+            query_id=query_id_for_source,
+            uid=uid,
+            source_name="osm",
+            result_count=0,
+            elapsed_ms=0,
+            success=True,
+            reason=f"skipped_candidates_gte_{osm_fallback_min}" if osm_enabled else "osm_disabled",
+            used_osm=False
+        )
 
     quick = _merge_and_dedupe_lists(csv_res, saved_res, osm_res)
 
@@ -5942,6 +6203,18 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
         quick = sort_toilets_nts(quick)
 
     result = quick[:LOC_MAX_RESULTS]
+
+    total_elapsed_ms = int((time.time() - total_start) * 1000)
+    log_source_query(
+        query_id=query_id_for_source,
+        uid=uid,
+        source_name="total",
+        result_count=len(result),
+        elapsed_ms=total_elapsed_ms,
+        success=True,
+        reason="used_osm" if used_osm else "without_osm",
+        used_osm=used_osm
+    )
 
     # === 寫入 cache（Grid cache）===
     save_cache(query_key, result)
