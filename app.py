@@ -1108,6 +1108,8 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_user_id_hash ON recommendation_logs(user_id_hash)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_created_at ON recommendation_logs(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_toilet_id ON recommendation_logs(toilet_id)")
+        cur.execute("ALTER TABLE recommendation_logs ADD COLUMN IF NOT EXISTS model_version TEXT DEFAULT 'nts_1_0'")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_recommendation_logs_model_version ON recommendation_logs(model_version)")
 
         # === NTS 2.0：使用者後續行為紀錄 ===
         cur.execute("""
@@ -1631,6 +1633,7 @@ def log_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit
     try:
         rows = []
         user_id_hash = mask_user_id(uid)
+        model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
 
         for rank, t in enumerate((toilets or [])[:limit], start=1):
             # 確保 NTS 四個節點分數存在
@@ -1655,7 +1658,8 @@ def log_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit
                 float(t.get("status_score", 0) or 0),
                 float(t.get("nts_score", 0) or 0),
                 t.get("source") or t.get("type") or "",
-                t.get("verification_status") or ""
+                t.get("verification_status") or "",
+                model_version
             ))
 
         if not rows:
@@ -1668,9 +1672,9 @@ def log_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit
                 query_id, user_id_hash, user_lat, user_lon,
                 rank, toilet_id, toilet_name, distance_m,
                 distance_score, trust_score, info_score, status_score,
-                nts_score, source, verification_status
+                nts_score, source, verification_status, model_version
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, rows)
         conn.commit()
         conn.close()
