@@ -9,7 +9,7 @@
     *{box-sizing:border-box} body{margin:0;font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif;background:var(--bg);color:var(--text)}
     .container{max-width:1500px;margin:0 auto;padding:24px}.topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px}
     h1{margin:0 0 6px;font-size:32px}.subtitle{margin:0;color:var(--muted);line-height:1.6}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn,.input{height:42px;border-radius:12px;border:1px solid var(--line);background:#fff;padding:0 14px;font-size:14px;color:var(--text)}
-    .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.08)}.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.08)}.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.btn.secondary{background:#f8fafc;color:var(--text)}.btn.warn{background:#fffbeb;color:#92400e;border-color:#f59e0b}.input.small{width:92px}
     .grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:20px}.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;min-height:128px}.card h3{margin:0 0 14px;color:var(--muted);font-size:14px}.num{font-size:32px;font-weight:800;line-height:1.1}.sub{font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
     .section{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:20px}.section h2{margin:0 0 14px;font-size:20px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.tab{border:none;border-radius:999px;padding:10px 14px;background:#f3f4f6;cursor:pointer}.tab.active{background:var(--primary);color:#fff}
     table{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:700}.mono{font-variant-numeric:tabular-nums}.pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;margin:2px}.status-approved{background:#ecfdf5;color:#047857}.status-pending{background:#fffbeb;color:#92400e}.status-rejected{background:#fef2f2;color:#991b1b}.flags{line-height:1.8}.reason{color:#374151;line-height:1.5}.small{font-size:12px;color:var(--muted)}.empty{color:var(--muted);padding:16px;background:#f9fafb;border-radius:12px}.bar{height:9px;background:#eef2ff;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;background:#6366f1;border-radius:999px}
@@ -20,7 +20,16 @@
 <div class="container">
   <div class="topbar">
     <div><h1>自動資料維護儀表板</h1><p class="subtitle">集中查看使用者新增廁所的自動驗證結果、待審資料、疑似重複與高風險標籤。</p></div>
-    <div class="actions"><a class="btn" href="/dashboard">← 回總覽儀表板</a><a class="btn" href="/dashboard/nts">NTS 排序分析 →</a><input id="tokenInput" class="input" placeholder="ADMIN_TOKEN" type="password"><button class="btn primary" id="loadBtn">載入資料</button><button class="btn" id="clearTokenBtn" type="button">清除密碼</button></div>
+    <div class="actions">
+      <a class="btn" href="/dashboard">← 回總覽儀表板</a>
+      <a class="btn" href="/dashboard/nts">NTS 排序分析 →</a>
+      <input id="tokenInput" class="input" placeholder="ADMIN_TOKEN" type="password">
+      <button class="btn secondary" id="clearTokenBtn" type="button">清除密碼</button>
+      <input id="reverifyLimit" class="input small" type="number" min="1" max="500" value="50" title="重新驗證筆數">
+      <button class="btn" id="previewReverifyBtn" type="button">預覽重新驗證</button>
+      <button class="btn warn" id="applyReverifyBtn" type="button">正式自動審核</button>
+      <button class="btn primary" id="loadBtn">載入資料</button>
+    </div>
   </div>
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
@@ -36,13 +45,13 @@ function renderSummary(){const s=DATA.summary||{};const cards=[['總資料數',s
 function renderFlags(){const flags=DATA.flag_counts||[]; if(!flags.length){flagList.innerHTML='<div class="empty">目前沒有風險標籤。</div>';return;} const max=Math.max(...flags.map(x=>x.count||0),1); flagList.innerHTML=flags.slice(0,20).map(x=>`<div style="display:grid;grid-template-columns:220px 70px 1fr;gap:12px;align-items:center;margin:10px 0"><strong>${esc(x.flag)}</strong><span class="mono">${fmt(x.count)}</span><div class="bar"><span style="width:${Math.round((x.count||0)/max*100)}%"></span></div></div>`).join('')}
 function renderTabs(){const q=DATA.queues||{};tabs.innerHTML=Object.keys(queueLabels).map(k=>`<button class="tab ${k===activeQueue?'active':''}" data-key="${k}">${queueLabels[k]} (${(q[k]||[]).length})</button>`).join('');tabs.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{activeQueue=b.dataset.key;renderTabs();renderQueue();});}
 function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="7"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}</td></tr>`).join('')}
-function getSavedToken(){return sessionStorage.getItem('maintenance_token')||'';}
-function saveToken(token){if(token){sessionStorage.setItem('maintenance_token',token);}}
-function clearSavedToken(){sessionStorage.removeItem('maintenance_token');}
-async function loadData(){const token=(tokenInput.value||getSavedToken()||'').trim(); if(token){saveToken(token); tokenInput.value=token;} summaryGrid.innerHTML='<div class="card"><h3>載入中</h3><div class="sub">正在讀取維護資料...</div></div>'; const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
-loadBtn.onclick=loadData;
-clearTokenBtn.onclick=()=>{clearSavedToken();tokenInput.value='';DATA=null;summaryGrid.innerHTML='';flagList.innerHTML='';tabs.innerHTML='';queueBody.innerHTML='';};
-window.addEventListener('DOMContentLoaded',()=>{const t=getSavedToken(); if(t){tokenInput.value=t; loadData();}});
+function getToken(){return (tokenInput.value||sessionStorage.getItem('maintenance_token')||'').trim();}
+function saveToken(token){if(token) sessionStorage.setItem('maintenance_token',token);}
+function clearToken(){sessionStorage.removeItem('maintenance_token'); tokenInput.value='';}
+function setLoading(text){summaryGrid.innerHTML=`<div class="card"><h3>處理中</h3><div class="sub">${esc(text)}</div></div>`;}
+async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
+async function runReverify(apply=false){const token=getToken(); if(!token){alert('請先輸入 ADMIN_TOKEN'); return;} saveToken(token); tokenInput.value=token; const limit=Math.max(1,Math.min(500,Number(reverifyLimit.value||50))); if(apply){const ok=confirm(`確定要正式自動審核 ${limit} 筆舊資料？這會寫入 Neon，改變 approved / pending / rejected 狀態。`); if(!ok) return;} setLoading(apply?`正在正式自動審核 ${limit} 筆資料...`:`正在預覽重新驗證 ${limit} 筆資料...`); try{const res=await fetch(`/admin/reverify-user-toilets?apply=${apply?1:0}&limit=${limit}&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(data.message||data.error||res.status)}</div></div>`;return;} const msg=`${apply?'正式套用':'預覽'}完成：approved ${data.counts?.approved??0}、pending ${data.counts?.pending??0}、rejected ${data.counts?.rejected??0}；掃描 ${data.scanned??0} 筆，更新 ${data.updated??0} 筆。`; alert(msg); await loadData(); }catch(err){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(err.message||err)}</div></div>`;}}
+loadBtn.onclick=loadData; previewReverifyBtn.onclick=()=>runReverify(false); applyReverifyBtn.onclick=()=>runReverify(true); clearTokenBtn.onclick=()=>{clearToken(); alert('已清除本分頁記住的密碼');}; window.addEventListener('DOMContentLoaded',()=>{const t=sessionStorage.getItem('maintenance_token')||''; if(t){tokenInput.value=t; loadData();}});
 </script>
 </body>
 </html>
