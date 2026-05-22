@@ -1067,6 +1067,29 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_lat_lon ON toilet_status_reports(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_created_at ON toilet_status_reports(created_at)")
 
+        # === Toilet cleanliness feedback reports（Neon 主儲存）===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS toilet_feedback_reports (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT,
+            display_name TEXT,
+            name TEXT,
+            address TEXT,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            rating INTEGER,
+            toilet_paper TEXT,
+            accessibility TEXT,
+            time_of_use TEXT,
+            comment TEXT,
+            cleanliness_score DOUBLE PRECISION,
+            floor_hint TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_reports_lat_lon ON toilet_feedback_reports(lat, lon)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_reports_created_at ON toilet_feedback_reports(created_at)")
+
         # === Favorites ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS favorites (
@@ -3437,6 +3460,173 @@ def api_status_report():
         logging.error(f"/api/status_report 寫入失敗: {e}")
         return {"ok": False, "message": "server error"}, 500
 
+
+# === Neon 清潔度回饋資料層 ===
+def _feedback_distance_m(lat1, lon1, lat2, lon2):
+    try:
+        return haversine(float(lat1), float(lon1), float(lat2), float(lon2))
+    except Exception:
+        return 999999
+
+
+def save_toilet_feedback_report(name, address, lat, lon, rating, toilet_paper, accessibility,
+                                time_of_use="", comment="", cleanliness_score=None,
+                                floor_hint="", user_id="", display_name=""):
+    """Write cleanliness feedback to Neon. Returns True/False."""
+    if not POSTGRES_ENABLED:
+        return False
+    try:
+        score_val = None
+        try:
+            if cleanliness_score not in (None, "", "未預測", "N/A"):
+                score_val = float(cleanliness_score)
+        except Exception:
+            score_val = None
+
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO toilet_feedback_reports (
+                user_id, display_name, name, address, lat, lon,
+                rating, toilet_paper, accessibility, time_of_use,
+                comment, cleanliness_score, floor_hint, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (
+            user_id or "", display_name or "", name or "", address or "",
+            float(lat), float(lon), int(rating) if str(rating).strip() else None,
+            toilet_paper or "", accessibility or "", time_of_use or "",
+            comment or "", score_val, floor_hint or ""
+        ))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error(f"寫入 Neon 清潔度回饋失敗: {e}", exc_info=True)
+        return False
+
+
+def get_feedback_reports_by_coord_neon(lat, lon, radius_m=None, limit=200):
+    """Read cleanliness feedback from Neon by nearby coordinate, not exact equality."""
+    if not POSTGRES_ENABLED:
+        return []
+    try:
+        lat_f = float(lat); lon_f = float(lon)
+        radius_m = float(radius_m or os.getenv("FEEDBACK_NEAR_M", "60"))
+        # 先用 bbox 篩，再用 haversine 精篩，避免小數位完全相等才找得到
+        dlat = radius_m / 111000.0
+        dlon = radius_m / (111000.0 * max(0.2, math.cos(math.radians(lat_f))))
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, user_id, display_name, name, address, lat, lon,
+                   rating, toilet_paper, accessibility, time_of_use,
+                   comment, cleanliness_score, floor_hint, created_at
+            FROM toilet_feedback_reports
+            WHERE lat BETWEEN %s AND %s
+              AND lon BETWEEN %s AND %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (lat_f-dlat, lat_f+dlat, lon_f-dlon, lon_f+dlon, int(limit)))
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            d = _feedback_distance_m(lat_f, lon_f, r.get("lat"), r.get("lon"))
+            if d <= radius_m:
+                item = dict(r)
+                item["_distance_m"] = round(d, 2)
+                out.append(item)
+        out.sort(key=lambda x: (x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        return out
+    except Exception as e:
+        logging.error(f"讀取 Neon 清潔度回饋失敗: {e}", exc_info=True)
+        return []
+
+
+def _format_feedback_dt(v):
+    try:
+        if hasattr(v, "astimezone"):
+            return v.astimezone(TW_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        return str(v or "")
+    except Exception:
+        return str(v or "")
+
+
+def _feedback_rows_to_template(rows):
+    out = []
+    for r in rows or []:
+        sc = r.get("cleanliness_score")
+        out.append({
+            "rating": "" if r.get("rating") is None else str(r.get("rating")),
+            "toilet_paper": r.get("toilet_paper") or "",
+            "accessibility": r.get("accessibility") or "",
+            "time_of_use": r.get("time_of_use") or "",
+            "comment": safe_html(r.get("comment") or ""),
+            "cleanliness_score": "" if sc is None else str(round(float(sc), 2)),
+            "created_at": _format_feedback_dt(r.get("created_at")),
+        })
+    return out
+
+
+def get_feedback_summary_by_coord_neon(lat, lon):
+    rows = get_feedback_reports_by_coord_neon(lat, lon)
+    if not rows:
+        return "尚無回饋資料"
+
+    scores = []
+    ratings = []
+    paper_counts = {"有": 0, "沒有": 0, "沒注意": 0}
+    access_counts = {"有": 0, "沒有": 0, "沒注意": 0}
+    comments = []
+    for r in rows:
+        try:
+            if r.get("cleanliness_score") is not None:
+                scores.append(float(r.get("cleanliness_score")))
+        except Exception:
+            pass
+        try:
+            if r.get("rating") is not None:
+                ratings.append(int(r.get("rating")))
+        except Exception:
+            pass
+        pp = (r.get("toilet_paper") or "").strip()
+        aa = (r.get("accessibility") or "").strip()
+        if pp in paper_counts:
+            paper_counts[pp] += 1
+        if aa in access_counts:
+            access_counts[aa] += 1
+        c = (r.get("comment") or "").strip()
+        if c:
+            comments.append(c)
+
+    avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
+    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else "—"
+    paper_main = max(paper_counts, key=paper_counts.get) if any(paper_counts.values()) else "未知"
+    access_main = max(access_counts, key=access_counts.get) if any(access_counts.values()) else "未知"
+    summary = (
+        f"🔍 筆數：{len(rows)}\n"
+        f"🧼 平均預測清潔分數：{avg_score}\n"
+        f"⭐ 平均使用者評分：{avg_rating}/10\n"
+        f"🧻 衛生紙：{paper_main}\n"
+        f"♿ 無障礙：{access_main}\n"
+    )
+    if comments:
+        summary += f"💬 最新留言：{comments[0]}"
+    return summary
+
+
+def get_feedback_avg_score_by_coord_neon(lat, lon):
+    rows = get_feedback_reports_by_coord_neon(lat, lon)
+    scores = []
+    for r in rows:
+        try:
+            if r.get("cleanliness_score") is not None:
+                scores.append(float(r.get("cleanliness_score")))
+        except Exception:
+            pass
+    return round(sum(scores) / len(scores), 2) if scores else "未預測"
+
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
@@ -3530,6 +3720,8 @@ def submit_feedback():
 
         hist_feats = []
         try:
+            if feedback_sheet is None:
+                raise RuntimeError("feedback_sheet not enabled; use Neon only")
             rows = feedback_sheet.get_all_values()
             header = rows[0]; data_rows = rows[1:]
             idx = _feedback_indices(header)
@@ -3565,13 +3757,32 @@ def submit_feedback():
 
         pred_with_hist = expected_from_feats([cur_feat] + hist_feats) or expected_from_feats([cur_feat]) or "未預測"
 
-        feedback_sheet.append_row([
-            name, address, rating, toilet_paper, accessibility, time_of_use,
-            comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            floor_hint
-        ], value_input_option="USER_ENTERED")
+        uid = (request.args.get("uid") or getv("uid", "") or "").strip()
+        display_name = (getv("display_name", "") or "").strip()
 
-        uid = (request.args.get("uid") or "").strip()
+        # ✅ Neon 主儲存：就算 Google Sheets 關閉，個別廁所回饋仍可正常寫入與讀取
+        saved_neon = save_toilet_feedback_report(
+            name=name, address=address, lat=lat, lon=lon, rating=rating,
+            toilet_paper=toilet_paper, accessibility=accessibility,
+            time_of_use=time_of_use, comment=comment,
+            cleanliness_score=pred_with_hist, floor_hint=floor_hint,
+            user_id=uid, display_name=display_name
+        )
+
+        # ✅ Google Sheets 只作為相容備份；未啟用時不再讓整個提交失敗
+        if feedback_sheet is not None:
+            try:
+                feedback_sheet.append_row([
+                    name, address, rating, toilet_paper, accessibility, time_of_use,
+                    comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    floor_hint
+                ], value_input_option="USER_ENTERED")
+            except Exception as e:
+                logging.warning(f"Google Sheets 回饋備份失敗，已保留 Neon 資料: {e}")
+
+        if not saved_neon and feedback_sheet is None:
+            return "提交失敗：Neon 未啟用，且 Google Sheets 未啟用", 500
+
         lang = (request.args.get("lang") or "").strip().lower()
         target = f"/toilet_feedback_by_coord/{lat}/{lon}"
         if uid:
@@ -3584,6 +3795,11 @@ def submit_feedback():
 
 # === 讀座標的回饋清單 ===
 def get_feedbacks_by_coord(lat, lon, tol=1e-6):
+    # ✅ Neon 主讀取：避免 Google Sheets 停用時個別頁顯示「無法連到雲端資料」
+    neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
+    if neon_rows:
+        return _feedback_rows_to_template(neon_rows)
+
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return []
@@ -3626,6 +3842,11 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
 
 # === 座標聚合統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
+    # ✅ Neon 主讀取
+    neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
+    if neon_rows:
+        return get_feedback_summary_by_coord_neon(lat, lon)
+
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return "尚無回饋資料"
@@ -4587,11 +4808,8 @@ def toilet_feedback(toilet_name):
 # === 新路由 ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
-    _ensure_sheets_ready()
-
     liff_id = _get_liff_status_id()
 
-    # ✅ 語言：優先用 querystring ?lang=，沒有就用資料庫記錄（需帶 uid）
     uid = (request.args.get("uid") or "").strip()
     lang = (request.args.get("lang") or "").strip().lower()
     if uid and not lang:
@@ -4602,53 +4820,56 @@ def toilet_feedback_by_coord(lat, lon):
         qs = request.args.to_dict(flat=True)
         qs["lang"] = lang
         return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
-    if feedback_sheet is None:
-        return render_template("toilet_feedback.html",
-                               toilet_name=f"廁所（{lat}, {lon}）",
-                               summary="（暫時無法連到雲端資料）",
-                               feedbacks=[], address=f"{lat},{lon}",
-                               avg_pred_score=("N/A" if lang=="en" else "未預測"), lat=lat, lon=lon,
-                               liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
+
     try:
-        name = f"廁所（{lat}, {lon}）"
-        summary = get_feedback_summary_by_coord(lat, lon)
-        feedbacks = get_feedbacks_by_coord(lat, lon)
+        lat_f, lon_f = _parse_lat_lon(lat, lon)
+        if lat_f is None or lon_f is None:
+            return "座標格式錯誤", 400
 
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header:
-            header = []
-        if not data:
-            data = []
+        name = f"廁所（{norm_coord(lat_f)}, {norm_coord(lon_f)}）"
+        address = f"{norm_coord(lat_f)},{norm_coord(lon_f)}"
 
-        idx = _feedback_indices(header)
+        summary = get_feedback_summary_by_coord(lat_f, lon_f)
+        feedbacks = get_feedbacks_by_coord(lat_f, lon_f)
+        avg_pred_score = get_feedback_avg_score_by_coord_neon(lat_f, lon_f)
 
-        def close(a, b, tol=1e-6):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
-
-        scores = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                sc, _, _, _ = _pred_from_row(r, idx)
-                if isinstance(sc, (int, float)):
-                    scores.append(float(sc))
-        avg_pred_score = round(sum(scores)/len(scores), 2) if scores else "未預測"
+        # 若 Neon 沒資料但 Sheets 有資料，才用 Sheets 算平均分數
+        if avg_pred_score == "未預測" and feedback_sheet is not None:
+            try:
+                header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+                idx = _feedback_indices(header or [])
+                scores = []
+                def close(a, b, tol=1e-4):
+                    try: return abs(float(a) - float(b)) <= tol
+                    except: return False
+                if idx["lat"] is not None and idx["lon"] is not None:
+                    for r in data or []:
+                        if len(r) <= max(idx["lat"], idx["lon"]):
+                            continue
+                        if close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f):
+                            sc, _, _, _ = _pred_from_row(r, idx)
+                            if isinstance(sc, (int, float)):
+                                scores.append(float(sc))
+                if scores:
+                    avg_pred_score = round(sum(scores)/len(scores), 2)
+            except Exception as e:
+                logging.warning(f"Sheets avg score fallback failed: {e}")
 
         return render_template(
             "toilet_feedback.html",
             toilet_name=name,
             summary=summary,
             feedbacks=feedbacks,
-            address=f"{lat},{lon}",
+            address=address,
             avg_pred_score=avg_pred_score,
-            lat=lat,
-            lon=lon,
-            liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh")
+            lat=norm_coord(lat_f),
+            lon=norm_coord(lon_f),
+            liff_id=liff_id,
+            uid=uid,
+            lang=(lang if lang in ["en","zh"] else "zh")
         )
     except Exception as e:
-        logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
+        logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}", exc_info=True)
         return "查詢失敗", 500
 
 # === 清潔度趨勢（名稱版別名） ===
@@ -4695,6 +4916,20 @@ def get_clean_trend_by_name(toilet_name):
 # === 清潔度趨勢 API ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
+    # ✅ Neon 主讀取：個別頁趨勢圖不再依賴 Google Sheets
+    try:
+        neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
+        trend = []
+        for r in reversed(neon_rows):
+            sc = r.get("cleanliness_score")
+            if sc is None:
+                continue
+            trend.append({"t": _format_feedback_dt(r.get("created_at")), "score": round(float(sc), 2)})
+        if trend:
+            return {"success": True, "data": trend}, 200
+    except Exception as e:
+        logging.warning(f"Neon clean trend fallback failed: {e}")
+
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return {"success": True, "data": []}, 200 
@@ -4846,11 +5081,6 @@ def api_ai_feedback_summary(lat, lon):
 
     try:
         _ensure_sheets_ready()
-        if feedback_sheet is None:
-            return jsonify({
-                "success": False,
-                "message": L(uid, "回饋表尚未就緒，請稍後再試", "Feedback sheet not ready, please try again later")
-            }), 503
 
         if client is None:
             return jsonify({
@@ -4879,47 +5109,43 @@ def api_ai_feedback_summary(lat, lon):
                 "message": L(uid, "lat/lon 格式錯誤", "Invalid latitude / longitude")
             }), 400
 
-        # 1️⃣ 從雲端回饋表抓資料
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return jsonify({
-                "success": True,
-                "summary": "",  # 讓前端依 lang 顯示自己的 no_data 文案，避免混語
-                "data": [],
-                "has_data": False
-            }), 200
-
-        idx = _feedback_indices(header)
-        if idx["lat"] is None or idx["lon"] is None:
-            return jsonify({
-                "success": False,
-                "message": L(uid, "缺少 lat/lon 欄位", "lat/lon column missing")
-            }), 400
-
-        def close(a, b, tol=1e-4):
-            try:
-                return abs(float(a) - float(b)) <= tol
-            except Exception:
-                return False
-
+        # 1️⃣ 從 Neon 清潔度回饋抓資料；若沒有，再 fallback Google Sheets
         matched = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
-                continue
-
-            def v(key):
-                i = idx.get(key)
-                return (r[i] if i is not None and i < len(r) else "").strip()
-
+        neon_rows = get_feedback_reports_by_coord_neon(lat_f, lon_f)
+        for r in neon_rows:
             matched.append({
-                "rating":     v("rating"),
-                "paper":      v("paper"),
-                "access":     v("access"),
-                "comment":    v("comment"),
-                "created_at": v("created"),
+                "rating": "" if r.get("rating") is None else str(r.get("rating")),
+                "paper": r.get("toilet_paper") or "",
+                "access": r.get("accessibility") or "",
+                "comment": r.get("comment") or "",
+                "created_at": _format_feedback_dt(r.get("created_at")),
             })
+
+        if not matched and feedback_sheet is not None:
+            header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+            if header and data:
+                idx = _feedback_indices(header)
+                if idx["lat"] is not None and idx["lon"] is not None:
+                    def close(a, b, tol=1e-4):
+                        try:
+                            return abs(float(a) - float(b)) <= tol
+                        except Exception:
+                            return False
+                    for r in data:
+                        if len(r) <= max(idx["lat"], idx["lon"]):
+                            continue
+                        if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
+                            continue
+                        def v(key):
+                            i = idx.get(key)
+                            return (r[i] if i is not None and i < len(r) else "").strip()
+                        matched.append({
+                            "rating":     v("rating"),
+                            "paper":      v("paper"),
+                            "access":     v("access"),
+                            "comment":    v("comment"),
+                            "created_at": v("created"),
+                        })
 
         if not matched:
             return jsonify({
@@ -6152,8 +6378,8 @@ function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
 function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
 function esc(s){
-  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'};
-  return String(s ?? '').replace(/[&<>\"']/g, m => map[m] || m);
+  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+  return String(s ?? '').replace(/[&<>"']/g, m => map[m] || m);
 }
 function bar(rate){ const v=Math.max(0, Math.min(100, Number(rate)||0)); return `<div class="bar"><span style="width:${v}%"></span></div>`; }
 function table(headers, rows, empty='目前沒有資料'){
