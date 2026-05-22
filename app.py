@@ -8027,11 +8027,137 @@ def _build_auto_verify_context():
     return {"items": items, "built_at": time.time()}
 
 
+
+_CHAIN_BRANDS = {
+    "7-11": ["7-11", "7-eleven", "711", "統一超商"],
+    "familymart": ["全家", "familymart"],
+    "hilife": ["萊爾富", "hilife"],
+    "okmart": ["ok超商", "ok mart"],
+    "pxmart": ["全聯"],
+    "poya": ["寶雅"],
+    "simplemart": ["美廉社"],
+    "mcdonalds": ["麥當勞", "mcdonald"],
+    "starbucks": ["星巴克", "starbucks"],
+}
+
+_GENERIC_DUP_NAMES = {
+    "廁所", "公廁", "公共廁所", "男廁", "女廁", "洗手間", "化妝室",
+    "toilet", "restroom", "wc", "bathroom", "無障礙廁所", "親子廁所"
+}
+
+
+def _detect_chain_brand(text):
+    """回傳連鎖品牌 key；同品牌不等於重複，只能當弱輔助。"""
+    s = (text or "").strip().lower()
+    if not s:
+        return ""
+    for brand, aliases in _CHAIN_BRANDS.items():
+        for a in aliases:
+            if a.lower() in s:
+                return brand
+    return ""
+
+
+def _strip_chain_brand_for_dup(text):
+    """移除連鎖品牌與廁所通用詞，留下門市/場域識別用。"""
+    s = _compact_toilet_name(text or "")
+    for aliases in _CHAIN_BRANDS.values():
+        for a in aliases:
+            s = s.replace(a.lower().replace(" ", ""), "")
+    s = re.sub(r"[-_()（）・,，。．\s]+", "", s)
+    return s
+
+
+def _is_generic_duplicate_name(text):
+    """判斷名稱是否太籠統；籠統名稱不能作為重複資料的強證據。"""
+    raw = (text or "").strip().lower()
+    compact = _compact_toilet_name(raw)
+    no_brand = _strip_chain_brand_for_dup(raw)
+    if not raw:
+        return True
+    if raw in _GENERIC_DUP_NAMES or compact in _GENERIC_DUP_NAMES:
+        return True
+    # 只剩品牌或只剩很短字串，例如 7-11、全家、寶雅、廁所
+    if len(no_brand) <= 1:
+        return True
+    return False
+
+
+def _strong_name_similarity_for_dup(a, b):
+    """
+    名稱相似度只作為輔助：
+    - 泛稱或連鎖品牌本身不當強證據
+    - 先移除「廁所/公廁」與品牌名，再比對門市/場域識別字
+    """
+    if _is_generic_duplicate_name(a) or _is_generic_duplicate_name(b):
+        return 0.0
+
+    a_core = _strip_chain_brand_for_dup(a)
+    b_core = _strip_chain_brand_for_dup(b)
+    raw_sim = _text_similarity(a, b)
+    core_sim = _text_similarity(a_core, b_core)
+
+    # 如果兩邊都是同一連鎖品牌，但沒有明確門市/場域識別，不用名稱判重複
+    brand_a = _detect_chain_brand(a)
+    brand_b = _detect_chain_brand(b)
+    if brand_a and brand_b and brand_a == brand_b and (len(a_core) < 2 or len(b_core) < 2):
+        return 0.0
+
+    return max(raw_sim * 0.85, core_sim)
+
+
+def _address_similarity_for_dup(a, b):
+    """地址比名稱更重要，但兩邊都要有足夠長度才可靠。"""
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if len(a) < 5 or len(b) < 5:
+        return 0.0
+    return _text_similarity(a, b)
+
+
+def _duplicate_level(distance_m, name_sim, addr_sim, same_brand=False):
+    """
+    Duplicate Detection 1.2：距離優先、地址優先，名稱只輔助。
+    回傳 high / medium / low / none。
+    """
+    try:
+        d = float(distance_m)
+    except Exception:
+        return "none"
+
+    # 地址高度相似 + 很近，才是最穩的重複證據
+    if d <= 30 and addr_sim >= 0.72:
+        return "high"
+
+    # 非泛稱的明確場域/門市名稱高度相似，且距離很近
+    if d <= 25 and name_sim >= 0.88:
+        return "high"
+
+    # 同品牌不能單獨判重複；必須還有地址或明確名稱輔助
+    if same_brand and d <= 20 and (addr_sim >= 0.60 or name_sim >= 0.82):
+        return "high"
+
+    if d <= 50 and addr_sim >= 0.62:
+        return "medium"
+    if d <= 40 and name_sim >= 0.82:
+        return "medium"
+    if same_brand and d <= 35 and (addr_sim >= 0.52 or name_sim >= 0.76):
+        return "medium"
+
+    # 極近但沒有文字證據，只能當低風險提醒，不直接讓資料 pending
+    if d <= 10 and (addr_sim >= 0.35 or name_sim >= 0.55):
+        return "low"
+
+    return "none"
+
+
 def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, context=None, exclude_id=None):
     """
     找疑似重複廁所資料。
-    - 若提供 context：直接用記憶體候選池比對，適合批次驗證。
-    - 若未提供 context：即時建立候選池，適合使用者新增單筆時使用。
+    Duplicate Detection 1.2：
+    - 距離是必要前提；距離遠不因名稱相似就判重複。
+    - 地址相似度比名稱更重要。
+    - 「7-11 / 全家 / 公廁」這類泛稱或品牌名不能當重複主證據。
     """
     out = []
     try:
@@ -8041,7 +8167,7 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, co
 
     target_name = name or ""
     target_addr = address or ""
-    target_name_c = _compact_toilet_name(target_name)
+    target_brand = _detect_chain_brand(target_name)
 
     if not (context and isinstance(context, dict) and isinstance(context.get("items"), list)):
         context = _build_auto_verify_context()
@@ -8062,12 +8188,16 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, co
             continue
         if d > radius_m:
             continue
+
         nm = r.get("name") or ""
         ad = r.get("address") or ""
-        name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
-        addr_sim = _text_similarity(target_addr, ad)
-        combined = max(name_sim, addr_sim * 0.9)
-        if d <= 20 or combined >= 0.45:
+        cand_brand = _detect_chain_brand(nm)
+        same_brand = bool(target_brand and cand_brand and target_brand == cand_brand)
+        name_sim = _strong_name_similarity_for_dup(target_name, nm)
+        addr_sim = _address_similarity_for_dup(target_addr, ad)
+        level = _duplicate_level(d, name_sim, addr_sim, same_brand=same_brand)
+
+        if level != "none":
             out.append({
                 "source": r.get("source") or "user_toilets",
                 "id": r.get("id") or "",
@@ -8076,10 +8206,17 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, co
                 "distance_m": round(d, 1),
                 "name_similarity": round(name_sim, 3),
                 "address_similarity": round(addr_sim, 3),
+                "same_brand": same_brand,
+                "duplicate_level": level,
                 "verification_status": r.get("verification_status") or "pending"
             })
 
-    out.sort(key=lambda x: (float(x.get("distance_m") or 9999), -max(float(x.get("name_similarity") or 0), float(x.get("address_similarity") or 0))))
+    level_order = {"high": 0, "medium": 1, "low": 2}
+    out.sort(key=lambda x: (
+        level_order.get(x.get("duplicate_level"), 9),
+        float(x.get("distance_m") or 9999),
+        -max(float(x.get("address_similarity") or 0), float(x.get("name_similarity") or 0))
+    ))
     return out[:limit]
 
 
@@ -8188,16 +8325,8 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     if _valid_global_coordinate(lat, lon):
         similar = find_similar_toilets(lat, lon, name=name, address=address, radius_m=50, limit=8, context=context, exclude_id=exclude_id)
 
-    high_dup = []
-    medium_dup = []
-    for s_item in similar:
-        d = float(s_item.get("distance_m") or 9999)
-        ns = float(s_item.get("name_similarity") or 0)
-        ads = float(s_item.get("address_similarity") or 0)
-        if d <= 20 and (ns >= 0.60 or ads >= 0.60):
-            high_dup.append(s_item)
-        elif d <= 50 and (ns >= 0.70 or ads >= 0.70):
-            medium_dup.append(s_item)
+    high_dup = [s_item for s_item in similar if s_item.get("duplicate_level") == "high"]
+    medium_dup = [s_item for s_item in similar if s_item.get("duplicate_level") == "medium"]
 
     if high_dup:
         score -= 30

@@ -95,11 +95,27 @@
     }
 
 
-    .nts-nav-btn {
+    .nts-nav-btn,
+    .maintenance-nav-btn {
       text-decoration: none;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      height: 40px;
+      padding: 0 16px;
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 14px;
+      transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .nts-nav-btn:hover,
+    .maintenance-nav-btn:hover {
+      transform: translateY(-1px);
+      background: #f8fafc;
     }
 
 
@@ -655,6 +671,7 @@
       <div class="controls">
         <div class="status" id="lineDataStatus">LINE 官方資料：每日更新一次</div>
         <a class="nts-nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
+        <a class="maintenance-nav-btn" href="/dashboard/maintenance">資料維護 →</a>
       </div>
     </div>
 
