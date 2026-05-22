@@ -8476,6 +8476,186 @@ def admin_reverify_user_toilets():
         logging.error(f"admin_reverify_user_toilets failed: {e}", exc_info=True)
         return jsonify({"ok": False, "message": str(e)}), 500
 
+
+
+# === Auto Maintenance Dashboard：自動驗證維護頁 ===
+def _parse_risk_flags_value(value):
+    """Parse risk_flags stored as JSON text/list into a safe list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if x not in (None, "")]
+    if isinstance(value, (dict, tuple)):
+        return [str(x) for x in value]
+    raw = str(value).strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [str(x) for x in data if x not in (None, "")]
+        if isinstance(data, dict):
+            return [str(k) for k, v in data.items() if v]
+    except Exception:
+        pass
+    # fallback: support comma separated or python-list-like text
+    raw = raw.strip("[]")
+    parts = [x.strip().strip("'\"") for x in raw.split(',')]
+    return [x for x in parts if x]
+
+
+def _parse_similar_toilets_value(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _maintenance_auth_ok():
+    token = (request.headers.get("X-Admin-Token") or request.args.get("token") or "").strip()
+    return (not ADMIN_TOKEN) or token == ADMIN_TOKEN
+
+
+@app.route("/api/maintenance-summary", methods=["GET"])
+def api_maintenance_summary():
+    """Auto Verification / maintenance queue summary.
+    Used by /dashboard/maintenance. Requires ADMIN_TOKEN when configured.
+    """
+    if not _maintenance_auth_ok():
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "message": "postgres disabled"}), 503
+
+    try:
+        limit = max(1, min(int(request.args.get("limit") or "500"), 3000))
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT
+                id, name, address, lat, lon,
+                verification_status, verification_score, verification_reason,
+                auto_verification_score, auto_verification_result, auto_verification_reason,
+                risk_flags, similar_toilets_json,
+                created_at, updated_at
+            FROM user_toilets
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+        conn.close()
+
+        status_counts = {"approved": 0, "pending": 0, "rejected": 0, "unknown": 0}
+        score_values = []
+        flag_counts = {}
+        queues = {
+            "pending": [],
+            "possible_duplicate": [],
+            "shop_access_unclear": [],
+            "generic_name": [],
+            "outside_primary_region": [],
+            "rejected": [],
+            "low_score": []
+        }
+
+        def row_item(r, flags=None, similar=None):
+            flags = flags if flags is not None else _parse_risk_flags_value(r.get("risk_flags"))
+            similar = similar if similar is not None else _parse_similar_toilets_value(r.get("similar_toilets_json"))
+            return {
+                "id": r.get("id"),
+                "name": r.get("name") or "",
+                "address": r.get("address") or "",
+                "status": r.get("verification_status") or "unknown",
+                "score": r.get("auto_verification_score") if r.get("auto_verification_score") is not None else r.get("verification_score"),
+                "reason": r.get("auto_verification_reason") or r.get("verification_reason") or "",
+                "risk_flags": flags,
+                "similar_count": len(similar),
+                "similar_toilets": similar[:3],
+                "updated_at": r.get("updated_at").isoformat() if hasattr(r.get("updated_at"), "isoformat") else str(r.get("updated_at") or "")
+            }
+
+        for r in rows:
+            status = (r.get("verification_status") or "unknown").lower()
+            if status not in status_counts:
+                status_counts["unknown"] += 1
+            else:
+                status_counts[status] += 1
+
+            try:
+                sc = r.get("auto_verification_score")
+                if sc is None:
+                    sc = r.get("verification_score")
+                if sc is not None:
+                    score_values.append(float(sc))
+            except Exception:
+                pass
+
+            flags = _parse_risk_flags_value(r.get("risk_flags"))
+            similar = _parse_similar_toilets_value(r.get("similar_toilets_json"))
+            for f in flags:
+                flag_counts[f] = flag_counts.get(f, 0) + 1
+
+            item = row_item(r, flags, similar)
+            if status == "pending" and len(queues["pending"]) < 80:
+                queues["pending"].append(item)
+            if status == "rejected" and len(queues["rejected"]) < 80:
+                queues["rejected"].append(item)
+            if any(f.startswith("possible_duplicate") for f in flags) and len(queues["possible_duplicate"]) < 80:
+                queues["possible_duplicate"].append(item)
+            if "shop_access_unclear" in flags and len(queues["shop_access_unclear"]) < 80:
+                queues["shop_access_unclear"].append(item)
+            if "name_too_generic" in flags and len(queues["generic_name"]) < 80:
+                queues["generic_name"].append(item)
+            if "outside_primary_region" in flags and len(queues["outside_primary_region"]) < 80:
+                queues["outside_primary_region"].append(item)
+            try:
+                item_score = float(item.get("score") or 0)
+                if item_score < 70 and len(queues["low_score"]) < 80:
+                    queues["low_score"].append(item)
+            except Exception:
+                pass
+
+        total = len(rows)
+        avg_score = round(sum(score_values) / len(score_values), 2) if score_values else 0
+        top_flags = [
+            {"flag": k, "count": v}
+            for k, v in sorted(flag_counts.items(), key=lambda kv: kv[1], reverse=True)
+        ]
+
+        return jsonify({
+            "ok": True,
+            "scanned": total,
+            "summary": {
+                "total": total,
+                "approved": status_counts.get("approved", 0),
+                "pending": status_counts.get("pending", 0),
+                "rejected": status_counts.get("rejected", 0),
+                "unknown": status_counts.get("unknown", 0),
+                "avg_auto_score": avg_score,
+                "risk_flag_types": len(flag_counts),
+                "risk_flag_total": sum(flag_counts.values()),
+                "pending_rate": round((status_counts.get("pending", 0) / total * 100), 2) if total else 0
+            },
+            "flag_counts": top_flags,
+            "queues": queues
+        })
+    except Exception as e:
+        logging.error(f"/api/maintenance-summary failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+
+@app.route("/dashboard/maintenance", methods=["GET"])
+def dashboard_maintenance():
+    return render_template("maintenance.html")
+
+
 # === Migration endpoints removed after Google Sheets → Neon migration completed ===
 @app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
 def admin_migrate_sheets_to_neon_disabled():
