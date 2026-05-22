@@ -7882,15 +7882,33 @@ def api_line_insights():
         }), 200
     
 
-# === Auto Verification 1.0：使用者新增廁所自動驗證 ===
-def _tw_coordinate_risk(lat, lon):
-    """台灣場景的座標合理性檢查。保留一點外島範圍。"""
+# === Auto Verification 1.1：使用者新增廁所自動驗證（全球座標 + 場域感知 + 高速批次） ===
+def _valid_global_coordinate(lat, lon):
+    """只檢查是否為合法地球座標，不再寫死台灣。"""
     try:
         lat = float(lat); lon = float(lon)
     except Exception:
-        return True
-    # 台灣本島與離島的大致外框，太寬鬆但足夠抓明顯錯誤
-    return not (21.5 <= lat <= 26.5 and 118.0 <= lon <= 123.5)
+        return False
+    return -90 <= lat <= 90 and -180 <= lon <= 180
+
+
+def _primary_region_risk(lat, lon):
+    """
+    選用功能：主要服務區域風險。
+    預設不啟用，避免誤殺海外資料。
+    若未來要限制主要服務區，可在 Render 設：
+      AUTO_VERIFY_PRIMARY_BBOX=21.5,118.0,26.5,123.5
+    格式：min_lat,min_lon,max_lat,max_lon
+    """
+    bbox = (os.getenv("AUTO_VERIFY_PRIMARY_BBOX") or "").strip()
+    if not bbox:
+        return False
+    try:
+        min_lat, min_lon, max_lat, max_lon = [float(x.strip()) for x in bbox.split(",")]
+        lat = float(lat); lon = float(lon)
+        return not (min_lat <= lat <= max_lat and min_lon <= lon <= max_lon)
+    except Exception:
+        return False
 
 
 def _text_similarity(a, b):
@@ -7903,16 +7921,117 @@ def _text_similarity(a, b):
 
 def _compact_toilet_name(name):
     s = (name or "").strip().lower()
-    for token in ["廁所", "公廁", "男廁", "女廁", "無障礙", "親子", "性別友善", "toilet", "restroom"]:
+    for token in ["廁所", "公廁", "男廁", "女廁", "無障礙", "親子", "性別友善", "toilet", "restroom", "wc"]:
         s = s.replace(token, "")
     return re.sub(r"\s+", "", s)
 
 
-def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8):
+def _facility_context(name="", address="", floor_hint="", entrance_hint="", access_note=""):
+    """
+    粗略判斷新增資料所屬場域，讓缺樓層/入口的扣分更合理。
+    outdoor：公園、流動公廁、宮廟、加油站等，通常不一定需要樓層。
+    shop：便利商店/店家型，是否開放給外部使用較不確定，需較保守。
+    indoor_complex：商場、車站、醫院、學校、大樓等，樓層/入口資訊較重要。
+    generic：名稱太籠統或資訊不足。
+    """
+    text = " ".join([str(name or ""), str(address or ""), str(floor_hint or ""), str(entrance_hint or ""), str(access_note or "")]).lower()
+
+    shop_keywords = [
+        "7-11", "711", "統一超商", "全家", "familymart", "萊爾富", "ok超商", "ok mart",
+        "全聯", "寶雅", "小北", "屈臣氏", "康是美", "麥當勞", "mos", "星巴克",
+        "便利商店", "超商"
+    ]
+    indoor_keywords = [
+        "百貨", "商場", "購物中心", "mall", "車站", "捷運", "高鐵", "火車站", "轉運站",
+        "醫院", "診所", "學校", "大學", "高中", "國中", "國小", "校區",
+        "大樓", "辦公", "地下街", "機場", "航廈", "市場", "影城", "圖書館", "美術館", "博物館"
+    ]
+    outdoor_keywords = [
+        "公園", "流動公廁", "活動廁所", "宮", "廟", "寺", "教堂", "戲台", "加油站",
+        "服務區", "休息站", "停車場", "海邊", "步道", "廣場", "河濱", "運動場"
+    ]
+
+    if any(k.lower() in text for k in shop_keywords):
+        return "shop"
+    if any(k.lower() in text for k in indoor_keywords):
+        return "indoor_complex"
+    if any(k.lower() in text for k in outdoor_keywords):
+        return "outdoor"
+    return "generic"
+
+
+def _is_test_or_garbage_name(name):
+    s = (name or "").strip().lower()
+    if not s:
+        return True
+    garbage = {"test", "testing", "aaa", "aaaa", "123", "111", "測試", "測試資料", "無", "none", "null"}
+    return s in garbage
+
+
+def _build_auto_verify_context():
+    """
+    高速批次驗證用：一次載入 user_toilets + public_toilets.csv。
+    避免每驗證一筆就重新掃 DB / CSV，讓 reverify 速度大幅提升。
+    """
+    items = []
+
+    if POSTGRES_ENABLED:
+        try:
+            conn = _pg_connect()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT id, name, address, lat, lon, verification_status, source
+                FROM user_toilets
+                WHERE lat IS NOT NULL AND lon IS NOT NULL
+                LIMIT 20000
+            """)
+            for r in cur.fetchall():
+                try:
+                    items.append({
+                        "source": r.get("source") or "user_toilets",
+                        "id": r.get("id"),
+                        "name": r.get("name") or "",
+                        "address": r.get("address") or "",
+                        "lat": float(r.get("lat")),
+                        "lon": float(r.get("lon")),
+                        "verification_status": r.get("verification_status") or "pending"
+                    })
+                except Exception:
+                    continue
+            conn.close()
+        except Exception as e:
+            logging.warning(f"_build_auto_verify_context user_toilets failed: {e}")
+
+    try:
+        if os.path.exists(TOILETS_FILE_PATH):
+            with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        lat = float(row.get("latitude") or row.get("lat") or "")
+                        lon = float(row.get("longitude") or row.get("lon") or "")
+                    except Exception:
+                        continue
+                    items.append({
+                        "source": "public_csv",
+                        "id": row.get("number") or row.get("id") or "",
+                        "name": row.get("name") or "",
+                        "address": row.get("address") or "",
+                        "lat": lat,
+                        "lon": lon,
+                        "verification_status": "approved"
+                    })
+    except Exception as e:
+        logging.warning(f"_build_auto_verify_context public_csv failed: {e}")
+
+    return {"items": items, "built_at": time.time()}
+
+
+def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, context=None, exclude_id=None):
     """
     找疑似重複廁所資料。
-    來源包含：使用者新增資料 user_toilets + 本地 public_toilets.csv。
-    回傳只保留後台判斷需要的欄位，避免過大。
+    - 若提供 context：直接用記憶體候選池比對，適合批次驗證。
+    - 若未提供 context：即時建立候選池，適合使用者新增單筆時使用。
     """
     out = []
     try:
@@ -7924,96 +8043,54 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8):
     target_addr = address or ""
     target_name_c = _compact_toilet_name(target_name)
 
-    # 1) Neon user_toilets
-    if POSTGRES_ENABLED:
+    if not (context and isinstance(context, dict) and isinstance(context.get("items"), list)):
+        context = _build_auto_verify_context()
+
+    for r in context.get("items") or []:
         try:
-            dlat = radius_m / 111000.0
-            dlon = radius_m / (111000.0 * max(0.1, math.cos(math.radians(lat))))
-            conn = _pg_connect()
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute("""
-                SELECT id, name, address, lat, lon, verification_status, source
-                FROM user_toilets
-                WHERE lat BETWEEN %s AND %s
-                  AND lon BETWEEN %s AND %s
-                ORDER BY created_at DESC
-                LIMIT 100
-            """, (lat - dlat, lat + dlat, lon - dlon, lon + dlon))
-            rows = cur.fetchall()
-            conn.close()
-            for r in rows:
-                try:
-                    d = haversine(lat, lon, float(r.get("lat")), float(r.get("lon")))
-                except Exception:
-                    continue
-                if d > radius_m:
-                    continue
-                nm = r.get("name") or ""
-                ad = r.get("address") or ""
-                name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
-                addr_sim = _text_similarity(target_addr, ad)
-                combined = max(name_sim, addr_sim * 0.9)
-                if d <= 20 or combined >= 0.45:
-                    out.append({
-                        "source": r.get("source") or "user_toilets",
-                        "id": r.get("id"),
-                        "name": nm,
-                        "address": ad,
-                        "distance_m": round(d, 1),
-                        "name_similarity": round(name_sim, 3),
-                        "address_similarity": round(addr_sim, 3),
-                        "verification_status": r.get("verification_status") or "pending"
-                    })
-        except Exception as e:
-            logging.warning(f"find_similar_toilets user_toilets failed: {e}")
+            # 批次重驗時，避免把自己判成自己的重複資料
+            if exclude_id is not None and str(r.get("id")) == str(exclude_id) and (r.get("source") in ("neon", "user_toilets", "user_added")):
+                continue
+            t_lat = float(r.get("lat")); t_lon = float(r.get("lon"))
+        except Exception:
+            continue
+        if not _in_bbox(t_lat, t_lon, lat, lon, radius_m):
+            continue
+        try:
+            d = haversine(lat, lon, t_lat, t_lon)
+        except Exception:
+            continue
+        if d > radius_m:
+            continue
+        nm = r.get("name") or ""
+        ad = r.get("address") or ""
+        name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
+        addr_sim = _text_similarity(target_addr, ad)
+        combined = max(name_sim, addr_sim * 0.9)
+        if d <= 20 or combined >= 0.45:
+            out.append({
+                "source": r.get("source") or "user_toilets",
+                "id": r.get("id") or "",
+                "name": nm,
+                "address": ad,
+                "distance_m": round(d, 1),
+                "name_similarity": round(name_sim, 3),
+                "address_similarity": round(addr_sim, 3),
+                "verification_status": r.get("verification_status") or "pending"
+            })
 
-    # 2) public_toilets.csv
-    try:
-        if os.path.exists(TOILETS_FILE_PATH):
-            with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    try:
-                        t_lat = float(row.get("latitude") or row.get("lat") or "")
-                        t_lon = float(row.get("longitude") or row.get("lon") or "")
-                    except Exception:
-                        continue
-                    if not _in_bbox(t_lat, t_lon, lat, lon, radius_m):
-                        continue
-                    d = haversine(lat, lon, t_lat, t_lon)
-                    if d > radius_m:
-                        continue
-                    nm = row.get("name") or ""
-                    ad = row.get("address") or ""
-                    name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
-                    addr_sim = _text_similarity(target_addr, ad)
-                    combined = max(name_sim, addr_sim * 0.9)
-                    if d <= 20 or combined >= 0.45:
-                        out.append({
-                            "source": "public_csv",
-                            "id": row.get("number") or "",
-                            "name": nm,
-                            "address": ad,
-                            "distance_m": round(d, 1),
-                            "name_similarity": round(name_sim, 3),
-                            "address_similarity": round(addr_sim, 3),
-                            "verification_status": "approved"
-                        })
-    except Exception as e:
-        logging.warning(f"find_similar_toilets public_csv failed: {e}")
-
-    # 排序：距離近、相似度高優先
     out.sort(key=lambda x: (float(x.get("distance_m") or 9999), -max(float(x.get("name_similarity") or 0), float(x.get("address_similarity") or 0))))
     return out[:limit]
 
 
-def auto_verify_user_toilet(toilet):
+def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     """
-    Auto Verification 1.0。
+    Auto Verification 1.1。
     只輸出三種 verification_status：approved / pending / rejected。
-    - approved：低風險，可直接進入推薦，但仍保留後台可抽查
-    - pending：需要人工確認或資料不足
-    - rejected：明顯錯誤，直接排除推薦
+    - 不再把「不在台灣」當錯誤，只檢查是否為合法地球座標。
+    - 不同場域使用不同資料完整度門檻。
+    - 疑似重複資料進 pending，不直接 rejected。
+    - rejected 僅保留給明顯錯誤或測試資料。
     """
     name = (toilet.get("name") or "").strip()
     address = (toilet.get("address") or "").strip()
@@ -8025,60 +8102,102 @@ def auto_verify_user_toilet(toilet):
     access_note = (toilet.get("access_note") or "").strip()
     open_hours = (toilet.get("open_hours") or "").strip()
 
-    score = 70
+    score = 72
     flags = []
     reasons = []
 
-    # 名稱品質
-    generic_names = {"廁所", "公廁", "男廁", "女廁", "無名稱", "toilet", "restroom", "test", "測試"}
+    if _is_test_or_garbage_name(name):
+        score -= 60
+        flags.append("invalid_or_test_name")
+        reasons.append("名稱空白或疑似測試資料")
+
+    if not _valid_global_coordinate(lat, lon):
+        score -= 80
+        flags.append("invalid_coordinate")
+        reasons.append("座標不是合法地球座標")
+    elif _primary_region_risk(lat, lon):
+        score -= 8
+        flags.append("outside_primary_region")
+        reasons.append("資料位於目前主要服務區域外，建議人工確認")
+
+    facility_type = _facility_context(name, address, floor_hint, entrance_hint, access_note)
+
+    generic_names = {"廁所", "公廁", "男廁", "女廁", "無名稱", "toilet", "restroom", "wc", "洗手間"}
     if not name or len(name) < 3 or name.lower() in generic_names:
         score -= 25
         flags.append("name_too_generic")
         reasons.append("名稱過短或過於籠統")
     else:
-        score += 5
+        score += 6
 
-    # 地址與可找性資訊
     if address:
-        score += 8
+        score += 10
     else:
-        score -= 15
+        score -= 18
         flags.append("missing_address")
         reasons.append("缺少地址")
 
-    if floor_hint or level:
-        score += 5
-    else:
-        score -= 6
-        flags.append("missing_floor_hint")
-        reasons.append("缺少樓層或位置描述")
+    has_floor = bool(floor_hint or level)
+    has_entrance = bool(entrance_hint or access_note)
 
-    if entrance_hint or access_note:
-        score += 5
+    if facility_type == "indoor_complex":
+        if has_floor:
+            score += 6
+        else:
+            score -= 12
+            flags.append("missing_floor_hint")
+            reasons.append("多樓層或室內場域缺少樓層資訊")
+        if has_entrance:
+            score += 6
+        else:
+            score -= 8
+            flags.append("missing_entrance_hint")
+            reasons.append("室內或大型場域缺少入口/位置提示")
+    elif facility_type == "shop":
+        if has_floor:
+            score += 3
+        if has_entrance or access_note or open_hours:
+            score += 6
+        else:
+            score -= 10
+            flags.append("shop_access_unclear")
+            reasons.append("店家型資料缺少是否開放或入口說明")
+        if not address:
+            score -= 10
+            flags.append("shop_missing_address")
+    elif facility_type == "outdoor":
+        if has_entrance:
+            score += 6
+        elif not address:
+            score -= 6
+            flags.append("outdoor_location_unclear")
+            reasons.append("戶外場域缺少地址或位置提示")
     else:
-        flags.append("missing_entrance_hint")
+        if has_floor:
+            score += 3
+        if has_entrance:
+            score += 4
+        else:
+            score -= 3
+            flags.append("missing_entrance_hint")
 
     if open_hours:
         score += 2
 
-    # 座標合理性
-    if _tw_coordinate_risk(lat, lon):
-        score -= 45
-        flags.append("coordinate_out_of_taiwan_range")
-        reasons.append("座標超出台灣服務範圍")
+    similar = []
+    if _valid_global_coordinate(lat, lon):
+        similar = find_similar_toilets(lat, lon, name=name, address=address, radius_m=50, limit=8, context=context, exclude_id=exclude_id)
 
-    # 疑似重複資料
-    similar = find_similar_toilets(lat, lon, name=name, address=address, radius_m=50, limit=8)
     high_dup = []
     medium_dup = []
-    for s in similar:
-        d = float(s.get("distance_m") or 9999)
-        ns = float(s.get("name_similarity") or 0)
-        ads = float(s.get("address_similarity") or 0)
-        if d <= 20 and (ns >= 0.55 or ads >= 0.55):
-            high_dup.append(s)
-        elif d <= 50 and (ns >= 0.65 or ads >= 0.65):
-            medium_dup.append(s)
+    for s_item in similar:
+        d = float(s_item.get("distance_m") or 9999)
+        ns = float(s_item.get("name_similarity") or 0)
+        ads = float(s_item.get("address_similarity") or 0)
+        if d <= 20 and (ns >= 0.60 or ads >= 0.60):
+            high_dup.append(s_item)
+        elif d <= 50 and (ns >= 0.70 or ads >= 0.70):
+            medium_dup.append(s_item)
 
     if high_dup:
         score -= 30
@@ -8091,10 +8210,19 @@ def auto_verify_user_toilet(toilet):
 
     score = max(0, min(100, int(round(score))))
 
-    # 只產生 approved / pending / rejected 三種狀態
-    if "coordinate_out_of_taiwan_range" in flags or ("name_too_generic" in flags and score < 45):
+    if "invalid_coordinate" in flags or "invalid_or_test_name" in flags:
         status = "rejected"
-    elif score >= 80 and not high_dup:
+    elif high_dup:
+        status = "pending"
+    elif "outside_primary_region" in flags:
+        status = "pending"
+    elif facility_type == "shop" and ("shop_access_unclear" in flags or "missing_address" in flags):
+        status = "pending"
+    elif facility_type == "indoor_complex" and ("missing_floor_hint" in flags or "missing_entrance_hint" in flags) and score < 86:
+        status = "pending"
+    elif "name_too_generic" in flags:
+        status = "pending"
+    elif score >= 78:
         status = "approved"
     else:
         status = "pending"
@@ -8105,15 +8233,16 @@ def auto_verify_user_toilet(toilet):
         elif status == "pending":
             reasons.append("資料可用但仍建議後台確認")
         else:
-            reasons.append("資料存在明顯風險，系統建議排除")
+            reasons.append("資料存在明顯錯誤，系統建議排除")
 
     return {
         "verification_status": status,
         "auto_verification_score": score,
         "auto_verification_result": status,
-        "auto_verification_reason": "；".join(reasons),
+        "auto_verification_reason": "；".join(dict.fromkeys(reasons)),
         "risk_flags": sorted(set(flags)),
-        "similar_toilets": similar[:5]
+        "similar_toilets": similar[:5],
+        "facility_type": facility_type
     }
 
 # === 使用者新增廁所 API ===
@@ -8252,7 +8381,8 @@ def submit_toilet():
             "auto_verification_score": verification_score,
             "auto_verification_result": verification_status,
             "risk_flags": av.get("risk_flags") or [],
-            "similar_toilets": av.get("similar_toilets") or []
+            "similar_toilets": av.get("similar_toilets") or [],
+            "facility_type": av.get("facility_type")
         }
 
     except Exception as e:
@@ -8287,8 +8417,10 @@ def admin_reverify_user_toilets():
         """, (limit,))
         rows = cur.fetchall()
 
+        verify_context = _build_auto_verify_context()
+
         for r in rows:
-            av = auto_verify_user_toilet(r)
+            av = auto_verify_user_toilet(r, context=verify_context, exclude_id=r.get("id"))
             st = av["verification_status"]
             counts[st] = counts.get(st, 0) + 1
             preview.append({
@@ -8297,6 +8429,7 @@ def admin_reverify_user_toilets():
                 "old_status": r.get("verification_status") or "pending",
                 "new_status": st,
                 "score": av["auto_verification_score"],
+                "facility_type": av.get("facility_type"),
                 "reason": av["auto_verification_reason"],
                 "risk_flags": av.get("risk_flags") or []
             })
