@@ -20,7 +20,7 @@
 <div class="container">
   <div class="topbar">
     <div><h1>自動資料維護儀表板</h1><p class="subtitle">集中查看使用者新增廁所的自動驗證結果、待審資料、疑似重複與高風險標籤。</p></div>
-    <div class="actions"><a class="btn" href="/dashboard">← 回總覽儀表板</a><a class="btn" href="/dashboard/nts">NTS 排序分析 →</a><input id="tokenInput" class="input" placeholder="ADMIN_TOKEN" type="password"><button class="btn primary" id="loadBtn">載入資料</button></div>
+    <div class="actions"><a class="btn" href="/dashboard">← 回總覽儀表板</a><a class="btn" href="/dashboard/nts">NTS 排序分析 →</a><input id="tokenInput" class="input" placeholder="ADMIN_TOKEN" type="password"><button class="btn primary" id="loadBtn">載入資料</button><button class="btn" id="clearTokenBtn" type="button">清除密碼</button></div>
   </div>
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
@@ -36,8 +36,13 @@ function renderSummary(){const s=DATA.summary||{};const cards=[['總資料數',s
 function renderFlags(){const flags=DATA.flag_counts||[]; if(!flags.length){flagList.innerHTML='<div class="empty">目前沒有風險標籤。</div>';return;} const max=Math.max(...flags.map(x=>x.count||0),1); flagList.innerHTML=flags.slice(0,20).map(x=>`<div style="display:grid;grid-template-columns:220px 70px 1fr;gap:12px;align-items:center;margin:10px 0"><strong>${esc(x.flag)}</strong><span class="mono">${fmt(x.count)}</span><div class="bar"><span style="width:${Math.round((x.count||0)/max*100)}%"></span></div></div>`).join('')}
 function renderTabs(){const q=DATA.queues||{};tabs.innerHTML=Object.keys(queueLabels).map(k=>`<button class="tab ${k===activeQueue?'active':''}" data-key="${k}">${queueLabels[k]} (${(q[k]||[]).length})</button>`).join('');tabs.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{activeQueue=b.dataset.key;renderTabs();renderQueue();});}
 function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="7"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}</td></tr>`).join('')}
-async function loadData(){const token=(tokenInput.value||localStorage.getItem('maintenance_token')||'').trim(); if(token){localStorage.setItem('maintenance_token',token); tokenInput.value=token;} summaryGrid.innerHTML='<div class="card"><h3>載入中</h3><div class="sub">正在讀取維護資料...</div></div>'; const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
-loadBtn.onclick=loadData; window.addEventListener('DOMContentLoaded',()=>{const t=localStorage.getItem('maintenance_token')||''; if(t){tokenInput.value=t; loadData();}});
+function getSavedToken(){return sessionStorage.getItem('maintenance_token')||'';}
+function saveToken(token){if(token){sessionStorage.setItem('maintenance_token',token);}}
+function clearSavedToken(){sessionStorage.removeItem('maintenance_token');}
+async function loadData(){const token=(tokenInput.value||getSavedToken()||'').trim(); if(token){saveToken(token); tokenInput.value=token;} summaryGrid.innerHTML='<div class="card"><h3>載入中</h3><div class="sub">正在讀取維護資料...</div></div>'; const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
+loadBtn.onclick=loadData;
+clearTokenBtn.onclick=()=>{clearSavedToken();tokenInput.value='';DATA=null;summaryGrid.innerHTML='';flagList.innerHTML='';tabs.innerHTML='';queueBody.innerHTML='';};
+window.addEventListener('DOMContentLoaded',()=>{const t=getSavedToken(); if(t){tokenInput.value=t; loadData();}});
 </script>
 </body>
 </html>
