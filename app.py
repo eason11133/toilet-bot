@@ -5927,6 +5927,8 @@ def dashboard_nts_page():
     .card{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.k{color:var(--muted);font-size:13px;font-weight:700}.v{font-size:30px;font-weight:800;margin-top:8px}.s{font-size:13px;color:var(--muted);margin-top:8px}.section{background:var(--card);border-radius:18px;padding:18px;margin-top:16px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
     .section h2{font-size:19px;margin:0 0 12px}.hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.6}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#374151;background:#f9fafb}.rate{font-weight:800;color:var(--good)}.empty{color:var(--muted);padding:18px}.bar{height:8px;background:#eef2ff;border-radius:999px;overflow:hidden;min-width:90px}.bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:960px){.split{grid-template-columns:1fr}}
     .loading{color:var(--muted);padding:14px}.err{color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;padding:12px;border-radius:12px;display:none}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700}.tag2{background:#ecfdf5;color:#047857}.tag0{background:#f3f4f6;color:#4b5563}.pos{color:var(--good);font-weight:800}.neg{color:var(--bad);font-weight:800}.neu{color:var(--muted);font-weight:800}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.mini{font-size:12px;color:var(--muted)}.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:700;color:#475569}
+    .explain-row{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 8px}.explain-btn{border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 14px;font-weight:800;cursor:pointer;color:#1f2937}.explain-btn:hover{border-color:var(--accent);color:var(--accent)}
+    .modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:9999}.modal-mask.show{display:flex}.modal-box{width:min(760px,100%);max-height:86vh;overflow:auto;background:#fff;border-radius:20px;box-shadow:0 24px 70px rgba(15,23,42,.25);padding:22px}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.modal-head h2{margin:0;font-size:22px}.modal-close{border:0;background:#f3f4f6;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer}.modal-close:hover{background:#e5e7eb}.modal-box h3{margin:18px 0 8px;font-size:16px}.modal-box p,.modal-box li{line-height:1.7;color:#374151}.modal-box ul{padding-left:22px}.compare-mini{width:100%;border-collapse:collapse;margin-top:10px}.compare-mini th,.compare-mini td{border-bottom:1px solid var(--line);padding:10px;text-align:left}.compare-mini th{background:#f9fafb;color:#374151}
   </style>
 </head>
 <body>
@@ -5935,6 +5937,10 @@ def dashboard_nts_page():
       <div class="title">
         <h1>NTS 排序行為分析</h1>
         <p>比較 NTS 1.0 與 Trust Score 2.0 在真實使用者導航點擊與 OSM fallback 效率上的差異</p>
+        <div class="explain-row">
+          <button type="button" class="explain-btn" onclick="openExplainModal('nts1')">說明 NTS 1.0</button>
+          <button type="button" class="explain-btn" onclick="openExplainModal('trust2')">說明 Trust Score 2.0</button>
+        </div>
       </div>
       <div class="nav">
         <a class="btn" href="/dashboard">← 回總覽儀表板</a>
@@ -6026,8 +6032,122 @@ def dashboard_nts_page():
     </div>
   </div>
 
+
+  <div id="explainModal" class="modal-mask" onclick="closeExplainModal(event)">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="explainTitle" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <h2 id="explainTitle">模型說明</h2>
+        <button type="button" class="modal-close" onclick="closeExplainModal()" aria-label="關閉">×</button>
+      </div>
+      <div id="explainBody"></div>
+    </div>
+  </div>
+
 <script>
 const $ = (id)=>document.getElementById(id);
+const MODEL_EXPLAINS = {
+  nts1: {
+    title: 'NTS 1.0：固定權重 baseline 在做什麼？',
+    body: `
+      <p><b>NTS 1.0</b> 是本研究的「基準排序模型」。它的目的不是追求最複雜，而是先建立一套穩定、可解釋、可被驗證的公共廁所推薦排序方式。</p>
+
+      <h3>一、它解決什麼問題？</h3>
+      <p>一般找廁所系統常只看距離，但「最近」不一定代表「最適合」。例如最近的地點可能是資料未驗證、地址不完整、狀態異常，或根本已經被判定不可信。NTS 1.0 的核心就是把推薦問題從「找最近」提升成「找距離接近且資料比較可靠的廁所」。</p>
+
+      <h3>二、它怎麼排序？</h3>
+      <p>NTS 1.0 會把每一個候選廁所拆成四個節點分數，再用固定權重加總：</p>
+      <table class="compare-mini">
+        <tr><th>節點</th><th>代表意義</th><th>目前用途</th></tr>
+        <tr><td>Distance 距離</td><td>離使用者越近分數越高</td><td>確保推薦結果仍然接近使用者</td></tr>
+        <tr><td>Trust 可信度</td><td>資料來源與驗證狀態是否可信</td><td>避免未驗證或 rejected 資料排太前面</td></tr>
+        <tr><td>Info 完整度</td><td>地址、樓層、入口提示、開放時間是否完整</td><td>提高使用者實際找到廁所的機率</td></tr>
+        <tr><td>Status 狀態</td><td>是否有維修、停用、故障、正常等資訊</td><td>降低不可用廁所被推薦的風險</td></tr>
+      </table>
+
+      <h3>三、為什麼叫 baseline？</h3>
+      <p>因為 NTS 1.0 使用固定規則，方便作為後續升級版本的比較基準。之後 Trust Score 2.0、OSM fallback、Shadow Ranking 都要和它比較，才能知道升級到底有沒有讓結果更好。</p>
+
+      <h3>四、Dashboard 在看什麼？</h3>
+      <ul>
+        <li><b>Rank 點擊率</b>：第 1 名、第 2 名、第 3 名被點導航的比例。</li>
+        <li><b>NTS 分數區間點擊率</b>：NTS 分數越高，使用者是否越容易點導航。</li>
+        <li><b>最近導航紀錄</b>：每次使用者點導航時，那筆推薦當時的名次、距離、NTS、Trust 分數。</li>
+      </ul>
+
+      <h3>五、目前 NTS 1.0 的意義</h3>
+      <p>如果 Rank 1 點擊率明顯高於後面名次，或高 NTS 分數區間的點擊率比較高，就代表 NTS 排序和使用者實際選擇有初步一致性。這可以作為研究中的真實使用者行為證據。</p>
+
+      <table class="compare-mini">
+        <tr><th>定位</th><td>固定權重、可解釋的排序基準線</td></tr>
+        <tr><th>優點</th><td>簡單、穩定、可解釋，適合做 baseline</td></tr>
+        <tr><th>限制</th><td>Trust 分數較固定，較難反映資料新鮮度、細部驗證品質與最近回報狀態</td></tr>
+      </table>
+    `
+  },
+  trust2: {
+    title: 'Trust Score 2.0：動態可信度模型在做什麼？',
+    body: `
+      <p><b>Trust Score 2.0</b> 是 NTS 1.0 的升級版。它不是把整個系統推翻，而是把原本比較固定的 Trust 節點，升級成會依資料狀態變化的「動態可信度模型」。</p>
+
+      <h3>一、為什麼需要 2.0？</h3>
+      <p>NTS 1.0 裡，政府資料或 OSM 通常會拿到固定高分，使用者新增資料則依 approved / pending / rejected 給固定分數。但真實情境比較複雜：政府資料也可能很久沒更新，使用者新增資料如果資訊完整且後台已驗證，也可能很可靠。因此 2.0 的目標是讓可信度更接近真實資料品質。</p>
+
+      <h3>二、Trust Score 2.0 多考慮了什麼？</h3>
+      <table class="compare-mini">
+        <tr><th>因素</th><th>說明</th><th>效果</th></tr>
+        <tr><td>資料來源</td><td>政府資料、OSM、使用者新增資料給不同基礎分</td><td>保留來源差異</td></tr>
+        <tr><td>驗證狀態</td><td>approved、pending、rejected 影響可信度</td><td>防止未驗證資料直接變高分</td></tr>
+        <tr><td>verification_score</td><td>後台人工檢核分數可影響 Trust</td><td>讓後台檢核結果進入排序</td></tr>
+        <tr><td>資訊完整度</td><td>地址、樓層、入口提示、開放時間完整會加分</td><td>鼓勵可找到、可使用的資料</td></tr>
+        <tr><td>資料新鮮度</td><td>近期更新資料加分，太久未更新資料降分</td><td>避免過期資料長期佔高位</td></tr>
+        <tr><td>狀態文字</td><td>維修、停用、故障、待確認、正常可用等字詞會影響狀態分數</td><td>更接近即時可用性</td></tr>
+      </table>
+
+      <h3>三、OSM fallback 在做什麼？</h3>
+      <p>OSM / Overpass 可以補足政府資料不足的地方，但即時查詢很慢，也容易 timeout。所以 2.0 不是每次都查 OSM，而是先查本地資料：政府資料 + 使用者新增資料。只有當候選結果少於設定門檻，例如少於 2 筆時，才啟用 OSM fallback。</p>
+      <ul>
+        <li><b>沒用 OSM</b>：代表本地資料已足夠，速度通常較快。</li>
+        <li><b>有用 OSM</b>：代表本地資料不足，需要外部資料補位，但耗時可能增加。</li>
+        <li><b>Dashboard 會記錄</b>：csv、saved、osm、total 的查詢次數、平均耗時、是否 used_osm。</li>
+      </ul>
+
+      <h3>四、Shadow Ranking 在做什麼？</h3>
+      <p>這是最重要的研究升級。使用者實際看到的是 <b>Trust Score 2.0</b> 的排序結果，但後台會用同一批候選廁所偷偷再跑一次 <b>NTS 1.0</b> 排序。注意：它不會重新查 OSM、CSV 或 Neon，只是用同一批資料重算分數與排序，所以效能負擔很小。</p>
+      <p>這樣可以公平比較：同一次查詢、同一批候選資料，如果使用者點了某一間廁所，這間在 2.0 是第幾名？在 1.0 shadow ranking 又是第幾名？</p>
+
+      <h3>五、我們要觀察什麼？</h3>
+      <ul>
+        <li><b>Rank 1 點擊率</b>：2.0 排第一的結果是否更常被點。</li>
+        <li><b>查詢導航率</b>：每次查詢後，使用者是否更常點導航。</li>
+        <li><b>NTS 高分區間點擊率</b>：高分結果是否真的比較吸引使用者。</li>
+        <li><b>Shadow 比較</b>：使用者點擊的廁所在 2.0 的排名是否比 1.0 更前面。</li>
+        <li><b>OSM 效率</b>：OSM fallback 是否減少不必要的外部查詢與延遲。</li>
+      </ul>
+
+      <h3>六、這個版本的研究意義</h3>
+      <p>Trust Score 2.0 讓系統從「固定公式排序」往「資料品質會隨驗證、更新與回報而變動」前進。搭配 Shadow Ranking 後，系統不只是上線新模型，而是能用真實使用者導航點擊來驗證新模型是否比舊模型更接近使用者選擇。</p>
+
+      <table class="compare-mini">
+        <tr><th>定位</th><td>動態可信度 + OSM fallback + 真實行為驗證版本</td></tr>
+        <tr><th>優點</th><td>更能反映資料品質、更新狀態、後台驗證與即時可用性</td></tr>
+        <tr><th>注意</th><td>2.0 需要累積足夠查詢與導航點擊後，才適合和 1.0 做正式比較</td></tr>
+      </table>
+    `
+  }
+};
+
+function openExplainModal(type){
+  const item = MODEL_EXPLAINS[type] || MODEL_EXPLAINS.nts1;
+  $('explainTitle').textContent = item.title;
+  $('explainBody').innerHTML = item.body;
+  $('explainModal').classList.add('show');
+}
+function closeExplainModal(e){
+  if(e && e.target && e.target.id !== 'explainModal') return;
+  $('explainModal').classList.remove('show');
+}
+document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && $('explainModal')) $('explainModal').classList.remove('show'); });
+
 function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
 function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
