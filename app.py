@@ -1128,6 +1128,35 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_created_at ON user_actions(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_actions_action_type ON user_actions(action_type)")
 
+        # === NTS 2.0 Shadow Ranking：使用者看 2.0，後台同步記錄 1.0 排序 ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS recommendation_shadow_logs (
+            id BIGSERIAL PRIMARY KEY,
+            query_id TEXT NOT NULL,
+            user_id_hash TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            user_lat DOUBLE PRECISION,
+            user_lon DOUBLE PRECISION,
+            production_model_version TEXT,
+            shadow_model_version TEXT,
+            rank INTEGER,
+            toilet_id TEXT,
+            toilet_name TEXT,
+            distance_m DOUBLE PRECISION,
+            distance_score DOUBLE PRECISION,
+            trust_score DOUBLE PRECISION,
+            info_score DOUBLE PRECISION,
+            status_score DOUBLE PRECISION,
+            nts_score DOUBLE PRECISION,
+            source TEXT,
+            verification_status TEXT
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_shadow_logs_query_id ON recommendation_shadow_logs(query_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_shadow_logs_toilet_id ON recommendation_shadow_logs(toilet_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_shadow_logs_created_at ON recommendation_shadow_logs(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_shadow_logs_models ON recommendation_shadow_logs(production_model_version, shadow_model_version)")
+
         # === NTS 2.0：資料來源查詢耗時與 OSM fallback 紀錄 ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS source_query_logs (
@@ -1702,6 +1731,73 @@ def sort_toilets_nts(toilets):
     clean.sort(key=lambda x: (-x.get("nts_score", 0), x.get("distance", 999999)))
     return clean
 
+
+def _score_trust_1_0(t):
+    """
+    NTS 1.0 baseline 的固定可信度分數。
+    用於 shadow ranking，不影響實際給使用者看的 Trust Score 2.0。
+    """
+    source = (t.get("source") or t.get("type") or "").lower()
+    status = (t.get("verification_status") or "pending").lower()
+    if status == "rejected":
+        return 0
+    if source in ("public_csv", "government", "osm", "overpass"):
+        return 100
+    if status == "approved":
+        return 90
+    if status == "pending":
+        return 60
+    return 60
+
+
+def _score_status_1_0(t):
+    """NTS 1.0 baseline 的狀態分數。"""
+    s = (t.get("status") or t.get("status_text") or "").strip()
+    if not s:
+        return 70
+    bad_keywords = ["暫停", "故障", "維修", "關閉", "不能使用", "無法使用"]
+    good_keywords = ["正常", "恢復", "可使用"]
+    if any(k in s for k in bad_keywords):
+        return 0
+    if any(k in s for k in good_keywords):
+        return 100
+    return 70
+
+
+def compute_nts_score_1_0(t):
+    """
+    用 NTS 1.0 baseline 公式計算分數。
+    只用於 shadow ranking；會寫入傳入 dict 的分數欄位。
+    """
+    distance_score = _score_distance(t.get("distance"))
+    trust_score = _score_trust_1_0(t)
+    info_score = _score_info(t)
+    status_score = _score_status_1_0(t)
+    final_score = 0.60 * distance_score + 0.20 * trust_score + 0.10 * info_score + 0.10 * status_score
+    t["nts_score"] = round(final_score, 2)
+    t["distance_score"] = round(distance_score, 2)
+    t["trust_score"] = round(trust_score, 2)
+    t["info_score"] = round(info_score, 2)
+    t["status_score"] = round(status_score, 2)
+    return t["nts_score"]
+
+
+def sort_toilets_nts_1_0(toilets):
+    """
+    Shadow ranking：同一批已回傳候選資料用 NTS 1.0 baseline 重新排序。
+    不重新查 CSV / Neon / OSM，只重算分數與排序。
+    """
+    clean = []
+    for t in toilets or []:
+        status = (t.get("verification_status") or "pending").lower()
+        if status == "rejected":
+            continue
+        item = dict(t)
+        compute_nts_score_1_0(item)
+        clean.append(item)
+    clean.sort(key=lambda x: (-x.get("nts_score", 0), x.get("distance", 999999)))
+    return clean
+
 def make_query_id():
     return "Q_" + uuid.uuid4().hex[:16]
 
@@ -1781,6 +1877,58 @@ def log_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit
 
     except Exception as e:
         logging.warning(f"log_recommendation_results failed: {e}", exc_info=True)
+
+
+def log_shadow_recommendation_results(query_id, uid, user_lat, user_lon, toilets, limit=5):
+    """
+    Shadow mode：實際給使用者看的是 production model（例如 Trust Score 2.0），
+    但後台用同一批已取得的回傳候選結果，偷偷以 NTS 1.0 baseline 重新排序並記錄。
+    不重新查 CSV / Neon / OSM，只重算分數與排序，因此效率影響很小。
+    """
+    if not POSTGRES_ENABLED:
+        return
+    if os.getenv("SHADOW_NTS_ENABLE", "1") != "1":
+        return
+    production_model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
+    shadow_model_version = os.getenv("SHADOW_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
+    if production_model_version == shadow_model_version:
+        return
+    try:
+        shadow_sorted = sort_toilets_nts_1_0(toilets or [])
+        if not shadow_sorted:
+            return
+        rows = []
+        user_id_hash = mask_user_id(uid)
+        for rank, t in enumerate(shadow_sorted[:limit], start=1):
+            rows.append((
+                query_id, user_id_hash, float(user_lat), float(user_lon),
+                production_model_version, shadow_model_version, rank,
+                _make_toilet_id(t), t.get("name") or "",
+                float(t.get("distance", 0) or 0),
+                float(t.get("distance_score", 0) or 0),
+                float(t.get("trust_score", 0) or 0),
+                float(t.get("info_score", 0) or 0),
+                float(t.get("status_score", 0) or 0),
+                float(t.get("nts_score", 0) or 0),
+                t.get("source") or t.get("type") or "",
+                t.get("verification_status") or ""
+            ))
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.executemany("""
+            INSERT INTO recommendation_shadow_logs (
+                query_id, user_id_hash, user_lat, user_lon,
+                production_model_version, shadow_model_version,
+                rank, toilet_id, toilet_name, distance_m,
+                distance_score, trust_score, info_score, status_score,
+                nts_score, source, verification_status
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, rows)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"log_shadow_recommendation_results failed: {e}", exc_info=True)
 
 
 def log_user_action(query_id, uid, toilet_id, action_type, extra_info=""):
@@ -5668,9 +5816,101 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 def dashboard_page():
     return render_template("dashboard.html")
 
+@app.route("/api/shadow-ranking-metrics")
+def api_shadow_ranking_metrics():
+    """Shadow Ranking 比較 API。"""
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "error": "Postgres not enabled"}), 503
+    production_version = (request.args.get("production") or "trust_score_2_0").strip() or "trust_score_2_0"
+    shadow_version = (request.args.get("shadow") or "nts_1_0").strip() or "nts_1_0"
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT production_model_version, shadow_model_version,
+                   COUNT(*) AS shadow_rows, COUNT(DISTINCT query_id) AS query_count,
+                   MIN(created_at) AS first_time, MAX(created_at) AS last_time
+            FROM recommendation_shadow_logs
+            WHERE production_model_version = %s AND shadow_model_version = %s
+            GROUP BY production_model_version, shadow_model_version
+        """, (production_version, shadow_version))
+        shadow_summary = cur.fetchone() or {
+            "production_model_version": production_version,
+            "shadow_model_version": shadow_version,
+            "shadow_rows": 0,
+            "query_count": 0,
+            "first_time": None,
+            "last_time": None,
+        }
+        cur.execute("""
+            WITH clicked AS (
+                SELECT a.id AS action_id, a.created_at AS action_time, a.query_id, a.toilet_id,
+                       p.rank AS production_rank, s.rank AS shadow_rank,
+                       p.toilet_name, p.distance_m,
+                       p.nts_score AS production_score, s.nts_score AS shadow_score
+                FROM user_actions a
+                JOIN recommendation_logs p ON a.query_id = p.query_id AND a.toilet_id = p.toilet_id
+                LEFT JOIN recommendation_shadow_logs s ON a.query_id = s.query_id AND a.toilet_id = s.toilet_id
+                  AND s.production_model_version = %s AND s.shadow_model_version = %s
+                WHERE a.action_type = 'click_navigation' AND p.model_version = %s
+            )
+            SELECT COUNT(*) AS clicked_items,
+                   ROUND(AVG(production_rank)::numeric, 2) AS avg_production_clicked_rank,
+                   ROUND(AVG(shadow_rank)::numeric, 2) AS avg_shadow_clicked_rank,
+                   SUM(CASE WHEN production_rank = 1 THEN 1 ELSE 0 END) AS production_rank1_clicks,
+                   SUM(CASE WHEN shadow_rank = 1 THEN 1 ELSE 0 END) AS shadow_rank1_clicks,
+                   SUM(CASE WHEN shadow_rank IS NULL THEN 1 ELSE 0 END) AS unmatched_shadow_clicks
+            FROM clicked
+        """, (production_version, shadow_version, production_version))
+        click_compare = cur.fetchone()
+        cur.execute("""
+            WITH clicked AS (
+                SELECT a.id AS action_id, p.rank AS production_rank, s.rank AS shadow_rank
+                FROM user_actions a
+                JOIN recommendation_logs p ON a.query_id = p.query_id AND a.toilet_id = p.toilet_id
+                LEFT JOIN recommendation_shadow_logs s ON a.query_id = s.query_id AND a.toilet_id = s.toilet_id
+                  AND s.production_model_version = %s AND s.shadow_model_version = %s
+                WHERE a.action_type = 'click_navigation' AND p.model_version = %s
+            )
+            SELECT 'production' AS model, production_rank AS rank, COUNT(*) AS click_count
+            FROM clicked GROUP BY production_rank
+            UNION ALL
+            SELECT 'shadow' AS model, shadow_rank AS rank, COUNT(*) AS click_count
+            FROM clicked WHERE shadow_rank IS NOT NULL GROUP BY shadow_rank
+            ORDER BY model, rank
+        """, (production_version, shadow_version, production_version))
+        rank_distribution = cur.fetchall()
+        cur.execute("""
+            SELECT a.created_at AS action_time, p.query_id, p.toilet_name,
+                   p.rank AS production_rank, s.rank AS shadow_rank,
+                   p.nts_score AS production_score, s.nts_score AS shadow_score, p.distance_m
+            FROM user_actions a
+            JOIN recommendation_logs p ON a.query_id = p.query_id AND a.toilet_id = p.toilet_id
+            LEFT JOIN recommendation_shadow_logs s ON a.query_id = s.query_id AND a.toilet_id = s.toilet_id
+              AND s.production_model_version = %s AND s.shadow_model_version = %s
+            WHERE a.action_type = 'click_navigation' AND p.model_version = %s
+            ORDER BY a.created_at DESC
+            LIMIT 20
+        """, (production_version, shadow_version, production_version))
+        recent_shadow_clicks = cur.fetchall()
+        conn.close()
+        return jsonify({
+            "ok": True,
+            "production_version": production_version,
+            "shadow_version": shadow_version,
+            "shadow_summary": shadow_summary,
+            "click_compare": click_compare,
+            "rank_distribution": rank_distribution,
+            "recent_shadow_clicks": recent_shadow_clicks,
+        })
+    except Exception as e:
+        logging.error(f"/api/shadow-ranking-metrics failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/dashboard/nts", methods=["GET"])
 def dashboard_nts_page():
-    """獨立的 NTS 行為分析頁，不改動原本 dashboard.html。"""
+    """獨立的 NTS 行為分析頁：版本比較 + OSM fallback 效率分析。"""
     html = """
 <!doctype html>
 <html lang="zh-Hant">
@@ -5679,14 +5919,14 @@ def dashboard_nts_page():
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>NTS 排序行為分析</title>
   <style>
-    :root{--bg:#f4f6fb;--card:#fff;--text:#1f2937;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--good:#059669;--warn:#d97706;}
+    :root{--bg:#f4f6fb;--card:#fff;--text:#1f2937;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--good:#059669;--warn:#d97706;--bad:#dc2626;--soft:#f8fafc;}
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",Arial,sans-serif;}
-    .wrap{max-width:1180px;margin:0 auto;padding:24px 18px 48px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}.title h1{margin:0;font-size:30px;letter-spacing:.02em}.title p{margin:8px 0 0;color:var(--muted)}
+    .wrap{max-width:1220px;margin:0 auto;padding:24px 18px 48px}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}.title h1{margin:0;font-size:30px;letter-spacing:.02em}.title p{margin:8px 0 0;color:var(--muted)}
     .nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn,.select{border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 14px;color:var(--text);text-decoration:none;font-weight:700}.btn:hover{border-color:var(--accent)}.select{min-width:220px}
-    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:18px 0}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{display:block}.nav{margin-top:12px}}
+    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin:18px 0}@media(max-width:960px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{display:block}.nav{margin-top:12px}}
     .card{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.k{color:var(--muted);font-size:13px;font-weight:700}.v{font-size:30px;font-weight:800;margin-top:8px}.s{font-size:13px;color:var(--muted);margin-top:8px}.section{background:var(--card);border-radius:18px;padding:18px;margin-top:16px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
-    .section h2{font-size:19px;margin:0 0 12px}.hint{color:var(--muted);font-size:13px;margin-bottom:12px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#374151;background:#f9fafb}.rate{font-weight:800;color:var(--good)}.empty{color:var(--muted);padding:18px}.bar{height:8px;background:#eef2ff;border-radius:999px;overflow:hidden;min-width:90px}.bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.split{grid-template-columns:1fr}}
-    .loading{color:var(--muted);padding:14px}.err{color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;padding:12px;border-radius:12px;display:none}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700}
+    .section h2{font-size:19px;margin:0 0 12px}.hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.6}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#374151;background:#f9fafb}.rate{font-weight:800;color:var(--good)}.empty{color:var(--muted);padding:18px}.bar{height:8px;background:#eef2ff;border-radius:999px;overflow:hidden;min-width:90px}.bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:960px){.split{grid-template-columns:1fr}}
+    .loading{color:var(--muted);padding:14px}.err{color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;padding:12px;border-radius:12px;display:none}.tag{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700}.tag2{background:#ecfdf5;color:#047857}.tag0{background:#f3f4f6;color:#4b5563}.pos{color:var(--good);font-weight:800}.neg{color:var(--bad);font-weight:800}.neu{color:var(--muted);font-weight:800}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.mini{font-size:12px;color:var(--muted)}.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:700;color:#475569}
   </style>
 </head>
 <body>
@@ -5694,7 +5934,7 @@ def dashboard_nts_page():
     <div class="top">
       <div class="title">
         <h1>NTS 排序行為分析</h1>
-        <p>比較 NTS 1.0 與 Trust Score 2.0 在真實使用者導航點擊上的差異</p>
+        <p>比較 NTS 1.0 與 Trust Score 2.0 在真實使用者導航點擊與 OSM fallback 效率上的差異</p>
       </div>
       <div class="nav">
         <a class="btn" href="/dashboard">← 回總覽儀表板</a>
@@ -5710,6 +5950,17 @@ def dashboard_nts_page():
     <div id="loading" class="loading">載入 NTS 行為資料中...</div>
 
     <div id="content" style="display:none">
+      <div class="section">
+        <div class="toolbar">
+          <div>
+            <h2>版本比較總表</h2>
+            <div class="hint">並排比較 NTS 1.0 與 Trust Score 2.0。Trust Score 2.0 剛上線時會先顯示 0，跑一段時間後即可比較。</div>
+          </div>
+          <span class="pill">版本依 recommendation_logs.model_version 分組</span>
+        </div>
+        <div id="compareTable"></div>
+      </div>
+
       <div class="grid">
         <div class="card"><div class="k">查詢數</div><div id="qCount" class="v">--</div><div class="s">Distinct query_id</div></div>
         <div class="card"><div class="k">推薦展示筆數</div><div id="recRows" class="v">--</div><div class="s">Top-k 推薦列數</div></div>
@@ -5738,6 +5989,36 @@ def dashboard_nts_page():
       </div>
 
       <div class="section">
+        <div class="toolbar">
+          <div>
+            <h2>資料來源效率分析 / OSM fallback</h2>
+            <div class="hint">觀察 csv、saved、osm、total 的查詢次數與耗時。OSM fallback 目標是：只有本地候選不足時才啟用，降低 Overpass 延遲風險。</div>
+          </div>
+          <span class="pill">讀取 /api/source-query-metrics</span>
+        </div>
+        <div id="sourceMetrics"></div>
+      </div>
+
+      <div class="section">
+        <h2>OSM fallback 觸發原因</h2>
+        <div class="hint">total 紀錄中的 reason 可用來判斷查詢是否使用 OSM、是否因候選不足而補查 OSM。</div>
+        <div id="sourceReasons"></div>
+      </div>
+
+      <div class="section">
+        <div class="toolbar">
+          <div>
+            <h2>Shadow Ranking：2.0 實際推薦 vs 1.0 後台比較</h2>
+            <div class="hint">使用者實際看到 Trust Score 2.0，後台同步用 NTS 1.0 重新排序同一批推薦結果，比較使用者點擊的廁所在兩套模型中的名次。</div>
+          </div>
+          <span class="pill">讀取 /api/shadow-ranking-metrics</span>
+        </div>
+        <div id="shadowSummary"></div>
+        <div id="shadowRankTable" style="margin-top:12px"></div>
+        <div id="shadowRecent" style="margin-top:12px"></div>
+      </div>
+
+      <div class="section">
         <h2>最近導航點擊紀錄</h2>
         <div class="hint">檢查推薦結果與使用者點擊是否成功串接。</div>
         <div id="recentTable"></div>
@@ -5747,6 +6028,7 @@ def dashboard_nts_page():
 
 <script>
 const $ = (id)=>document.getElementById(id);
+function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
 function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
@@ -5755,13 +6037,90 @@ function table(headers, rows, empty='目前沒有資料'){
   if(!rows || rows.length===0) return `<div class="empty">${empty}</div>`;
   return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
 }
+function deltaCell(v1, v2, suffix='%'){
+  if(v1===null || v1===undefined || v2===null || v2===undefined || v1==='' || v2==='') return '<span class="neu">--</span>';
+  const d = num(v2) - num(v1);
+  const cls = d > 0 ? 'pos' : (d < 0 ? 'neg' : 'neu');
+  const sign = d > 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${d.toFixed(2)}${suffix}</span>`;
+}
+function getRankRate(data, rank){
+  const row = (data.rank_click_rate||[]).find(x => Number(x.rank) === Number(rank));
+  return row ? row.click_rate_percent : null;
+}
+function getScoreRate(data, range){
+  const row = (data.nts_score_click_rate||[]).find(x => x.nts_score_range === range);
+  return row ? row.click_rate_percent : null;
+}
+async function fetchJson(url){
+  const res = await fetch(url, {cache:'no-store'});
+  const data = await res.json();
+  if(!data.ok) throw new Error(data.error || 'API 回傳失敗');
+  return data;
+}
+async function loadCompareTable(){
+  const [v1, v2] = await Promise.all([
+    fetchJson('/api/nts-behavior?version=nts_1_0'),
+    fetchJson('/api/nts-behavior?version=trust_score_2_0')
+  ]);
+  const s1 = v1.summary || {}, s2 = v2.summary || {};
+  const rows = [
+    ['查詢數', fmt(s1.query_count), fmt(s2.query_count), ''],
+    ['推薦展示筆數', fmt(s1.recommendation_rows), fmt(s2.recommendation_rows), ''],
+    ['導航點擊數', fmt(s1.navigation_clicks), fmt(s2.navigation_clicks), ''],
+    ['查詢導航率', pct(s1.click_rate_by_query_percent), pct(s2.click_rate_by_query_percent), deltaCell(s1.click_rate_by_query_percent, s2.click_rate_by_query_percent)],
+    ['推薦點擊率', pct(s1.click_rate_by_recommendation_percent), pct(s2.click_rate_by_recommendation_percent), deltaCell(s1.click_rate_by_recommendation_percent, s2.click_rate_by_recommendation_percent)],
+    ['Rank 1 點擊率', pct(getRankRate(v1,1)), pct(getRankRate(v2,1)), deltaCell(getRankRate(v1,1), getRankRate(v2,1))],
+    ['Rank 2 點擊率', pct(getRankRate(v1,2)), pct(getRankRate(v2,2)), deltaCell(getRankRate(v1,2), getRankRate(v2,2))],
+    ['90–100 分區間點擊率', pct(getScoreRate(v1,'90-100')), pct(getScoreRate(v2,'90-100')), deltaCell(getScoreRate(v1,'90-100'), getScoreRate(v2,'90-100'))],
+    ['80–89 分區間點擊率', pct(getScoreRate(v1,'80-89')), pct(getScoreRate(v2,'80-89')), deltaCell(getScoreRate(v1,'80-89'), getScoreRate(v2,'80-89'))]
+  ];
+  $('compareTable').innerHTML = table(['指標','NTS 1.0','Trust Score 2.0','變化'], rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3] || '<span class="mini">跑量後比較</span>'}</td></tr>`));
+}
+async function loadSourceMetrics(){
+  const version = $('versionSelect').value;
+  const data = await fetchJson(`/api/source-query-metrics?version=${encodeURIComponent(version)}`);
+  $('sourceMetrics').innerHTML = table(['版本','來源','呼叫次數','使用 OSM 次數','平均耗時','最大耗時','結果總數','成功次數'], (data.by_source||[]).map(r=>
+    `<tr><td><span class="tag ${r.model_version==='trust_score_2_0'?'tag2':'tag0'}">${esc(r.model_version)}</span></td><td>${esc(r.source_name)}</td><td>${fmt(r.call_count)}</td><td>${fmt(r.used_osm_count)}</td><td>${fmt(r.avg_elapsed_ms)} ms</td><td>${fmt(r.max_elapsed_ms)} ms</td><td>${fmt(r.total_result_count)}</td><td>${fmt(r.success_count)}</td></tr>`
+  ), '目前沒有 source_query_logs 資料，部署 Trust Score 2.0 + OSM metrics 後會開始累積。');
+  $('sourceReasons').innerHTML = table(['版本','原因','次數','平均總耗時'], (data.total_reason||[]).map(r=>
+    `<tr><td><span class="tag ${r.model_version==='trust_score_2_0'?'tag2':'tag0'}">${esc(r.model_version)}</span></td><td>${esc(r.reason)}</td><td>${fmt(r.count)}</td><td>${fmt(r.avg_elapsed_ms)} ms</td></tr>`
+  ), '目前沒有 total reason 資料。');
+}
+async function loadShadowMetrics(){
+  try{
+    const data = await fetchJson('/api/shadow-ranking-metrics?production=trust_score_2_0&shadow=nts_1_0');
+    const s = data.shadow_summary || {};
+    const c = data.click_compare || {};
+    $('shadowSummary').innerHTML = table(['指標','數值'], [
+      `<tr><td>Production model</td><td><span class="tag tag2">${esc(data.production_version||'trust_score_2_0')}</span></td></tr>`,
+      `<tr><td>Shadow model</td><td><span class="tag tag0">${esc(data.shadow_version||'nts_1_0')}</span></td></tr>`,
+      `<tr><td>Shadow 查詢數</td><td>${fmt(s.query_count)}</td></tr>`,
+      `<tr><td>Shadow 推薦列數</td><td>${fmt(s.shadow_rows)}</td></tr>`,
+      `<tr><td>已點擊且可比較筆數</td><td>${fmt(c.clicked_items)}</td></tr>`,
+      `<tr><td>2.0 被點擊平均名次</td><td>${fmt(c.avg_production_clicked_rank)}</td></tr>`,
+      `<tr><td>1.0 shadow 被點擊平均名次</td><td>${fmt(c.avg_shadow_clicked_rank)}</td></tr>`,
+      `<tr><td>2.0 Rank1 點擊數</td><td>${fmt(c.production_rank1_clicks)}</td></tr>`,
+      `<tr><td>1.0 shadow Rank1 點擊數</td><td>${fmt(c.shadow_rank1_clicks)}</td></tr>`
+    ], '尚無 shadow ranking 資料。請確認 NTS_MODEL_VERSION=trust_score_2_0 且 SHADOW_NTS_ENABLE=1，並累積導航點擊。');
+    $('shadowRankTable').innerHTML = table(['模型','被點擊名次','點擊數'], (data.rank_distribution||[]).map(r=>
+      `<tr><td>${esc(r.model)}</td><td>${esc(r.rank)}</td><td>${fmt(r.click_count)}</td></tr>`
+    ), '尚無 rank distribution 資料。');
+    $('shadowRecent').innerHTML = table(['時間','廁所','2.0 Rank','1.0 Shadow Rank','2.0 分數','1.0 分數','距離'], (data.recent_shadow_clicks||[]).map(r=>
+      `<tr><td>${esc(r.action_time)}</td><td>${esc(r.toilet_name)}</td><td>${esc(r.production_rank)}</td><td>${esc(r.shadow_rank)}</td><td>${esc(r.production_score)}</td><td>${esc(r.shadow_score)}</td><td>${Number(r.distance_m||0).toFixed(1)}m</td></tr>`
+    ), '尚無最近 shadow 點擊資料。');
+  }catch(e){
+    $('shadowSummary').innerHTML = `<div class="empty">Shadow metrics 尚未可用：${esc(e.message)}</div>`;
+    $('shadowRankTable').innerHTML = '';
+    $('shadowRecent').innerHTML = '';
+  }
+}
+
 async function loadNtsBehavior(){
   const version = $('versionSelect').value;
   $('loading').style.display='block'; $('content').style.display='none'; $('errorBox').style.display='none';
   try{
-    const res = await fetch(`/api/nts-behavior?version=${encodeURIComponent(version)}`, {cache:'no-store'});
-    const data = await res.json();
-    if(!data.ok) throw new Error(data.error || 'API 回傳失敗');
+    const data = await fetchJson(`/api/nts-behavior?version=${encodeURIComponent(version)}`);
     const s = data.summary || {};
     $('qCount').textContent = fmt(s.query_count);
     $('recRows').textContent = fmt(s.recommendation_rows);
@@ -5770,7 +6129,7 @@ async function loadNtsBehavior(){
     $('recRate').textContent = pct(s.click_rate_by_recommendation_percent);
 
     $('versionCounts').innerHTML = table(['版本','推薦展示','查詢數'], (data.version_counts||[]).map(r=>
-      `<tr><td><span class="tag">${esc(r.model_version)}</span></td><td>${fmt(r.recommendation_rows)}</td><td>${fmt(r.query_count)}</td></tr>`
+      `<tr><td><span class="tag ${r.model_version==='trust_score_2_0'?'tag2':'tag0'}">${esc(r.model_version)}</span></td><td>${fmt(r.recommendation_rows)}</td><td>${fmt(r.query_count)}</td></tr>`
     ));
     $('rankTable').innerHTML = table(['Rank','展示','點擊','點擊率',''], (data.rank_click_rate||[]).map(r=>
       `<tr><td>${esc(r.rank)}</td><td>${fmt(r.shown_count)}</td><td>${fmt(r.click_count)}</td><td class="rate">${pct(r.click_rate_percent)}</td><td>${bar(r.click_rate_percent)}</td></tr>`
@@ -5781,6 +6140,9 @@ async function loadNtsBehavior(){
     $('recentTable').innerHTML = table(['時間','版本','Rank','廁所','距離','NTS','Trust','Info','Status'], (data.recent_clicks||[]).map(r=>
       `<tr><td>${esc(r.action_time)}</td><td>${esc(r.model_version)}</td><td>${esc(r.rank)}</td><td>${esc(r.toilet_name)}</td><td>${Number(r.distance_m||0).toFixed(1)}m</td><td>${esc(r.nts_score)}</td><td>${esc(r.trust_score)}</td><td>${esc(r.info_score)}</td><td>${esc(r.status_score)}</td></tr>`
     ));
+    await loadCompareTable();
+    await loadSourceMetrics();
+    await loadShadowMetrics();
     $('loading').style.display='none'; $('content').style.display='block';
   }catch(e){
     $('loading').style.display='none'; $('errorBox').style.display='block'; $('errorBox').textContent = '載入失敗：' + e.message;
@@ -6537,6 +6899,14 @@ def handle_location(event):
 
         if toilets:
             log_recommendation_results(
+                query_id=query_id,
+                uid=uid,
+                user_lat=lat,
+                user_lon=lon,
+                toilets=toilets,
+                limit=5
+            )
+            log_shadow_recommendation_results(
                 query_id=query_id,
                 uid=uid,
                 user_lat=lat,
