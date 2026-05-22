@@ -95,6 +95,14 @@
     }
 
 
+    .nts-nav-btn {
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+
     .date-filter {
       display: inline-flex;
       align-items: center;
@@ -132,36 +140,6 @@
       color: var(--primary-text);
       font-size: 13px;
       white-space: nowrap;
-    }
-
-
-    .dashboard-nav-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      height: 40px;
-      padding: 0 14px;
-      border-radius: 10px;
-      background: var(--card);
-      color: var(--text);
-      border: 1px solid var(--line);
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
-      box-shadow: 0 1px 4px rgba(0,0,0,.08);
-      transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-      white-space: nowrap;
-    }
-
-    .dashboard-nav-btn:hover {
-      transform: translateY(-1px);
-      background: #f8fafc;
-      box-shadow: 0 4px 12px rgba(0,0,0,.08);
-    }
-
-    .dashboard-nav-btn:focus-visible {
-      outline: 2px solid #4f46e5;
-      outline-offset: 2px;
     }
 
     .grid-cards {
@@ -600,128 +578,6 @@
 
 
 
-    /* === NTS 行為分析區 === */
-    .nts-panel {
-      background: var(--card);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 18px;
-      margin-bottom: 20px;
-      overflow: hidden;
-    }
-
-    .nts-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-
-    .nts-header h2 {
-      margin: 0 0 6px;
-      font-size: 18px;
-      line-height: 1.3;
-    }
-
-    .nts-header p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-
-    .nts-version-select {
-      height: 40px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 0 10px;
-      background: var(--card);
-      color: var(--text);
-      font-size: 14px;
-      min-width: 210px;
-    }
-
-    .nts-summary-grid {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-
-    .nts-mini-card {
-      background: #f8fafc;
-      border: 1px solid #edf2f7;
-      border-radius: 14px;
-      padding: 14px;
-      min-width: 0;
-    }
-
-    .nts-mini-card h3 {
-      margin: 0 0 8px;
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 600;
-      line-height: 1.4;
-    }
-
-    .nts-mini-card .value {
-      font-size: 24px;
-      font-weight: 750;
-      line-height: 1.2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .nts-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      margin-top: 6px;
-    }
-
-    .nts-table-box {
-      min-width: 0;
-      overflow-x: auto;
-    }
-
-    .nts-table-title {
-      margin: 0 0 10px;
-      font-size: 15px;
-      color: var(--text);
-      font-weight: 700;
-    }
-
-    .nts-status {
-      color: var(--muted);
-      font-size: 13px;
-      margin-top: 12px;
-    }
-
-    .nts-recent-name {
-      max-width: 260px;
-    }
-
-    @media (max-width: 1200px) {
-      .nts-summary-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .nts-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 700px) {
-      .nts-summary-grid {
-        grid-template-columns: 1fr;
-      }
-      .nts-version-select {
-        width: 100%;
-      }
-    }
-
     @media (max-width: 1200px) {
       .grid-cards {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -797,8 +653,8 @@
       </div>
 
       <div class="controls">
-        <a class="dashboard-nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
         <div class="status" id="lineDataStatus">LINE 官方資料：每日更新一次</div>
+        <a class="range-btn nts-nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
       </div>
     </div>
 
@@ -990,92 +846,6 @@
       </table>
     </div>
 
-    <div class="nts-panel" id="ntsBehaviorPanel">
-      <div class="nts-header">
-        <div>
-          <h2>NTS 行為分析</h2>
-          <p>追蹤推薦展示、導航點擊、Rank 點擊率與 NTS 分數區間點擊率；可用來比較 NTS 1.0 與 Trust Score 2.0。</p>
-        </div>
-        <select class="nts-version-select" id="ntsVersionSelect" aria-label="NTS model version">
-          <option value="all">全部版本</option>
-          <option value="nts_1_0">NTS 1.0 baseline</option>
-          <option value="trust_score_2_0">Trust Score 2.0</option>
-        </select>
-      </div>
-
-      <div class="nts-summary-grid">
-        <div class="nts-mini-card">
-          <h3>目前版本</h3>
-          <div class="value mono" id="ntsCurrentVersion">—</div>
-        </div>
-        <div class="nts-mini-card">
-          <h3>查詢數</h3>
-          <div class="value mono" id="ntsQueryCount">—</div>
-        </div>
-        <div class="nts-mini-card">
-          <h3>推薦展示</h3>
-          <div class="value mono" id="ntsRecommendationRows">—</div>
-        </div>
-        <div class="nts-mini-card">
-          <h3>導航點擊</h3>
-          <div class="value mono" id="ntsNavigationClicks">—</div>
-        </div>
-        <div class="nts-mini-card">
-          <h3>查詢導航率</h3>
-          <div class="value mono" id="ntsQueryClickRate">—</div>
-        </div>
-      </div>
-
-      <div class="nts-grid">
-        <div class="nts-table-box">
-          <h3 class="nts-table-title">各排名點擊率</h3>
-          <table class="mini-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>展示</th>
-                <th>點擊</th>
-                <th>點擊率</th>
-              </tr>
-            </thead>
-            <tbody id="ntsRankTableBody"></tbody>
-          </table>
-        </div>
-        <div class="nts-table-box">
-          <h3 class="nts-table-title">NTS 分數區間點擊率</h3>
-          <table class="mini-table">
-            <thead>
-              <tr>
-                <th>分數區間</th>
-                <th>展示</th>
-                <th>點擊</th>
-                <th>點擊率</th>
-              </tr>
-            </thead>
-            <tbody id="ntsScoreTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="nts-table-box" style="margin-top:16px;">
-        <h3 class="nts-table-title">最近導航點擊紀錄</h3>
-        <table class="mini-table">
-          <thead>
-            <tr>
-              <th style="width:20%">時間</th>
-              <th style="width:9%">版本</th>
-              <th style="width:8%">Rank</th>
-              <th style="width:30%">廁所名稱</th>
-              <th style="width:11%">距離</th>
-              <th style="width:11%">NTS</th>
-              <th style="width:11%">Trust</th>
-            </tr>
-          </thead>
-          <tbody id="ntsRecentClicksBody"></tbody>
-        </table>
-      </div>
-      <div class="nts-status" id="ntsBehaviorStatus">NTS 行為資料載入中…</div>
-    </div>
 
   </div>
 
@@ -1353,7 +1123,6 @@
     let typeChart = null;
     let currentDashboardData = null;
 
-    let currentNtsVersion = 'nts_1_0';
 
     const rangeButtons = document.querySelectorAll('.range-btn');
     const metricCards = document.querySelectorAll('.metric-card');
@@ -1409,15 +1178,6 @@
       });
     }
 
-
-    const ntsVersionSelect = document.getElementById('ntsVersionSelect');
-    if (ntsVersionSelect) {
-      ntsVersionSelect.value = currentNtsVersion;
-      ntsVersionSelect.addEventListener('change', async () => {
-        currentNtsVersion = ntsVersionSelect.value || 'all';
-        await refreshNtsBehavior();
-      });
-    }
 
     metricCards.forEach(card => {
       card.addEventListener('click', () => {
@@ -2047,107 +1807,6 @@
 
 
 
-    function safeText(value, fallback = '—') {
-      if (value === null || value === undefined || value === '') return fallback;
-      return String(value);
-    }
-
-    function formatPercentValue(value) {
-      if (value === null || value === undefined || value === '') return '—';
-      return `${Number(value).toFixed(2)}%`;
-    }
-
-    function formatDistanceMeters(value) {
-      if (value === null || value === undefined || value === '') return '—';
-      return `${Number(value).toFixed(1)} m`;
-    }
-
-    function formatShortTime(value) {
-      if (!value) return '—';
-      const d = new Date(value);
-      if (Number.isNaN(d.getTime())) return String(value);
-      return d.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
-    }
-
-    async function getNtsBehaviorData(version = 'all') {
-      const params = new URLSearchParams();
-      if (version && version !== 'all') params.set('version', version);
-      const qs = params.toString();
-      const res = await fetch(`/api/nts-behavior${qs ? `?${qs}` : ''}`);
-      if (!res.ok) throw new Error('NTS 行為資料讀取失敗');
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'NTS 行為資料錯誤');
-      return data;
-    }
-
-    function renderNtsTableRows(tbodyId, rows, columns) {
-      const tbody = document.getElementById(tbodyId);
-      if (!tbody) return;
-      tbody.innerHTML = '';
-      if (!Array.isArray(rows) || rows.length === 0) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="${columns.length}" class="empty-text">目前沒有資料</td>`;
-        tbody.appendChild(tr);
-        return;
-      }
-      rows.forEach(row => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = columns.map(fn => fn(row)).join('');
-        tbody.appendChild(tr);
-      });
-    }
-
-    function renderNtsBehavior(data) {
-      const summary = data.summary || {};
-      const versionLabel = data.version === 'all' ? '全部' : data.version;
-      document.getElementById('ntsCurrentVersion').textContent = versionLabel;
-      document.getElementById('ntsQueryCount').textContent = formatMetricValue(summary.query_count);
-      document.getElementById('ntsRecommendationRows').textContent = formatMetricValue(summary.recommendation_rows);
-      document.getElementById('ntsNavigationClicks').textContent = formatMetricValue(summary.navigation_clicks);
-      document.getElementById('ntsQueryClickRate').textContent = formatPercentValue(summary.click_rate_by_query_percent);
-
-      renderNtsTableRows('ntsRankTableBody', data.rank_click_rate || [], [
-        r => `<td class="mono">${safeText(r.rank)}</td>`,
-        r => `<td class="mono">${formatMetricValue(r.shown_count)}</td>`,
-        r => `<td class="mono">${formatMetricValue(r.click_count)}</td>`,
-        r => `<td class="mono">${formatPercentValue(r.click_rate_percent)}</td>`
-      ]);
-
-      renderNtsTableRows('ntsScoreTableBody', data.nts_score_click_rate || [], [
-        r => `<td class="mono">${safeText(r.nts_score_range)}</td>`,
-        r => `<td class="mono">${formatMetricValue(r.shown_count)}</td>`,
-        r => `<td class="mono">${formatMetricValue(r.click_count)}</td>`,
-        r => `<td class="mono">${formatPercentValue(r.click_rate_percent)}</td>`
-      ]);
-
-      renderNtsTableRows('ntsRecentClicksBody', data.recent_clicks || [], [
-        r => `<td class="mono" title="${safeText(r.action_time)}">${formatShortTime(r.action_time)}</td>`,
-        r => `<td class="mono">${safeText(r.model_version)}</td>`,
-        r => `<td class="mono">${safeText(r.rank)}</td>`,
-        r => `<td class="nts-recent-name" title="${safeText(r.toilet_name)}">${safeText(r.toilet_name)}</td>`,
-        r => `<td class="mono">${formatDistanceMeters(r.distance_m)}</td>`,
-        r => `<td class="mono">${safeText(r.nts_score)}</td>`,
-        r => `<td class="mono">${safeText(r.trust_score)}</td>`
-      ]);
-
-      const vc = Array.isArray(data.version_counts) ? data.version_counts : [];
-      const vcText = vc.length
-        ? vc.map(v => `${v.model_version}: ${v.query_count} queries / ${v.recommendation_rows} rows`).join('｜')
-        : '尚無版本資料';
-      document.getElementById('ntsBehaviorStatus').textContent = `版本資料：${vcText}`;
-    }
-
-    async function refreshNtsBehavior() {
-      const statusEl = document.getElementById('ntsBehaviorStatus');
-      try {
-        const data = await getNtsBehaviorData(currentNtsVersion);
-        renderNtsBehavior(data);
-      } catch (err) {
-        console.error(err);
-        if (statusEl) statusEl.textContent = 'NTS 行為資料讀取失敗';
-      }
-    }
-
     async function refreshDashboard() {
       try {
         const data = await getDashboardData(currentRange);
@@ -2175,10 +1834,8 @@
     syncDateFilterVisibility();
     applyI18n();
     refreshDashboard();
-    refreshNtsBehavior();
     refreshLineInsights();
     setInterval(refreshDashboard, 30000);
-    setInterval(refreshNtsBehavior, 30000);
     setInterval(refreshLineInsights, 86400000);
   </script>
 </body>
