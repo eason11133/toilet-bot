@@ -134,6 +134,36 @@
       white-space: nowrap;
     }
 
+
+    .dashboard-nav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 40px;
+      padding: 0 14px;
+      border-radius: 10px;
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--line);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .dashboard-nav-btn:hover {
+      transform: translateY(-1px);
+      background: #f8fafc;
+      box-shadow: 0 4px 12px rgba(0,0,0,.08);
+    }
+
+    .dashboard-nav-btn:focus-visible {
+      outline: 2px solid #4f46e5;
+      outline-offset: 2px;
+    }
+
     .grid-cards {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -767,6 +797,7 @@
       </div>
 
       <div class="controls">
+        <a class="dashboard-nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
         <div class="status" id="lineDataStatus">LINE 官方資料：每日更新一次</div>
       </div>
     </div>
