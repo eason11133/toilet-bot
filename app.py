@@ -1034,6 +1034,13 @@ def init_persistent_store():
         cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ")
         cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS verified_by TEXT")
         cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS reject_reason TEXT")
+        # === Auto Verification 1.0：使用者新增資料自動驗證 ===
+        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS auto_verification_score INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS auto_verification_result TEXT DEFAULT 'pending'")
+        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS auto_verification_reason TEXT")
+        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS risk_flags TEXT")
+        cur.execute("ALTER TABLE user_toilets ADD COLUMN IF NOT EXISTS similar_toilets_json TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_auto_result ON user_toilets(auto_verification_result)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_lat_lon ON user_toilets(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_created_at ON user_toilets(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_verification ON user_toilets(verification_status)")
@@ -1066,29 +1073,6 @@ def init_persistent_store():
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_lat_lon ON toilet_status_reports(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_created_at ON toilet_status_reports(created_at)")
-
-        # === Toilet cleanliness feedback reports（Neon 主儲存）===
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS toilet_feedback_reports (
-            id BIGSERIAL PRIMARY KEY,
-            user_id TEXT,
-            display_name TEXT,
-            name TEXT,
-            address TEXT,
-            lat DOUBLE PRECISION NOT NULL,
-            lon DOUBLE PRECISION NOT NULL,
-            rating INTEGER,
-            toilet_paper TEXT,
-            accessibility TEXT,
-            time_of_use TEXT,
-            comment TEXT,
-            cleanliness_score DOUBLE PRECISION,
-            floor_hint TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_reports_lat_lon ON toilet_feedback_reports(lat, lon)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_reports_created_at ON toilet_feedback_reports(created_at)")
 
         # === Favorites ===
         cur.execute("""
@@ -3460,173 +3444,6 @@ def api_status_report():
         logging.error(f"/api/status_report 寫入失敗: {e}")
         return {"ok": False, "message": "server error"}, 500
 
-
-# === Neon 清潔度回饋資料層 ===
-def _feedback_distance_m(lat1, lon1, lat2, lon2):
-    try:
-        return haversine(float(lat1), float(lon1), float(lat2), float(lon2))
-    except Exception:
-        return 999999
-
-
-def save_toilet_feedback_report(name, address, lat, lon, rating, toilet_paper, accessibility,
-                                time_of_use="", comment="", cleanliness_score=None,
-                                floor_hint="", user_id="", display_name=""):
-    """Write cleanliness feedback to Neon. Returns True/False."""
-    if not POSTGRES_ENABLED:
-        return False
-    try:
-        score_val = None
-        try:
-            if cleanliness_score not in (None, "", "未預測", "N/A"):
-                score_val = float(cleanliness_score)
-        except Exception:
-            score_val = None
-
-        conn = _pg_connect()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO toilet_feedback_reports (
-                user_id, display_name, name, address, lat, lon,
-                rating, toilet_paper, accessibility, time_of_use,
-                comment, cleanliness_score, floor_hint, created_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        """, (
-            user_id or "", display_name or "", name or "", address or "",
-            float(lat), float(lon), int(rating) if str(rating).strip() else None,
-            toilet_paper or "", accessibility or "", time_of_use or "",
-            comment or "", score_val, floor_hint or ""
-        ))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        logging.error(f"寫入 Neon 清潔度回饋失敗: {e}", exc_info=True)
-        return False
-
-
-def get_feedback_reports_by_coord_neon(lat, lon, radius_m=None, limit=200):
-    """Read cleanliness feedback from Neon by nearby coordinate, not exact equality."""
-    if not POSTGRES_ENABLED:
-        return []
-    try:
-        lat_f = float(lat); lon_f = float(lon)
-        radius_m = float(radius_m or os.getenv("FEEDBACK_NEAR_M", "60"))
-        # 先用 bbox 篩，再用 haversine 精篩，避免小數位完全相等才找得到
-        dlat = radius_m / 111000.0
-        dlon = radius_m / (111000.0 * max(0.2, math.cos(math.radians(lat_f))))
-        conn = _pg_connect()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT id, user_id, display_name, name, address, lat, lon,
-                   rating, toilet_paper, accessibility, time_of_use,
-                   comment, cleanliness_score, floor_hint, created_at
-            FROM toilet_feedback_reports
-            WHERE lat BETWEEN %s AND %s
-              AND lon BETWEEN %s AND %s
-            ORDER BY created_at DESC
-            LIMIT %s
-        """, (lat_f-dlat, lat_f+dlat, lon_f-dlon, lon_f+dlon, int(limit)))
-        rows = cur.fetchall()
-        conn.close()
-        out = []
-        for r in rows:
-            d = _feedback_distance_m(lat_f, lon_f, r.get("lat"), r.get("lon"))
-            if d <= radius_m:
-                item = dict(r)
-                item["_distance_m"] = round(d, 2)
-                out.append(item)
-        out.sort(key=lambda x: (x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
-        return out
-    except Exception as e:
-        logging.error(f"讀取 Neon 清潔度回饋失敗: {e}", exc_info=True)
-        return []
-
-
-def _format_feedback_dt(v):
-    try:
-        if hasattr(v, "astimezone"):
-            return v.astimezone(TW_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        return str(v or "")
-    except Exception:
-        return str(v or "")
-
-
-def _feedback_rows_to_template(rows):
-    out = []
-    for r in rows or []:
-        sc = r.get("cleanliness_score")
-        out.append({
-            "rating": "" if r.get("rating") is None else str(r.get("rating")),
-            "toilet_paper": r.get("toilet_paper") or "",
-            "accessibility": r.get("accessibility") or "",
-            "time_of_use": r.get("time_of_use") or "",
-            "comment": safe_html(r.get("comment") or ""),
-            "cleanliness_score": "" if sc is None else str(round(float(sc), 2)),
-            "created_at": _format_feedback_dt(r.get("created_at")),
-        })
-    return out
-
-
-def get_feedback_summary_by_coord_neon(lat, lon):
-    rows = get_feedback_reports_by_coord_neon(lat, lon)
-    if not rows:
-        return "尚無回饋資料"
-
-    scores = []
-    ratings = []
-    paper_counts = {"有": 0, "沒有": 0, "沒注意": 0}
-    access_counts = {"有": 0, "沒有": 0, "沒注意": 0}
-    comments = []
-    for r in rows:
-        try:
-            if r.get("cleanliness_score") is not None:
-                scores.append(float(r.get("cleanliness_score")))
-        except Exception:
-            pass
-        try:
-            if r.get("rating") is not None:
-                ratings.append(int(r.get("rating")))
-        except Exception:
-            pass
-        pp = (r.get("toilet_paper") or "").strip()
-        aa = (r.get("accessibility") or "").strip()
-        if pp in paper_counts:
-            paper_counts[pp] += 1
-        if aa in access_counts:
-            access_counts[aa] += 1
-        c = (r.get("comment") or "").strip()
-        if c:
-            comments.append(c)
-
-    avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
-    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else "—"
-    paper_main = max(paper_counts, key=paper_counts.get) if any(paper_counts.values()) else "未知"
-    access_main = max(access_counts, key=access_counts.get) if any(access_counts.values()) else "未知"
-    summary = (
-        f"🔍 筆數：{len(rows)}\n"
-        f"🧼 平均預測清潔分數：{avg_score}\n"
-        f"⭐ 平均使用者評分：{avg_rating}/10\n"
-        f"🧻 衛生紙：{paper_main}\n"
-        f"♿ 無障礙：{access_main}\n"
-    )
-    if comments:
-        summary += f"💬 最新留言：{comments[0]}"
-    return summary
-
-
-def get_feedback_avg_score_by_coord_neon(lat, lon):
-    rows = get_feedback_reports_by_coord_neon(lat, lon)
-    scores = []
-    for r in rows:
-        try:
-            if r.get("cleanliness_score") is not None:
-                scores.append(float(r.get("cleanliness_score")))
-        except Exception:
-            pass
-    return round(sum(scores) / len(scores), 2) if scores else "未預測"
-
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
@@ -3720,8 +3537,6 @@ def submit_feedback():
 
         hist_feats = []
         try:
-            if feedback_sheet is None:
-                raise RuntimeError("feedback_sheet not enabled; use Neon only")
             rows = feedback_sheet.get_all_values()
             header = rows[0]; data_rows = rows[1:]
             idx = _feedback_indices(header)
@@ -3757,32 +3572,13 @@ def submit_feedback():
 
         pred_with_hist = expected_from_feats([cur_feat] + hist_feats) or expected_from_feats([cur_feat]) or "未預測"
 
-        uid = (request.args.get("uid") or getv("uid", "") or "").strip()
-        display_name = (getv("display_name", "") or "").strip()
+        feedback_sheet.append_row([
+            name, address, rating, toilet_paper, accessibility, time_of_use,
+            comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            floor_hint
+        ], value_input_option="USER_ENTERED")
 
-        # ✅ Neon 主儲存：就算 Google Sheets 關閉，個別廁所回饋仍可正常寫入與讀取
-        saved_neon = save_toilet_feedback_report(
-            name=name, address=address, lat=lat, lon=lon, rating=rating,
-            toilet_paper=toilet_paper, accessibility=accessibility,
-            time_of_use=time_of_use, comment=comment,
-            cleanliness_score=pred_with_hist, floor_hint=floor_hint,
-            user_id=uid, display_name=display_name
-        )
-
-        # ✅ Google Sheets 只作為相容備份；未啟用時不再讓整個提交失敗
-        if feedback_sheet is not None:
-            try:
-                feedback_sheet.append_row([
-                    name, address, rating, toilet_paper, accessibility, time_of_use,
-                    comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                    floor_hint
-                ], value_input_option="USER_ENTERED")
-            except Exception as e:
-                logging.warning(f"Google Sheets 回饋備份失敗，已保留 Neon 資料: {e}")
-
-        if not saved_neon and feedback_sheet is None:
-            return "提交失敗：Neon 未啟用，且 Google Sheets 未啟用", 500
-
+        uid = (request.args.get("uid") or "").strip()
         lang = (request.args.get("lang") or "").strip().lower()
         target = f"/toilet_feedback_by_coord/{lat}/{lon}"
         if uid:
@@ -3795,11 +3591,6 @@ def submit_feedback():
 
 # === 讀座標的回饋清單 ===
 def get_feedbacks_by_coord(lat, lon, tol=1e-6):
-    # ✅ Neon 主讀取：避免 Google Sheets 停用時個別頁顯示「無法連到雲端資料」
-    neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
-    if neon_rows:
-        return _feedback_rows_to_template(neon_rows)
-
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return []
@@ -3842,11 +3633,6 @@ def get_feedbacks_by_coord(lat, lon, tol=1e-6):
 
 # === 座標聚合統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
-    # ✅ Neon 主讀取
-    neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
-    if neon_rows:
-        return get_feedback_summary_by_coord_neon(lat, lon)
-
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return "尚無回饋資料"
@@ -4808,8 +4594,11 @@ def toilet_feedback(toilet_name):
 # === 新路由 ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
+    _ensure_sheets_ready()
+
     liff_id = _get_liff_status_id()
 
+    # ✅ 語言：優先用 querystring ?lang=，沒有就用資料庫記錄（需帶 uid）
     uid = (request.args.get("uid") or "").strip()
     lang = (request.args.get("lang") or "").strip().lower()
     if uid and not lang:
@@ -4820,56 +4609,53 @@ def toilet_feedback_by_coord(lat, lon):
         qs = request.args.to_dict(flat=True)
         qs["lang"] = lang
         return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
-
+    if feedback_sheet is None:
+        return render_template("toilet_feedback.html",
+                               toilet_name=f"廁所（{lat}, {lon}）",
+                               summary="（暫時無法連到雲端資料）",
+                               feedbacks=[], address=f"{lat},{lon}",
+                               avg_pred_score=("N/A" if lang=="en" else "未預測"), lat=lat, lon=lon,
+                               liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
     try:
-        lat_f, lon_f = _parse_lat_lon(lat, lon)
-        if lat_f is None or lon_f is None:
-            return "座標格式錯誤", 400
+        name = f"廁所（{lat}, {lon}）"
+        summary = get_feedback_summary_by_coord(lat, lon)
+        feedbacks = get_feedbacks_by_coord(lat, lon)
 
-        name = f"廁所（{norm_coord(lat_f)}, {norm_coord(lon_f)}）"
-        address = f"{norm_coord(lat_f)},{norm_coord(lon_f)}"
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header:
+            header = []
+        if not data:
+            data = []
 
-        summary = get_feedback_summary_by_coord(lat_f, lon_f)
-        feedbacks = get_feedbacks_by_coord(lat_f, lon_f)
-        avg_pred_score = get_feedback_avg_score_by_coord_neon(lat_f, lon_f)
+        idx = _feedback_indices(header)
 
-        # 若 Neon 沒資料但 Sheets 有資料，才用 Sheets 算平均分數
-        if avg_pred_score == "未預測" and feedback_sheet is not None:
-            try:
-                header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-                idx = _feedback_indices(header or [])
-                scores = []
-                def close(a, b, tol=1e-4):
-                    try: return abs(float(a) - float(b)) <= tol
-                    except: return False
-                if idx["lat"] is not None and idx["lon"] is not None:
-                    for r in data or []:
-                        if len(r) <= max(idx["lat"], idx["lon"]):
-                            continue
-                        if close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f):
-                            sc, _, _, _ = _pred_from_row(r, idx)
-                            if isinstance(sc, (int, float)):
-                                scores.append(float(sc))
-                if scores:
-                    avg_pred_score = round(sum(scores)/len(scores), 2)
-            except Exception as e:
-                logging.warning(f"Sheets avg score fallback failed: {e}")
+        def close(a, b, tol=1e-6):
+            try: return abs(float(a) - float(b)) <= tol
+            except: return False
+
+        scores = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
+                sc, _, _, _ = _pred_from_row(r, idx)
+                if isinstance(sc, (int, float)):
+                    scores.append(float(sc))
+        avg_pred_score = round(sum(scores)/len(scores), 2) if scores else "未預測"
 
         return render_template(
             "toilet_feedback.html",
             toilet_name=name,
             summary=summary,
             feedbacks=feedbacks,
-            address=address,
+            address=f"{lat},{lon}",
             avg_pred_score=avg_pred_score,
-            lat=norm_coord(lat_f),
-            lon=norm_coord(lon_f),
-            liff_id=liff_id,
-            uid=uid,
-            lang=(lang if lang in ["en","zh"] else "zh")
+            lat=lat,
+            lon=lon,
+            liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh")
         )
     except Exception as e:
-        logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}", exc_info=True)
+        logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
         return "查詢失敗", 500
 
 # === 清潔度趨勢（名稱版別名） ===
@@ -4916,20 +4702,6 @@ def get_clean_trend_by_name(toilet_name):
 # === 清潔度趨勢 API ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
-    # ✅ Neon 主讀取：個別頁趨勢圖不再依賴 Google Sheets
-    try:
-        neon_rows = get_feedback_reports_by_coord_neon(lat, lon)
-        trend = []
-        for r in reversed(neon_rows):
-            sc = r.get("cleanliness_score")
-            if sc is None:
-                continue
-            trend.append({"t": _format_feedback_dt(r.get("created_at")), "score": round(float(sc), 2)})
-        if trend:
-            return {"success": True, "data": trend}, 200
-    except Exception as e:
-        logging.warning(f"Neon clean trend fallback failed: {e}")
-
     _ensure_sheets_ready()
     if feedback_sheet is None:
         return {"success": True, "data": []}, 200 
@@ -5081,6 +4853,11 @@ def api_ai_feedback_summary(lat, lon):
 
     try:
         _ensure_sheets_ready()
+        if feedback_sheet is None:
+            return jsonify({
+                "success": False,
+                "message": L(uid, "回饋表尚未就緒，請稍後再試", "Feedback sheet not ready, please try again later")
+            }), 503
 
         if client is None:
             return jsonify({
@@ -5109,43 +4886,47 @@ def api_ai_feedback_summary(lat, lon):
                 "message": L(uid, "lat/lon 格式錯誤", "Invalid latitude / longitude")
             }), 400
 
-        # 1️⃣ 從 Neon 清潔度回饋抓資料；若沒有，再 fallback Google Sheets
-        matched = []
-        neon_rows = get_feedback_reports_by_coord_neon(lat_f, lon_f)
-        for r in neon_rows:
-            matched.append({
-                "rating": "" if r.get("rating") is None else str(r.get("rating")),
-                "paper": r.get("toilet_paper") or "",
-                "access": r.get("accessibility") or "",
-                "comment": r.get("comment") or "",
-                "created_at": _format_feedback_dt(r.get("created_at")),
-            })
+        # 1️⃣ 從雲端回饋表抓資料
+        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
+        if not header or not data:
+            return jsonify({
+                "success": True,
+                "summary": "",  # 讓前端依 lang 顯示自己的 no_data 文案，避免混語
+                "data": [],
+                "has_data": False
+            }), 200
 
-        if not matched and feedback_sheet is not None:
-            header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-            if header and data:
-                idx = _feedback_indices(header)
-                if idx["lat"] is not None and idx["lon"] is not None:
-                    def close(a, b, tol=1e-4):
-                        try:
-                            return abs(float(a) - float(b)) <= tol
-                        except Exception:
-                            return False
-                    for r in data:
-                        if len(r) <= max(idx["lat"], idx["lon"]):
-                            continue
-                        if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
-                            continue
-                        def v(key):
-                            i = idx.get(key)
-                            return (r[i] if i is not None and i < len(r) else "").strip()
-                        matched.append({
-                            "rating":     v("rating"),
-                            "paper":      v("paper"),
-                            "access":     v("access"),
-                            "comment":    v("comment"),
-                            "created_at": v("created"),
-                        })
+        idx = _feedback_indices(header)
+        if idx["lat"] is None or idx["lon"] is None:
+            return jsonify({
+                "success": False,
+                "message": L(uid, "缺少 lat/lon 欄位", "lat/lon column missing")
+            }), 400
+
+        def close(a, b, tol=1e-4):
+            try:
+                return abs(float(a) - float(b)) <= tol
+            except Exception:
+                return False
+
+        matched = []
+        for r in data:
+            if len(r) <= max(idx["lat"], idx["lon"]):
+                continue
+            if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
+                continue
+
+            def v(key):
+                i = idx.get(key)
+                return (r[i] if i is not None and i < len(r) else "").strip()
+
+            matched.append({
+                "rating":     v("rating"),
+                "paper":      v("paper"),
+                "access":     v("access"),
+                "comment":    v("comment"),
+                "created_at": v("created"),
+            })
 
         if not matched:
             return jsonify({
@@ -6378,8 +6159,8 @@ function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
 function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
 function esc(s){
-  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
-  return String(s ?? '').replace(/[&<>"']/g, m => map[m] || m);
+  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'};
+  return String(s ?? '').replace(/[&<>\"']/g, m => map[m] || m);
 }
 function bar(rate){ const v=Math.max(0, Math.min(100, Number(rate)||0)); return `<div class="bar"><span style="width:${v}%"></span></div>`; }
 function table(headers, rows, empty='目前沒有資料'){
@@ -8100,6 +7881,241 @@ def api_line_insights():
             "error": str(e)
         }), 200
     
+
+# === Auto Verification 1.0：使用者新增廁所自動驗證 ===
+def _tw_coordinate_risk(lat, lon):
+    """台灣場景的座標合理性檢查。保留一點外島範圍。"""
+    try:
+        lat = float(lat); lon = float(lon)
+    except Exception:
+        return True
+    # 台灣本島與離島的大致外框，太寬鬆但足夠抓明顯錯誤
+    return not (21.5 <= lat <= 26.5 and 118.0 <= lon <= 123.5)
+
+
+def _text_similarity(a, b):
+    a = (a or "").strip().lower()
+    b = (b or "").strip().lower()
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _compact_toilet_name(name):
+    s = (name or "").strip().lower()
+    for token in ["廁所", "公廁", "男廁", "女廁", "無障礙", "親子", "性別友善", "toilet", "restroom"]:
+        s = s.replace(token, "")
+    return re.sub(r"\s+", "", s)
+
+
+def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8):
+    """
+    找疑似重複廁所資料。
+    來源包含：使用者新增資料 user_toilets + 本地 public_toilets.csv。
+    回傳只保留後台判斷需要的欄位，避免過大。
+    """
+    out = []
+    try:
+        lat = float(lat); lon = float(lon)
+    except Exception:
+        return []
+
+    target_name = name or ""
+    target_addr = address or ""
+    target_name_c = _compact_toilet_name(target_name)
+
+    # 1) Neon user_toilets
+    if POSTGRES_ENABLED:
+        try:
+            dlat = radius_m / 111000.0
+            dlon = radius_m / (111000.0 * max(0.1, math.cos(math.radians(lat))))
+            conn = _pg_connect()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT id, name, address, lat, lon, verification_status, source
+                FROM user_toilets
+                WHERE lat BETWEEN %s AND %s
+                  AND lon BETWEEN %s AND %s
+                ORDER BY created_at DESC
+                LIMIT 100
+            """, (lat - dlat, lat + dlat, lon - dlon, lon + dlon))
+            rows = cur.fetchall()
+            conn.close()
+            for r in rows:
+                try:
+                    d = haversine(lat, lon, float(r.get("lat")), float(r.get("lon")))
+                except Exception:
+                    continue
+                if d > radius_m:
+                    continue
+                nm = r.get("name") or ""
+                ad = r.get("address") or ""
+                name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
+                addr_sim = _text_similarity(target_addr, ad)
+                combined = max(name_sim, addr_sim * 0.9)
+                if d <= 20 or combined >= 0.45:
+                    out.append({
+                        "source": r.get("source") or "user_toilets",
+                        "id": r.get("id"),
+                        "name": nm,
+                        "address": ad,
+                        "distance_m": round(d, 1),
+                        "name_similarity": round(name_sim, 3),
+                        "address_similarity": round(addr_sim, 3),
+                        "verification_status": r.get("verification_status") or "pending"
+                    })
+        except Exception as e:
+            logging.warning(f"find_similar_toilets user_toilets failed: {e}")
+
+    # 2) public_toilets.csv
+    try:
+        if os.path.exists(TOILETS_FILE_PATH):
+            with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        t_lat = float(row.get("latitude") or row.get("lat") or "")
+                        t_lon = float(row.get("longitude") or row.get("lon") or "")
+                    except Exception:
+                        continue
+                    if not _in_bbox(t_lat, t_lon, lat, lon, radius_m):
+                        continue
+                    d = haversine(lat, lon, t_lat, t_lon)
+                    if d > radius_m:
+                        continue
+                    nm = row.get("name") or ""
+                    ad = row.get("address") or ""
+                    name_sim = max(_text_similarity(target_name, nm), _text_similarity(target_name_c, _compact_toilet_name(nm)))
+                    addr_sim = _text_similarity(target_addr, ad)
+                    combined = max(name_sim, addr_sim * 0.9)
+                    if d <= 20 or combined >= 0.45:
+                        out.append({
+                            "source": "public_csv",
+                            "id": row.get("number") or "",
+                            "name": nm,
+                            "address": ad,
+                            "distance_m": round(d, 1),
+                            "name_similarity": round(name_sim, 3),
+                            "address_similarity": round(addr_sim, 3),
+                            "verification_status": "approved"
+                        })
+    except Exception as e:
+        logging.warning(f"find_similar_toilets public_csv failed: {e}")
+
+    # 排序：距離近、相似度高優先
+    out.sort(key=lambda x: (float(x.get("distance_m") or 9999), -max(float(x.get("name_similarity") or 0), float(x.get("address_similarity") or 0))))
+    return out[:limit]
+
+
+def auto_verify_user_toilet(toilet):
+    """
+    Auto Verification 1.0。
+    只輸出三種 verification_status：approved / pending / rejected。
+    - approved：低風險，可直接進入推薦，但仍保留後台可抽查
+    - pending：需要人工確認或資料不足
+    - rejected：明顯錯誤，直接排除推薦
+    """
+    name = (toilet.get("name") or "").strip()
+    address = (toilet.get("address") or "").strip()
+    lat = toilet.get("lat")
+    lon = toilet.get("lon")
+    level = (toilet.get("level") or "").strip()
+    floor_hint = (toilet.get("floor_hint") or "").strip()
+    entrance_hint = (toilet.get("entrance_hint") or "").strip()
+    access_note = (toilet.get("access_note") or "").strip()
+    open_hours = (toilet.get("open_hours") or "").strip()
+
+    score = 70
+    flags = []
+    reasons = []
+
+    # 名稱品質
+    generic_names = {"廁所", "公廁", "男廁", "女廁", "無名稱", "toilet", "restroom", "test", "測試"}
+    if not name or len(name) < 3 or name.lower() in generic_names:
+        score -= 25
+        flags.append("name_too_generic")
+        reasons.append("名稱過短或過於籠統")
+    else:
+        score += 5
+
+    # 地址與可找性資訊
+    if address:
+        score += 8
+    else:
+        score -= 15
+        flags.append("missing_address")
+        reasons.append("缺少地址")
+
+    if floor_hint or level:
+        score += 5
+    else:
+        score -= 6
+        flags.append("missing_floor_hint")
+        reasons.append("缺少樓層或位置描述")
+
+    if entrance_hint or access_note:
+        score += 5
+    else:
+        flags.append("missing_entrance_hint")
+
+    if open_hours:
+        score += 2
+
+    # 座標合理性
+    if _tw_coordinate_risk(lat, lon):
+        score -= 45
+        flags.append("coordinate_out_of_taiwan_range")
+        reasons.append("座標超出台灣服務範圍")
+
+    # 疑似重複資料
+    similar = find_similar_toilets(lat, lon, name=name, address=address, radius_m=50, limit=8)
+    high_dup = []
+    medium_dup = []
+    for s in similar:
+        d = float(s.get("distance_m") or 9999)
+        ns = float(s.get("name_similarity") or 0)
+        ads = float(s.get("address_similarity") or 0)
+        if d <= 20 and (ns >= 0.55 or ads >= 0.55):
+            high_dup.append(s)
+        elif d <= 50 and (ns >= 0.65 or ads >= 0.65):
+            medium_dup.append(s)
+
+    if high_dup:
+        score -= 30
+        flags.append("possible_duplicate_high")
+        reasons.append("附近已有高度相似廁所資料，疑似重複")
+    elif medium_dup:
+        score -= 15
+        flags.append("possible_duplicate_medium")
+        reasons.append("附近有相似廁所資料，建議人工確認")
+
+    score = max(0, min(100, int(round(score))))
+
+    # 只產生 approved / pending / rejected 三種狀態
+    if "coordinate_out_of_taiwan_range" in flags or ("name_too_generic" in flags and score < 45):
+        status = "rejected"
+    elif score >= 80 and not high_dup:
+        status = "approved"
+    else:
+        status = "pending"
+
+    if not reasons:
+        if status == "approved":
+            reasons.append("資料完整且未發現明顯重複，系統自動判定為低風險")
+        elif status == "pending":
+            reasons.append("資料可用但仍建議後台確認")
+        else:
+            reasons.append("資料存在明顯風險，系統建議排除")
+
+    return {
+        "verification_status": status,
+        "auto_verification_score": score,
+        "auto_verification_result": status,
+        "auto_verification_reason": "；".join(reasons),
+        "risk_flags": sorted(set(flags)),
+        "similar_toilets": similar[:5]
+    }
+
 # === 使用者新增廁所 API ===
 @app.route("/submit_toilet", methods=["POST"])
 def submit_toilet():
@@ -8147,6 +8163,26 @@ def submit_toilet():
 
         lat_s, lon_s = norm_coord(lat_f), norm_coord(lon_f)
 
+        # Auto Verification 1.0：表單送出後自動判定 approved / pending / rejected
+        candidate = {
+            "user_id": uid,
+            "name": name,
+            "address": addr,
+            "lat": float(lat_s),
+            "lon": float(lon_s),
+            "level": level,
+            "floor_hint": floor_hint,
+            "entrance_hint": entrance_hint,
+            "access_note": access_note,
+            "open_hours": open_hours,
+        }
+        av = auto_verify_user_toilet(candidate)
+        verification_status = av["verification_status"]
+        verification_score = int(av["auto_verification_score"])
+        verification_reason = av["auto_verification_reason"]
+        risk_flags_json = json.dumps(av.get("risk_flags") or [], ensure_ascii=False)
+        similar_json = json.dumps(av.get("similar_toilets") or [], ensure_ascii=False)
+
         conn = _pg_connect()
         cur = conn.cursor()
         cur.execute("""
@@ -8154,14 +8190,18 @@ def submit_toilet():
                 user_id, name, address, lat, lon,
                 level, floor_hint, entrance_hint,
                 access_note, open_hours,
-                verification_status, verification_score,
+                verification_status, verification_score, verification_reason,
+                auto_verification_score, auto_verification_result,
+                auto_verification_reason, risk_flags, similar_toilets_json,
                 created_at, updated_at, source
             )
             VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s,
                 %s, %s,
-                'pending', 0,
+                %s, %s, %s,
+                %s, %s,
+                %s, %s, %s,
                 NOW(), NOW(), 'neon'
             )
             ON CONFLICT (user_id, name, lat, lon)
@@ -8172,24 +8212,136 @@ def submit_toilet():
                 entrance_hint = EXCLUDED.entrance_hint,
                 access_note = EXCLUDED.access_note,
                 open_hours = EXCLUDED.open_hours,
+                verification_status = EXCLUDED.verification_status,
+                verification_score = EXCLUDED.verification_score,
+                verification_reason = EXCLUDED.verification_reason,
+                auto_verification_score = EXCLUDED.auto_verification_score,
+                auto_verification_result = EXCLUDED.auto_verification_result,
+                auto_verification_reason = EXCLUDED.auto_verification_reason,
+                risk_flags = EXCLUDED.risk_flags,
+                similar_toilets_json = EXCLUDED.similar_toilets_json,
                 updated_at = NOW()
             RETURNING id
         """, (
             uid, name, addr, float(lat_s), float(lon_s),
             level, floor_hint, entrance_hint,
             access_note, open_hours,
+            verification_status, verification_score, verification_reason,
+            verification_score, verification_status,
+            verification_reason, risk_flags_json, similar_json,
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
         conn.close()
         try: _CACHE.clear()
         except Exception: pass
-        logging.info(f"📝 submit_toilet 已寫入 Neon id={new_id} name={name} status=pending_visible")
-        return {"success": True, "message": f"✅ 已收到 {name}，已加入查詢資料；若審核後發現錯誤會移除", "id": new_id, "verification_status": "pending"}
+
+        if verification_status == "approved":
+            msg = f"✅ 已收到 {name}，系統自動驗證為低風險，已加入推薦資料。"
+        elif verification_status == "rejected":
+            msg = f"⚠️ 已收到 {name}，但系統判定資料風險較高，暫不加入推薦。原因：{verification_reason}"
+        else:
+            msg = f"✅ 已收到 {name}，目前列為待確認資料。原因：{verification_reason}"
+
+        logging.info(f"📝 submit_toilet 已寫入 Neon id={new_id} name={name} status={verification_status} score={verification_score}")
+        return {
+            "success": True,
+            "message": msg,
+            "id": new_id,
+            "verification_status": verification_status,
+            "auto_verification_score": verification_score,
+            "auto_verification_result": verification_status,
+            "risk_flags": av.get("risk_flags") or [],
+            "similar_toilets": av.get("similar_toilets") or []
+        }
 
     except Exception as e:
         logging.error(f"❌ 新增廁所錯誤:\n{traceback.format_exc()}")
         return {"success": False, "message": "伺服器錯誤"}, 500
+
+
+# === Admin：重新自動判定既有使用者新增資料 ===
+@app.route("/admin/reverify-user-toilets", methods=["POST", "GET"])
+def admin_reverify_user_toilets():
+    token = (request.headers.get("X-Admin-Token") or request.args.get("token") or "").strip()
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "message": "postgres disabled"}), 503
+
+    apply_update = (request.args.get("apply") or "1").strip() != "0"
+    limit = int(request.args.get("limit") or "500")
+    updated = 0
+    preview = []
+    counts = {"approved": 0, "pending": 0, "rejected": 0}
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, user_id, name, address, lat, lon, level, floor_hint,
+                   entrance_hint, access_note, open_hours, verification_status
+            FROM user_toilets
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+
+        for r in rows:
+            av = auto_verify_user_toilet(r)
+            st = av["verification_status"]
+            counts[st] = counts.get(st, 0) + 1
+            preview.append({
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "old_status": r.get("verification_status") or "pending",
+                "new_status": st,
+                "score": av["auto_verification_score"],
+                "reason": av["auto_verification_reason"],
+                "risk_flags": av.get("risk_flags") or []
+            })
+            if apply_update:
+                cur.execute("""
+                    UPDATE user_toilets
+                    SET verification_status = %s,
+                        verification_score = %s,
+                        verification_reason = %s,
+                        auto_verification_score = %s,
+                        auto_verification_result = %s,
+                        auto_verification_reason = %s,
+                        risk_flags = %s,
+                        similar_toilets_json = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                """, (
+                    st,
+                    int(av["auto_verification_score"]),
+                    av["auto_verification_reason"],
+                    int(av["auto_verification_score"]),
+                    st,
+                    av["auto_verification_reason"],
+                    json.dumps(av.get("risk_flags") or [], ensure_ascii=False),
+                    json.dumps(av.get("similar_toilets") or [], ensure_ascii=False),
+                    r.get("id")
+                ))
+                updated += 1
+
+        if apply_update:
+            conn.commit()
+        conn.close()
+        try: _CACHE.clear()
+        except Exception: pass
+        return jsonify({
+            "ok": True,
+            "apply": apply_update,
+            "scanned": len(rows),
+            "updated": updated,
+            "counts": counts,
+            "preview": preview[:30]
+        })
+    except Exception as e:
+        logging.error(f"admin_reverify_user_toilets failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 # === Migration endpoints removed after Google Sheets → Neon migration completed ===
 @app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
