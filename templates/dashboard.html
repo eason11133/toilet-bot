@@ -1263,7 +1263,7 @@
     }
 
     function formatMetricValue(value, suffix = '') {
-      if (isMissingMetric(value)) return '—';
+      if (isMissingMetric(value)) return `0${suffix}`;
       return `${formatNumber(value)}${suffix}`;
     }
 
@@ -1466,17 +1466,40 @@
       return await res.json();
     }
 
+    function pickMetric(obj, ...keys) {
+      for (const key of keys) {
+        if (obj && obj[key] !== undefined && obj[key] !== null) {
+          return obj[key];
+        }
+      }
+      return null;
+    }
+
     function updateSummary(summary) {
-      document.getElementById('totalQueries').textContent = formatMetricValue(summary.totalQueries);
-      document.getElementById('activeUsers').textContent = formatMetricValue(summary.activeUsers);
-      document.getElementById('successRate').textContent = isMissingMetric(summary.successRate) ? '—' : `${summary.successRate}%`;
-      document.getElementById('avgResponse').textContent = isMissingMetric(summary.avgResponse) ? '—' : `${formatNumber(summary.avgResponse)} ms`;
+      summary = summary || {};
+
+      const totalQueries = pickMetric(summary, 'totalQueries', 'total_queries', 'queryCount', 'query_count');
+      const activeUsers = pickMetric(summary, 'activeUsers', 'active_users', 'unique_users', 'users');
+      const successRate = pickMetric(summary, 'successRate', 'success_rate', 'success_rate_percent');
+      const avgResponse = pickMetric(summary, 'avgResponse', 'avg_response', 'avgResponseMs', 'avg_response_ms', 'average_response_ms');
+      const instantResponses = pickMetric(summary, 'instantResponses', 'instant_responses', 'instant_response_count', 'instantResponsesCount');
+      const newUsers = pickMetric(summary, 'newUsers', 'new_users');
+      const retentionRate = pickMetric(summary, 'retentionRate', 'retention_rate', 'retention_rate_percent');
+      const noResultCount = pickMetric(summary, 'noResultCount', 'no_result_count', 'noResults', 'no_results');
+      const errorCount = pickMetric(summary, 'errorCount', 'error_count', 'errors');
+
+      document.getElementById('totalQueries').textContent = formatMetricValue(totalQueries);
+      document.getElementById('activeUsers').textContent = formatMetricValue(activeUsers);
+      document.getElementById('successRate').textContent = isMissingMetric(successRate) ? '0%' : `${successRate}%`;
+      document.getElementById('avgResponse').textContent = isMissingMetric(avgResponse) ? '0 ms' : `${formatNumber(avgResponse)} ms`;
+
       const instantEl = document.getElementById('instantResponses');
-      if (instantEl) instantEl.textContent = formatMetricValue(summary.instantResponses);
-      document.getElementById('newUsers').textContent = formatMetricValue(summary.newUsers);
-      document.getElementById('retentionRate').textContent = isMissingMetric(summary.retentionRate) ? '—' : `${summary.retentionRate}%`;
-      document.getElementById('noResultCount').textContent = formatMetricValue(summary.noResultCount);
-      document.getElementById('errorCount').textContent = formatMetricValue(summary.errorCount);
+      if (instantEl) instantEl.textContent = formatMetricValue(instantResponses);
+
+      document.getElementById('newUsers').textContent = formatMetricValue(newUsers);
+      document.getElementById('retentionRate').textContent = isMissingMetric(retentionRate) ? '0%' : `${retentionRate}%`;
+      document.getElementById('noResultCount').textContent = formatMetricValue(noResultCount);
+      document.getElementById('errorCount').textContent = formatMetricValue(errorCount);
     }
 
     function createCommonChartOptions() {
