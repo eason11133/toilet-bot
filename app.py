@@ -6031,7 +6031,10 @@ const $ = (id)=>document.getElementById(id);
 function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(n){ if(n===null||n===undefined||n==='') return '--'; return Number(n).toLocaleString(); }
 function pct(v){ if(v===null||v===undefined||v==='') return '--'; return `${v}%`; }
-function esc(s){ return String(s ?? '').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+function esc(s){
+  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'};
+  return String(s ?? '').replace(/[&<>\"']/g, m => map[m] || m);
+}
 function bar(rate){ const v=Math.max(0, Math.min(100, Number(rate)||0)); return `<div class="bar"><span style="width:${v}%"></span></div>`; }
 function table(headers, rows, empty='目前沒有資料'){
   if(!rows || rows.length===0) return `<div class="empty">${empty}</div>`;
@@ -6140,9 +6143,9 @@ async function loadNtsBehavior(){
     $('recentTable').innerHTML = table(['時間','版本','Rank','廁所','距離','NTS','Trust','Info','Status'], (data.recent_clicks||[]).map(r=>
       `<tr><td>${esc(r.action_time)}</td><td>${esc(r.model_version)}</td><td>${esc(r.rank)}</td><td>${esc(r.toilet_name)}</td><td>${Number(r.distance_m||0).toFixed(1)}m</td><td>${esc(r.nts_score)}</td><td>${esc(r.trust_score)}</td><td>${esc(r.info_score)}</td><td>${esc(r.status_score)}</td></tr>`
     ));
-    await loadCompareTable();
-    await loadSourceMetrics();
-    await loadShadowMetrics();
+    try { await loadCompareTable(); } catch(e) { $('compareTable').innerHTML = `<div class="empty">版本比較暫時無法載入：${esc(e.message)}</div>`; }
+    try { await loadSourceMetrics(); } catch(e) { $('sourceMetrics').innerHTML = `<div class="empty">資料來源效率暫時無法載入：${esc(e.message)}</div>`; $('sourceReasons').innerHTML = ''; }
+    try { await loadShadowMetrics(); } catch(e) { $('shadowSummary').innerHTML = `<div class="empty">Shadow metrics 暫時無法載入：${esc(e.message)}</div>`; $('shadowRankTable').innerHTML = ''; $('shadowRecent').innerHTML = ''; }
     $('loading').style.display='none'; $('content').style.display='block';
   }catch(e){
     $('loading').style.display='none'; $('errorBox').style.display='block'; $('errorBox').textContent = '載入失敗：' + e.message;
