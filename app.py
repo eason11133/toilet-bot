@@ -7911,6 +7911,88 @@ def _primary_region_risk(lat, lon):
         return False
 
 
+
+# === Auto Verification 1.5.1：地理資料品質驗證輔助函式（缺漏修正） ===
+def _normalize_text_for_verify(text):
+    """Normalize text for rule-based verification / duplicate checks."""
+    s = str(text or "").strip().lower()
+    s = re.sub(r"[\s\u3000,，。．.、;；:：/\\|｜()（）\[\]【】{}<>《》\-＿_]+", "", s)
+    return s
+
+
+def _has_meaningful_address(address):
+    """地址是否有基本辨識度；不是一定要完整門牌，但不能只有極短文字。"""
+    s = _normalize_text_for_verify(address)
+    if len(s) < 5:
+        return False
+    weak = {"無", "沒有", "未知", "不清楚", "none", "null", "na", "n/a"}
+    return s not in weak
+
+
+def _address_coordinate_check(lat, lon, address):
+    """
+    地址—座標一致性檢查。
+    預設關閉外部 geocoding，避免批次驗證變慢；設定 AUTO_VERIFY_GEOCODE_ENABLE=1 後啟用。
+    回傳：(flag, distance_m, reason)；flag 為 None 表示不標記。
+    """
+    if os.getenv("AUTO_VERIFY_GEOCODE_ENABLE", "0") != "1":
+        return None, None, None
+    if not address or not _valid_global_coordinate(lat, lon):
+        return None, None, None
+    try:
+        g_lat, g_lon = geocode_address(address)
+        if g_lat is None or g_lon is None:
+            return "address_geocode_failed", None, "地址無法轉換為座標，建議人工確認"
+        d = haversine(float(lat), float(lon), float(g_lat), float(g_lon))
+        if d >= float(os.getenv("AUTO_VERIFY_ADDR_COORD_HIGH_M", "800")):
+            return "address_coordinate_mismatch_high", round(d, 1), f"地址轉換座標與填寫座標相差約 {round(d)} 公尺"
+        if d >= float(os.getenv("AUTO_VERIFY_ADDR_COORD_MEDIUM_M", "250")):
+            return "address_coordinate_mismatch_medium", round(d, 1), f"地址轉換座標與填寫座標相差約 {round(d)} 公尺"
+        return None, round(d, 1), None
+    except Exception as e:
+        logging.warning(f"address-coordinate check failed: {e}")
+        return None, None, None
+
+
+def _spatial_context_signal(lat, lon, context=None, exclude_id=None, radius_m=None):
+    """
+    空間孤立/離群標記：只作 soft flag，不直接 rejected。
+    目標是抓「附近完全沒有參考資料且本身資訊不足」的可疑資料；偏鄉資料不能被誤殺。
+    """
+    if not _valid_global_coordinate(lat, lon):
+        return {"nearby_count": 0, "nearest_m": None, "flag": None}
+    if radius_m is None:
+        radius_m = float(os.getenv("AUTO_VERIFY_SPATIAL_RADIUS_M", "800"))
+    if not (context and isinstance(context, dict) and isinstance(context.get("items"), list)):
+        context = _build_auto_verify_context()
+    nearby = 0
+    nearest = None
+    try:
+        lat_f = float(lat); lon_f = float(lon)
+        for r in context.get("items") or []:
+            try:
+                if exclude_id is not None and str(r.get("id")) == str(exclude_id) and (r.get("source") in ("neon", "user_toilets", "user_added")):
+                    continue
+                r_lat = float(r.get("lat")); r_lon = float(r.get("lon"))
+            except Exception:
+                continue
+            if not _in_bbox(r_lat, r_lon, lat_f, lon_f, radius_m):
+                continue
+            try:
+                d = haversine(lat_f, lon_f, r_lat, r_lon)
+            except Exception:
+                continue
+            if d <= radius_m:
+                nearby += 1
+                if nearest is None or d < nearest:
+                    nearest = d
+        flag = None
+        if nearby == 0:
+            flag = "spatial_outlier_candidate"
+        return {"nearby_count": nearby, "nearest_m": round(nearest, 1) if nearest is not None else None, "flag": flag}
+    except Exception:
+        return {"nearby_count": 0, "nearest_m": None, "flag": None}
+
 def _text_similarity(a, b):
     a = (a or "").strip().lower()
     b = (b or "").strip().lower()
