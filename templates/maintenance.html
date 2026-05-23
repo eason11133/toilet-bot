@@ -13,13 +13,19 @@
     .grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:20px}.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;min-height:128px}.card h3{margin:0 0 14px;color:var(--muted);font-size:14px}.num{font-size:32px;font-weight:800;line-height:1.1}.sub{font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
     .section{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:20px}.section h2{margin:0 0 14px;font-size:20px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.tab{border:none;border-radius:999px;padding:10px 14px;background:#f3f4f6;cursor:pointer}.tab.active{background:var(--primary);color:#fff}
     table{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:700}.mono{font-variant-numeric:tabular-nums}.pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;margin:2px}.status-approved{background:#ecfdf5;color:#047857}.status-pending{background:#fffbeb;color:#92400e}.status-rejected{background:#fef2f2;color:#991b1b}.flags{line-height:1.8}.reason{color:#374151;line-height:1.5}.small{font-size:12px;color:var(--muted)}.empty{color:var(--muted);padding:16px;background:#f9fafb;border-radius:12px}.bar{height:9px;background:#eef2ff;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;background:#6366f1;border-radius:999px}
+
+    .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.help-btn{height:34px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--text);padding:0 12px;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:18px}.modal-backdrop.show{display:flex}.modal{width:min(980px,100%);max-height:88vh;overflow:auto;background:#fff;border-radius:22px;box-shadow:0 24px 80px rgba(0,0,0,.24);padding:24px}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.modal h2{margin:0;font-size:24px}.modal h3{margin:22px 0 8px;font-size:18px}.modal p{line-height:1.7;color:#374151}.modal ul{margin:8px 0 0 20px;line-height:1.8;color:#374151}.modal table{table-layout:auto;margin-top:8px}.modal th,.modal td{font-size:14px}.close-btn{border:none;background:#f3f4f6;border-radius:999px;width:38px;height:38px;cursor:pointer;font-size:20px}.note-box{background:#f8fafc;border:1px solid var(--line);border-radius:16px;padding:14px;margin:12px 0;color:#374151;line-height:1.7}.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef2ff;color:#3730a3;border-radius:6px;padding:2px 6px;font-size:12px}
     @media(max-width:1000px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))} table{table-layout:auto;min-width:900px}.table-scroll{overflow-x:auto}}@media(max-width:640px){.grid{grid-template-columns:1fr}.container{padding:16px}h1{font-size:26px}}
   </style>
 </head>
 <body>
 <div class="container">
   <div class="topbar">
-    <div><h1>自動資料維護儀表板</h1><p class="subtitle">集中查看使用者新增廁所的自動驗證結果、待審資料、疑似重複與高風險標籤。</p></div>
+    <div>
+      <div class="title-row"><h1>自動資料維護儀表板</h1><button class="help-btn" id="helpBtn" type="button">版本／操作說明</button></div>
+      <p class="subtitle">集中查看使用者新增廁所的自動驗證結果、待審資料、疑似重複與高風險標籤。</p>
+    </div>
     <div class="actions">
       <a class="btn" href="/dashboard">← 回總覽儀表板</a>
       <a class="btn" href="/dashboard/nts">NTS 排序分析 →</a>
@@ -35,8 +41,68 @@
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
   <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
 </div>
+  <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h2 id="helpTitle">Auto Verification 1.5.4 說明</h2>
+          <p class="subtitle">這頁是給管理者定期維護使用者新增廁所資料用，不是給一般使用者看的查詢頁。</p>
+        </div>
+        <button class="close-btn" id="closeHelpBtn" type="button" aria-label="關閉">×</button>
+      </div>
+
+      <div class="note-box">
+        <strong>目前版本定位：</strong>大部分資料由系統自動通過；只有「名稱太籠統、嚴格重複、店家缺地址等真的需要人工判斷」才留下 pending。
+        所以看到很多 <span class="kbd">possible_duplicate_high</span> 不代表資料壞掉，它只是相似資料提醒；真正需要處理的是 <span class="kbd">strict_duplicate</span> 或 pending 佇列。
+      </div>
+
+      <h3>一、上方數字是什麼意思？</h3>
+      <table>
+        <thead><tr><th>欄位</th><th>意思</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Approved</strong></td><td>系統判定低風險，可進入推薦資料池。</td></tr>
+          <tr><td><strong>Pending</strong></td><td>需要管理者人工確認的資料，例如嚴格重複、名稱太籠統、店家缺地址。</td></tr>
+          <tr><td><strong>Rejected</strong></td><td>明顯錯誤資料，例如座標非法、測試資料；目前規則很保守，通常會很少。</td></tr>
+          <tr><td><strong>平均驗證分數</strong></td><td>系統自動驗證分數平均值。分數高不代表一定 approved；如果疑似重複，資料本身完整也可能 pending。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>二、常見英文風險標籤</h3>
+      <table>
+        <thead><tr><th>標籤</th><th>中文意思</th><th>處理建議</th></tr></thead>
+        <tbody>
+          <tr><td><span class="kbd">possible_duplicate_high</span></td><td>高度相似提醒</td><td>只是提醒附近有相似資料，不一定要處理。</td></tr>
+          <tr><td><span class="kbd">strict_duplicate</span></td><td>嚴格重複待審</td><td>優先確認是否和既有資料重複，必要時合併或保留較完整的一筆。</td></tr>
+          <tr><td><span class="kbd">possible_duplicate_medium</span></td><td>中度重複提醒</td><td>可抽查，不一定要每筆處理。</td></tr>
+          <tr><td><span class="kbd">shop_access_unclear</span></td><td>店家開放不明</td><td>便利商店、超市、店家型廁所，缺少是否對外開放或入口說明。</td></tr>
+          <tr><td><span class="kbd">missing_entrance_hint</span></td><td>缺入口／位置提示</td><td>室內或大型場域建議補「靠近哪裡、入口在哪」。</td></tr>
+          <tr><td><span class="kbd">missing_floor_hint</span></td><td>缺樓層資訊</td><td>百貨、車站、學校、醫院、大樓類資料建議補樓層。</td></tr>
+          <tr><td><span class="kbd">name_too_generic</span></td><td>名稱太籠統</td><td>例如只寫「公廁」「廁所」，建議改成可辨識名稱。</td></tr>
+          <tr><td><span class="kbd">shop_missing_address</span></td><td>店家缺地址</td><td>店家型資料沒有地址時應人工確認。</td></tr>
+          <tr><td><span class="kbd">spatial_outlier_candidate</span></td><td>空間孤立提醒</td><td>附近參考資料較少，先提醒，不直接判錯。</td></tr>
+          <tr><td><span class="kbd">address_coordinate_mismatch</span></td><td>地址座標可能不一致</td><td>若之後開啟地址座標比對，座標和地址距離差太大會出現。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>三、平常怎麼維護？</h3>
+      <ul>
+        <li>平常只需要按 <strong>載入資料</strong>，看 <strong>待人工確認</strong>、<strong>嚴格重複待審</strong>、<strong>名稱太籠統</strong>。</li>
+        <li>如果剛更新自動驗證規則，先按 <strong>預覽重新驗證</strong>，確認 approved / pending 比例合理。</li>
+        <li>預覽合理後，再按 <strong>正式自動審核</strong>，系統才會真的寫回 Neon。</li>
+        <li>正式審核後再按一次 <strong>載入資料</strong>，確認數字更新。</li>
+      </ul>
+
+      <h3>四、什麼時候不要按正式自動審核？</h3>
+      <ul>
+        <li>如果預覽結果 pending 突然暴增，例如從十幾筆變成兩百多筆。</li>
+        <li>如果 rejected 突然大量出現。</li>
+        <li>如果錯誤訊息顯示某個函式不存在或 API 失敗。</li>
+      </ul>
+    </div>
+  </div>
+
 <script>
-const queueLabels={pending:'待人工確認',possible_duplicate:'疑似重複總覽',strict_duplicate:'嚴格重複待審',duplicate_high:'高度重複提醒',duplicate_medium:'中度重複',duplicate_low:'低度重複提醒',shop_access_unclear:'店家開放不明',generic_name:'名稱太籠統',address_coordinate_mismatch:'地址座標不一致',spatial_outlier:'空間孤立提醒',outside_primary_region:'主要區域外',rejected:'建議排除',low_score:'低分資料'};
+const queueLabels={pending:'待人工確認',possible_duplicate:'相似資料提醒總覽',strict_duplicate:'嚴格重複待審',duplicate_high:'高度相似提醒',duplicate_medium:'中度重複',duplicate_low:'低度重複提醒',shop_access_unclear:'店家開放不明',generic_name:'名稱太籠統',address_coordinate_mismatch:'地址座標不一致',spatial_outlier:'空間孤立提醒',outside_primary_region:'主要區域外',rejected:'建議排除',low_score:'低分資料'};
 let DATA=null, activeQueue='pending';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function fmt(n){return Number(n||0).toLocaleString('zh-TW')}
@@ -51,6 +117,12 @@ function clearToken(){sessionStorage.removeItem('maintenance_token'); tokenInput
 function setLoading(text){summaryGrid.innerHTML=`<div class="card"><h3>處理中</h3><div class="sub">${esc(text)}</div></div>`;}
 async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
 async function runReverify(apply=false){const token=getToken(); if(!token){alert('請先輸入 ADMIN_TOKEN'); return;} saveToken(token); tokenInput.value=token; const limit=Math.max(1,Math.min(500,Number(reverifyLimit.value||50))); if(apply){const ok=confirm(`確定要正式自動審核 ${limit} 筆舊資料？這會寫入 Neon，改變 approved / pending / rejected 狀態。`); if(!ok) return;} setLoading(apply?`正在正式自動審核 ${limit} 筆資料...`:`正在預覽重新驗證 ${limit} 筆資料...`); try{const res=await fetch(`/admin/reverify-user-toilets?apply=${apply?1:0}&limit=${limit}&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(data.message||data.error||res.status)}</div></div>`;return;} const msg=`${apply?'正式套用':'預覽'}完成：approved ${data.counts?.approved??0}、pending ${data.counts?.pending??0}、rejected ${data.counts?.rejected??0}；掃描 ${data.scanned??0} 筆，更新 ${data.updated??0} 筆。`; alert(msg); await loadData(); }catch(err){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(err.message||err)}</div></div>`;}}
+
+const helpModal=document.getElementById('helpModal');
+helpBtn.onclick=()=>helpModal.classList.add('show');
+closeHelpBtn.onclick=()=>helpModal.classList.remove('show');
+helpModal.addEventListener('click',(e)=>{if(e.target===helpModal) helpModal.classList.remove('show');});
+window.addEventListener('keydown',(e)=>{if(e.key==='Escape') helpModal.classList.remove('show');});
 loadBtn.onclick=loadData; previewReverifyBtn.onclick=()=>runReverify(false); applyReverifyBtn.onclick=()=>runReverify(true); clearTokenBtn.onclick=()=>{clearToken(); alert('已清除本分頁記住的密碼');}; window.addEventListener('DOMContentLoaded',()=>{const t=sessionStorage.getItem('maintenance_token')||''; if(t){tokenInput.value=t; loadData();}});
 </script>
 </body>
