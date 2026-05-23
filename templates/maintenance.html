@@ -40,7 +40,7 @@
   </div>
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
-  <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th><th style="width:170px">人工處理</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
+  <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th><th style="width:150px">人工處理</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
 </div>
   <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
     <div class="modal">
@@ -111,7 +111,7 @@ function statusPill(s){const c=s==='approved'?'status-approved':s==='rejected'?'
 function renderSummary(){const s=DATA.summary||{};const cards=[['總資料數',s.total,'本次掃描筆數'],['Approved',s.approved,'低風險或已通過'],['Pending',s.pending,`待確認率 ${s.pending_rate||0}%`],['Rejected',s.rejected,'建議排除'],['平均驗證分數',s.avg_auto_score,'Auto Verification 1.5.4']];summaryGrid.innerHTML=cards.map(x=>`<div class="card"><h3>${x[0]}</h3><div class="num mono">${fmt(x[1])}</div><div class="sub">${x[2]}</div></div>`).join('')}
 function renderFlags(){const flags=DATA.flag_counts||[]; if(!flags.length){flagList.innerHTML='<div class="empty">目前沒有風險標籤。</div>';return;} const max=Math.max(...flags.map(x=>x.count||0),1); flagList.innerHTML=flags.slice(0,20).map(x=>`<div style="display:grid;grid-template-columns:220px 70px 1fr;gap:12px;align-items:center;margin:10px 0"><strong>${esc(x.flag)}</strong><span class="mono">${fmt(x.count)}</span><div class="bar"><span style="width:${Math.round((x.count||0)/max*100)}%"></span></div></div>`).join('')}
 function renderTabs(){const q=DATA.queues||{};tabs.innerHTML=Object.keys(queueLabels).map(k=>`<button class="tab ${k===activeQueue?'active':''}" data-key="${k}">${queueLabels[k]} (${(q[k]||[]).length})</button>`).join('');tabs.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{activeQueue=b.dataset.key;renderTabs();renderQueue();});}
-function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="8"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}<div class="small">${(r.duplicate_levels||[]).map(x=>esc(x)).join(' / ')}</div></td><td><div class="review-actions"><button class="mini-btn approve" type="button" onclick="reviewToilet(${Number(r.id)||0},'approved')">通過</button><button class="mini-btn keep" type="button" onclick="reviewToilet(${Number(r.id)||0},'pending')">保留</button><button class="mini-btn reject" type="button" onclick="reviewToilet(${Number(r.id)||0},'rejected')">拒絕</button></div></td></tr>`).join('')}
+function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="8"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}<div class="small">${(r.duplicate_levels||[]).map(x=>esc(x)).join(' / ')}</div></td><td><div class="review-actions"><button class="mini-btn approve" type="button" onclick="reviewToilet(${Number(r.id)||0},'approved')">通過</button><button class="mini-btn reject" type="button" onclick="reviewToilet(${Number(r.id)||0},'rejected')">不通過</button></div></td></tr>`).join('')}
 function getToken(){return (tokenInput.value||sessionStorage.getItem('maintenance_token')||'').trim();}
 function saveToken(token){if(token) sessionStorage.setItem('maintenance_token',token);}
 function clearToken(){sessionStorage.removeItem('maintenance_token'); tokenInput.value='';}
@@ -121,17 +121,15 @@ async function reviewToilet(id,status){
   const token=getToken();
   if(!token){alert('請先輸入 ADMIN_TOKEN');return;}
   if(!id){alert('資料 ID 錯誤');return;}
-  const label=status==='approved'?'通過':status==='rejected'?'拒絕':'保留待審';
+  const label=status==='approved'?'通過':'不通過';
   let reason='';
   if(status==='rejected'){
-    reason=prompt(`請輸入拒絕原因（建議必填）：`, '人工判定不適合收錄')||'';
-    if(!reason.trim()){const ok=confirm('沒有填拒絕原因，仍要拒絕嗎？'); if(!ok)return;}
-  }else if(status==='approved'){
-    reason=prompt(`人工通過備註（可留空）：`, '人工確認可收錄')||'';
+    reason=prompt(`請輸入不通過原因（建議必填）：`, '人工判定不適合收錄')||'';
+    if(!reason.trim()){const ok=confirm('沒有填不通過原因，仍要標記為不通過嗎？'); if(!ok)return;}
   }else{
-    reason=prompt(`保留待審原因（可留空）：`, '需要進一步確認')||'';
+    reason=prompt(`人工通過備註（可留空）：`, '人工確認可收錄')||'';
   }
-  const ok=confirm(`確定要將 ID ${id} 設為「${label}」嗎？`);
+  const ok=confirm(`確定要將 ID ${id} 設為「${label}」嗎？分數會保留自動驗證原分數，不會改成 100/0。`);
   if(!ok)return;
   try{
     const res=await fetch('/api/user-toilet-review',{

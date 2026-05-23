@@ -8993,7 +8993,7 @@ def api_user_toilet_review():
     {
       "token": "ADMIN_TOKEN",
       "id": 123,
-      "status": "approved" | "pending" | "rejected",
+      "status": "approved" | "rejected",
       "reason": "optional note",
       "verified_by": "admin_dashboard"
     }
@@ -9026,15 +9026,12 @@ def api_user_toilet_review():
         verified_by = str(data.get("verified_by") or "admin_dashboard").strip()[:80]
 
         if status == "approved":
-            score = 100
             default_reason = "人工審核通過"
             reject_reason = None
         elif status == "rejected":
-            score = 0
-            default_reason = "人工審核拒絕"
+            default_reason = "人工審核不通過"
             reject_reason = reason or default_reason
         else:
-            score = 50
             default_reason = "人工保留待審"
             reject_reason = None
 
@@ -9042,11 +9039,29 @@ def api_user_toilet_review():
 
         conn = _pg_connect()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT id, name FROM user_toilets WHERE id = %s", (toilet_id,))
+        cur.execute("""
+            SELECT
+                id, name,
+                verification_score,
+                auto_verification_score
+            FROM user_toilets
+            WHERE id = %s
+        """, (toilet_id,))
         exists = cur.fetchone()
         if not exists:
             conn.close()
             return jsonify({"ok": False, "message": "toilet not found"}), 404
+
+        # Manual review should not overwrite the scoring model with fixed 100/50/0.
+        # Keep the original automatic score as the verification_score so the score
+        # continues to represent Auto Verification quality rather than the button clicked.
+        try:
+            original_score = exists.get("auto_verification_score")
+            if original_score is None:
+                original_score = exists.get("verification_score")
+            score = int(original_score or 0)
+        except Exception:
+            score = 0
 
         cur.execute("""
             UPDATE user_toilets
