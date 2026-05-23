@@ -13,6 +13,7 @@
     .grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:20px}.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;min-height:128px}.card h3{margin:0 0 14px;color:var(--muted);font-size:14px}.num{font-size:32px;font-weight:800;line-height:1.1}.sub{font-size:13px;color:var(--muted);margin-top:10px;line-height:1.5}
     .section{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-bottom:20px}.section h2{margin:0 0 14px;font-size:20px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.tab{border:none;border-radius:999px;padding:10px 14px;background:#f3f4f6;cursor:pointer}.tab.active{background:var(--primary);color:#fff}
     table{width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:700}.mono{font-variant-numeric:tabular-nums}.pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;margin:2px}.status-approved{background:#ecfdf5;color:#047857}.status-pending{background:#fffbeb;color:#92400e}.status-rejected{background:#fef2f2;color:#991b1b}.flags{line-height:1.8}.reason{color:#374151;line-height:1.5}.small{font-size:12px;color:var(--muted)}.empty{color:var(--muted);padding:16px;background:#f9fafb;border-radius:12px}.bar{height:9px;background:#eef2ff;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;background:#6366f1;border-radius:999px}
+    .review-actions{display:flex;gap:6px;flex-wrap:wrap}.mini-btn{border:1px solid var(--line);border-radius:999px;background:#fff;padding:6px 9px;cursor:pointer;font-size:12px;white-space:nowrap}.mini-btn:hover{background:#f8fafc}.mini-btn.approve{background:#ecfdf5;color:#047857;border-color:#bbf7d0}.mini-btn.keep{background:#fffbeb;color:#92400e;border-color:#fde68a}.mini-btn.reject{background:#fef2f2;color:#991b1b;border-color:#fecaca}.mini-btn:disabled{opacity:.55;cursor:not-allowed}
 
     .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.help-btn{height:34px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--text);padding:0 12px;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08)}
     .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:18px}.modal-backdrop.show{display:flex}.modal{width:min(980px,100%);max-height:88vh;overflow:auto;background:#fff;border-radius:22px;box-shadow:0 24px 80px rgba(0,0,0,.24);padding:24px}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.modal h2{margin:0;font-size:24px}.modal h3{margin:22px 0 8px;font-size:18px}.modal p{line-height:1.7;color:#374151}.modal ul{margin:8px 0 0 20px;line-height:1.8;color:#374151}.modal table{table-layout:auto;margin-top:8px}.modal th,.modal td{font-size:14px}.close-btn{border:none;background:#f3f4f6;border-radius:999px;width:38px;height:38px;cursor:pointer;font-size:20px}.note-box{background:#f8fafc;border:1px solid var(--line);border-radius:16px;padding:14px;margin:12px 0;color:#374151;line-height:1.7}.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef2ff;color:#3730a3;border-radius:6px;padding:2px 6px;font-size:12px}
@@ -39,7 +40,7 @@
   </div>
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
-  <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
+  <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th><th style="width:170px">人工處理</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
 </div>
   <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
     <div class="modal">
@@ -110,11 +111,39 @@ function statusPill(s){const c=s==='approved'?'status-approved':s==='rejected'?'
 function renderSummary(){const s=DATA.summary||{};const cards=[['總資料數',s.total,'本次掃描筆數'],['Approved',s.approved,'低風險或已通過'],['Pending',s.pending,`待確認率 ${s.pending_rate||0}%`],['Rejected',s.rejected,'建議排除'],['平均驗證分數',s.avg_auto_score,'Auto Verification 1.5.4']];summaryGrid.innerHTML=cards.map(x=>`<div class="card"><h3>${x[0]}</h3><div class="num mono">${fmt(x[1])}</div><div class="sub">${x[2]}</div></div>`).join('')}
 function renderFlags(){const flags=DATA.flag_counts||[]; if(!flags.length){flagList.innerHTML='<div class="empty">目前沒有風險標籤。</div>';return;} const max=Math.max(...flags.map(x=>x.count||0),1); flagList.innerHTML=flags.slice(0,20).map(x=>`<div style="display:grid;grid-template-columns:220px 70px 1fr;gap:12px;align-items:center;margin:10px 0"><strong>${esc(x.flag)}</strong><span class="mono">${fmt(x.count)}</span><div class="bar"><span style="width:${Math.round((x.count||0)/max*100)}%"></span></div></div>`).join('')}
 function renderTabs(){const q=DATA.queues||{};tabs.innerHTML=Object.keys(queueLabels).map(k=>`<button class="tab ${k===activeQueue?'active':''}" data-key="${k}">${queueLabels[k]} (${(q[k]||[]).length})</button>`).join('');tabs.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{activeQueue=b.dataset.key;renderTabs();renderQueue();});}
-function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="7"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}<div class="small">${(r.duplicate_levels||[]).map(x=>esc(x)).join(' / ')}</div></td></tr>`).join('')}
+function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="8"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}<div class="small">${(r.duplicate_levels||[]).map(x=>esc(x)).join(' / ')}</div></td><td><div class="review-actions"><button class="mini-btn approve" type="button" onclick="reviewToilet(${Number(r.id)||0},'approved')">通過</button><button class="mini-btn keep" type="button" onclick="reviewToilet(${Number(r.id)||0},'pending')">保留</button><button class="mini-btn reject" type="button" onclick="reviewToilet(${Number(r.id)||0},'rejected')">拒絕</button></div></td></tr>`).join('')}
 function getToken(){return (tokenInput.value||sessionStorage.getItem('maintenance_token')||'').trim();}
 function saveToken(token){if(token) sessionStorage.setItem('maintenance_token',token);}
 function clearToken(){sessionStorage.removeItem('maintenance_token'); tokenInput.value='';}
 function setLoading(text){summaryGrid.innerHTML=`<div class="card"><h3>處理中</h3><div class="sub">${esc(text)}</div></div>`;}
+
+async function reviewToilet(id,status){
+  const token=getToken();
+  if(!token){alert('請先輸入 ADMIN_TOKEN');return;}
+  if(!id){alert('資料 ID 錯誤');return;}
+  const label=status==='approved'?'通過':status==='rejected'?'拒絕':'保留待審';
+  let reason='';
+  if(status==='rejected'){
+    reason=prompt(`請輸入拒絕原因（建議必填）：`, '人工判定不適合收錄')||'';
+    if(!reason.trim()){const ok=confirm('沒有填拒絕原因，仍要拒絕嗎？'); if(!ok)return;}
+  }else if(status==='approved'){
+    reason=prompt(`人工通過備註（可留空）：`, '人工確認可收錄')||'';
+  }else{
+    reason=prompt(`保留待審原因（可留空）：`, '需要進一步確認')||'';
+  }
+  const ok=confirm(`確定要將 ID ${id} 設為「${label}」嗎？`);
+  if(!ok)return;
+  try{
+    const res=await fetch('/api/user-toilet-review',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Admin-Token':token},
+      body:JSON.stringify({id,status,reason,verified_by:'maintenance_dashboard'})
+    });
+    const data=await res.json();
+    if(!res.ok||!data.ok){alert(`操作失敗：${data.message||res.status}`);return;}
+    await loadData();
+  }catch(err){alert(`操作失敗：${err.message||err}`);}
+}
 async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
 async function runReverify(apply=false){const token=getToken(); if(!token){alert('請先輸入 ADMIN_TOKEN'); return;} saveToken(token); tokenInput.value=token; const limit=Math.max(1,Math.min(500,Number(reverifyLimit.value||50))); if(apply){const ok=confirm(`確定要正式自動審核 ${limit} 筆舊資料？這會寫入 Neon，改變 approved / pending / rejected 狀態。`); if(!ok) return;} setLoading(apply?`正在正式自動審核 ${limit} 筆資料...`:`正在預覽重新驗證 ${limit} 筆資料...`); try{const res=await fetch(`/admin/reverify-user-toilets?apply=${apply?1:0}&limit=${limit}&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(data.message||data.error||res.status)}</div></div>`;return;} const msg=`${apply?'正式套用':'預覽'}完成：approved ${data.counts?.approved??0}、pending ${data.counts?.pending??0}、rejected ${data.counts?.rejected??0}；掃描 ${data.scanned??0} 筆，更新 ${data.updated??0} 筆。`; alert(msg); await loadData(); }catch(err){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(err.message||err)}</div></div>`;}}
 

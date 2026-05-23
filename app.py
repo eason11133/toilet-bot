@@ -8983,6 +8983,115 @@ def api_maintenance_summary():
         return jsonify({"ok": False, "message": str(e)}), 500
 
 
+
+# === Maintenance Action 1.0：後台人工快速審核 ===
+@app.route("/api/user-toilet-review", methods=["POST"])
+def api_user_toilet_review():
+    """Manually review a user-added toilet from the maintenance dashboard.
+
+    Expected JSON:
+    {
+      "token": "ADMIN_TOKEN",
+      "id": 123,
+      "status": "approved" | "pending" | "rejected",
+      "reason": "optional note",
+      "verified_by": "admin_dashboard"
+    }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        token = (
+            request.headers.get("X-Admin-Token")
+            or data.get("token")
+            or request.args.get("token")
+            or ""
+        ).strip()
+        if ADMIN_TOKEN and token != ADMIN_TOKEN:
+            return jsonify({"ok": False, "message": "unauthorized"}), 401
+        if not POSTGRES_ENABLED:
+            return jsonify({"ok": False, "message": "postgres disabled"}), 503
+
+        toilet_id = data.get("id") or data.get("toilet_id")
+        try:
+            toilet_id = int(toilet_id)
+        except Exception:
+            return jsonify({"ok": False, "message": "invalid toilet id"}), 400
+
+        status = str(data.get("status") or "").strip().lower()
+        allowed = {"approved", "pending", "rejected"}
+        if status not in allowed:
+            return jsonify({"ok": False, "message": "invalid status"}), 400
+
+        reason = str(data.get("reason") or "").strip()
+        verified_by = str(data.get("verified_by") or "admin_dashboard").strip()[:80]
+
+        if status == "approved":
+            score = 100
+            default_reason = "人工審核通過"
+            reject_reason = None
+        elif status == "rejected":
+            score = 0
+            default_reason = "人工審核拒絕"
+            reject_reason = reason or default_reason
+        else:
+            score = 50
+            default_reason = "人工保留待審"
+            reject_reason = None
+
+        final_reason = default_reason if not reason else f"{default_reason}：{reason}"
+
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, name FROM user_toilets WHERE id = %s", (toilet_id,))
+        exists = cur.fetchone()
+        if not exists:
+            conn.close()
+            return jsonify({"ok": False, "message": "toilet not found"}), 404
+
+        cur.execute("""
+            UPDATE user_toilets
+            SET verification_status = %s,
+                verification_score = %s,
+                verification_reason = %s,
+                verified_at = NOW(),
+                verified_by = %s,
+                reject_reason = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING
+                id, name, address, lat, lon,
+                verification_status, verification_score, verification_reason,
+                auto_verification_score, auto_verification_result, auto_verification_reason,
+                risk_flags, similar_toilets_json,
+                verified_at, verified_by, reject_reason, updated_at
+        """, (status, score, final_reason, verified_by, reject_reason, toilet_id))
+        row = cur.fetchone()
+        conn.commit()
+        conn.close()
+
+        try:
+            _CACHE.clear()
+        except Exception:
+            pass
+
+        return jsonify({
+            "ok": True,
+            "message": "updated",
+            "item": {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "status": row.get("verification_status"),
+                "verification_score": row.get("verification_score"),
+                "verification_reason": row.get("verification_reason"),
+                "verified_at": row.get("verified_at").isoformat() if hasattr(row.get("verified_at"), "isoformat") else str(row.get("verified_at") or ""),
+                "verified_by": row.get("verified_by") or "",
+                "reject_reason": row.get("reject_reason") or ""
+            }
+        })
+    except Exception as e:
+        logging.error(f"/api/user-toilet-review failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "message": str(e)}), 500
+
 @app.route("/dashboard/maintenance", methods=["GET"])
 def dashboard_maintenance():
     return render_template("maintenance.html")
