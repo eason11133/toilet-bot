@@ -8304,7 +8304,7 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, co
 
 def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     """
-    Auto Verification 1.5.3：群眾地理資料品質驗證完整版（寬鬆實用版）。
+    Auto Verification 1.5.4：群眾地理資料品質驗證完整版（實用修正版）。
     只輸出三種 verification_status：approved / pending / rejected。
 
     設計原則：
@@ -8433,17 +8433,40 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     medium_dup = [s_item for s_item in similar if s_item.get("duplicate_level") == "medium"]
     low_dup = [s_item for s_item in similar if s_item.get("duplicate_level") == "low"]
 
+    # 1.5.4：重複資料改為「嚴格重複才進 pending」
+    # 原本 high duplicate 太容易把靠近官方/既有資料的點全部打成 pending。
+    # 現在 possible_duplicate_high / medium 先作為提醒；只有幾乎同點、且有強文字證據時，才標 strict_duplicate。
+    strict_dup = []
     if high_dup:
-        score -= 28
         flags.append("possible_duplicate_high")
-        reasons.append("附近已有高度相似廁所資料，疑似重複")
+        soft_flags.add("possible_duplicate_high")
+        reasons.append("附近已有相似廁所資料，系統標記為疑似重複提醒")
+        for s_item in high_dup:
+            try:
+                d_val = float(s_item.get("distance_m") or 9999)
+                name_val = float(s_item.get("name_similarity") or 0)
+                addr_val = float(s_item.get("address_similarity") or 0)
+                src_val = str(s_item.get("source") or "").lower()
+                # 極近 + 地址或明確名稱高度相似，才是需要人工合併/確認的嚴格重複。
+                # public_csv 只當參考來源，除非幾乎同點且地址/名稱非常像，否則不硬擋。
+                if d_val <= 8 and (addr_val >= 0.78 or name_val >= 0.90):
+                    strict_dup.append(s_item)
+                elif src_val not in ("public_csv", "government") and d_val <= 12 and (addr_val >= 0.70 or name_val >= 0.86):
+                    strict_dup.append(s_item)
+            except Exception:
+                pass
+        if strict_dup:
+            score -= 18
+            flags.append("strict_duplicate")
+            reasons.append("疑似與既有資料幾乎同點且文字高度相似，需人工確認是否合併")
+        else:
+            score -= 2
     elif medium_dup:
-        score -= 8
         flags.append("possible_duplicate_medium")
         soft_flags.add("possible_duplicate_medium")
-        reasons.append("附近有相似廁所資料，建議人工確認")
+        reasons.append("附近有相似廁所資料，僅作維護提醒")
+        score -= 1
     elif low_dup:
-        score -= 0
         flags.append("possible_duplicate_low")
         soft_flags.add("possible_duplicate_low")
 
@@ -8474,23 +8497,25 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     score = max(0, min(100, int(round(score))))
 
     hard_reject = {"invalid_coordinate", "invalid_or_test_name"}
-    hard_pending = {"name_too_generic", "possible_duplicate_high", "shop_missing_address"}
+    # 1.5.4 實用化：只把真正需要人工處理的項目列為 hard pending。
+    # high/medium duplicate、缺入口、店家開放不明都只當維護提醒，不直接卡住自動通過。
+    hard_pending = {"name_too_generic", "strict_duplicate"}
 
     if any(f in flags for f in hard_reject):
         status = "rejected"
     elif any(f in flags for f in hard_pending):
         status = "pending"
-    elif facility_type == "indoor_complex" and ("missing_floor_hint" in flags or "missing_entrance_hint" in flags) and score < 58:
+    elif "shop_missing_address" in flags and score < 60:
         status = "pending"
-    elif "missing_address" in flags and facility_type == "generic" and score < 55:
+    elif facility_type == "indoor_complex" and ("missing_floor_hint" in flags or "missing_entrance_hint" in flags) and score < 50:
         status = "pending"
-    elif any(f.startswith("address_coordinate_mismatch_high") for f in flags) and score < 60:
+    elif "missing_address" in flags and facility_type == "generic" and score < 48:
         status = "pending"
-    elif "possible_duplicate_medium" in flags and score < 55:
+    elif any(f.startswith("address_coordinate_mismatch_high") for f in flags) and score < 52:
         status = "pending"
-    elif "outside_primary_region" in flags and score < 55:
+    elif "outside_primary_region" in flags and score < 48:
         status = "pending"
-    elif score >= 55:
+    elif score >= 45:
         status = "approved"
     else:
         status = "pending"
@@ -8511,7 +8536,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         "risk_flags": sorted(set(flags)),
         "similar_toilets": similar[:5],
         "facility_type": facility_type,
-        "verification_version": "auto_verify_1_5_3",
+        "verification_version": "auto_verify_1_5_4",
         "soft_flags": sorted(soft_flags),
         "address_coordinate_distance_m": addr_dist,
         "spatial_context": spatial,
@@ -8837,6 +8862,7 @@ def api_maintenance_summary():
             "possible_duplicate_high": [],
             "possible_duplicate_medium": [],
             "possible_duplicate_low": [],
+            "strict_duplicate": [],
             "duplicate_high": [],
             "duplicate_medium": [],
             "duplicate_low": [],
@@ -8908,6 +8934,8 @@ def api_maintenance_summary():
                     queues["possible_duplicate_low"].append(item)
                 if len(queues["duplicate_low"]) < 80:
                     queues["duplicate_low"].append(item)
+            if "strict_duplicate" in flags and len(queues["strict_duplicate"]) < 80:
+                queues["strict_duplicate"].append(item)
             if any(f.startswith("address_coordinate_mismatch") for f in flags) and len(queues["address_coordinate_mismatch"]) < 80:
                 queues["address_coordinate_mismatch"].append(item)
             if "spatial_outlier_candidate" in flags and len(queues["spatial_outlier"]) < 80:
@@ -8945,7 +8973,7 @@ def api_maintenance_summary():
                 "risk_flag_types": len(flag_counts),
                 "risk_flag_total": sum(flag_counts.values()),
                 "pending_rate": round((status_counts.get("pending", 0) / total * 100), 2) if total else 0,
-                "verification_version": "auto_verify_1_5_3"
+                "verification_version": "auto_verify_1_5_4"
             },
             "flag_counts": top_flags,
             "queues": queues
