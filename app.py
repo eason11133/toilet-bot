@@ -8304,7 +8304,7 @@ def find_similar_toilets(lat, lon, name="", address="", radius_m=50, limit=8, co
 
 def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     """
-    Auto Verification 1.5.1：群眾地理資料品質驗證完整版（保守 pending 版）。
+    Auto Verification 1.5.3：群眾地理資料品質驗證完整版（寬鬆實用版）。
     只輸出三種 verification_status：approved / pending / rejected。
 
     設計原則：
@@ -8323,7 +8323,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     access_note = (toilet.get("access_note") or "").strip()
     open_hours = (toilet.get("open_hours") or "").strip()
 
-    score = 76
+    score = 82
     flags = []
     reasons = []
     soft_flags = set()
@@ -8340,7 +8340,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         flags.append("invalid_coordinate")
         reasons.append("座標不是合法地球座標")
     elif _primary_region_risk(lat, lon):
-        score -= 4
+        score -= 2
         flags.append("outside_primary_region")
         soft_flags.add("outside_primary_region")
         reasons.append("資料位於目前主要服務區域外，建議人工確認")
@@ -8368,22 +8368,23 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         score += 10
     else:
         # 缺地址不一定 pending；要看名稱和場域是否足夠清楚
-        score -= 10
+        score -= 4
         flags.append("missing_address")
+        soft_flags.add("missing_address")
         reasons.append("缺少可辨識地址或場域位置")
 
     if facility_type == "indoor_complex":
         if has_floor:
             score += 7
         else:
-            score -= 7
+            score -= 3
             flags.append("missing_floor_hint")
             soft_flags.add("missing_floor_hint")
             reasons.append("多樓層或室內場域缺少樓層資訊")
         if has_entrance:
             score += 7
         else:
-            score -= 6
+            score -= 3
             flags.append("missing_entrance_hint")
             soft_flags.add("missing_entrance_hint")
             reasons.append("室內或大型場域缺少入口/位置提示")
@@ -8394,19 +8395,19 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         if has_access_info:
             score += 7
         else:
-            score -= 6
+            score -= 3
             flags.append("shop_access_unclear")
             soft_flags.add("shop_access_unclear")
             reasons.append("店家型資料缺少是否開放或入口說明")
         if not has_address:
-            score -= 12
+            score -= 10
             flags.append("shop_missing_address")
             reasons.append("店家型資料缺少地址，需人工確認")
     elif facility_type == "outdoor":
         if has_entrance:
             score += 6
         elif not has_address:
-            score -= 6
+            score -= 2
             flags.append("outdoor_location_unclear")
             soft_flags.add("outdoor_location_unclear")
             reasons.append("戶外場域缺少地址或位置提示")
@@ -8416,7 +8417,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         if has_entrance:
             score += 4
         else:
-            score -= 2
+            score -= 1
             flags.append("missing_entrance_hint")
             soft_flags.add("missing_entrance_hint")
 
@@ -8433,15 +8434,16 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     low_dup = [s_item for s_item in similar if s_item.get("duplicate_level") == "low"]
 
     if high_dup:
-        score -= 32
+        score -= 28
         flags.append("possible_duplicate_high")
         reasons.append("附近已有高度相似廁所資料，疑似重複")
     elif medium_dup:
-        score -= 18
+        score -= 8
         flags.append("possible_duplicate_medium")
+        soft_flags.add("possible_duplicate_medium")
         reasons.append("附近有相似廁所資料，建議人工確認")
     elif low_dup:
-        score -= 2
+        score -= 0
         flags.append("possible_duplicate_low")
         soft_flags.add("possible_duplicate_low")
 
@@ -8451,9 +8453,9 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         flags.append(addr_flag)
         reasons.append(addr_reason or "地址與座標可能不一致")
         if addr_flag.endswith("high"):
-            score -= 18
-        elif addr_flag.endswith("medium"):
             score -= 8
+        elif addr_flag.endswith("medium"):
+            score -= 3
         else:
             score -= 4
         soft_flags.add(addr_flag)
@@ -8464,7 +8466,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         flags.append(spatial["flag"])
         soft_flags.add(spatial["flag"])
         if not has_address or "name_too_generic" in flags:
-            score -= 8
+            score -= 3
             reasons.append("附近缺少參考資料且本筆資訊不足，建議人工確認")
         else:
             score -= 1
@@ -8472,23 +8474,23 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
     score = max(0, min(100, int(round(score))))
 
     hard_reject = {"invalid_coordinate", "invalid_or_test_name"}
-    hard_pending = {"name_too_generic", "possible_duplicate_high", "possible_duplicate_medium", "shop_missing_address"}
+    hard_pending = {"name_too_generic", "possible_duplicate_high", "shop_missing_address"}
 
     if any(f in flags for f in hard_reject):
         status = "rejected"
     elif any(f in flags for f in hard_pending):
         status = "pending"
-    elif facility_type == "indoor_complex" and ("missing_floor_hint" in flags or "missing_entrance_hint" in flags) and score < 76:
+    elif facility_type == "indoor_complex" and ("missing_floor_hint" in flags or "missing_entrance_hint" in flags) and score < 58:
         status = "pending"
-    elif "missing_address" in flags and facility_type == "generic" and score < 78:
+    elif "missing_address" in flags and facility_type == "generic" and score < 55:
         status = "pending"
-    elif any(f.startswith("address_coordinate_mismatch_high") for f in flags):
+    elif any(f.startswith("address_coordinate_mismatch_high") for f in flags) and score < 60:
         status = "pending"
-    elif "spatial_outlier_candidate" in flags and (not has_address or "name_too_generic" in flags or score < 72):
+    elif "possible_duplicate_medium" in flags and score < 55:
         status = "pending"
-    elif "outside_primary_region" in flags and score < 75:
+    elif "outside_primary_region" in flags and score < 55:
         status = "pending"
-    elif score >= 72:
+    elif score >= 55:
         status = "approved"
     else:
         status = "pending"
@@ -8509,7 +8511,7 @@ def auto_verify_user_toilet(toilet, context=None, exclude_id=None):
         "risk_flags": sorted(set(flags)),
         "similar_toilets": similar[:5],
         "facility_type": facility_type,
-        "verification_version": "auto_verify_1_5_1",
+        "verification_version": "auto_verify_1_5_3",
         "soft_flags": sorted(soft_flags),
         "address_coordinate_distance_m": addr_dist,
         "spatial_context": spatial,
@@ -8943,7 +8945,7 @@ def api_maintenance_summary():
                 "risk_flag_types": len(flag_counts),
                 "risk_flag_total": sum(flag_counts.values()),
                 "pending_rate": round((status_counts.get("pending", 0) / total * 100), 2) if total else 0,
-                "verification_version": "auto_verify_1_5_1"
+                "verification_version": "auto_verify_1_5_3"
             },
             "flag_counts": top_flags,
             "queues": queues
