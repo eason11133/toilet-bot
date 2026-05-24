@@ -9044,6 +9044,123 @@ def api_maintenance_summary():
 
 
 
+
+
+@app.route("/api/user-toilets-admin", methods=["GET"])
+def api_user_toilets_admin():
+    """List user-added toilets for manual review / full data inspection.
+
+    Query params:
+      token: ADMIN_TOKEN
+      status: all | approved | pending | rejected
+      flag: optional risk flag substring/exact tag
+      q: optional keyword for name/address/reason
+      limit: 1..500
+      offset: >=0
+    """
+    if not _maintenance_auth_ok():
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+    if not POSTGRES_ENABLED:
+        return jsonify({"ok": False, "message": "postgres disabled"}), 503
+
+    try:
+        status = (request.args.get("status") or "all").strip().lower()
+        flag = (request.args.get("flag") or "").strip()
+        q = (request.args.get("q") or "").strip()
+        limit = max(1, min(int(request.args.get("limit") or "100"), 500))
+        offset = max(0, int(request.args.get("offset") or "0"))
+
+        where = []
+        params = []
+        if status in ("approved", "pending", "rejected"):
+            where.append("LOWER(COALESCE(verification_status,'')) = %s")
+            params.append(status)
+        if q:
+            like = f"%{q}%"
+            where.append("""
+                (
+                    name ILIKE %s OR address ILIKE %s OR
+                    COALESCE(auto_verification_reason,'') ILIKE %s OR
+                    COALESCE(verification_reason,'') ILIKE %s OR
+                    COALESCE(risk_flags,'') ILIKE %s
+                )
+            """)
+            params.extend([like, like, like, like, like])
+        if flag:
+            like_flag = f"%{flag}%"
+            where.append("COALESCE(risk_flags,'') ILIKE %s")
+            params.append(like_flag)
+
+        where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(f"SELECT COUNT(*) AS c FROM user_toilets {where_sql}", tuple(params))
+        total = int((cur.fetchone() or {}).get("c") or 0)
+
+        cur.execute(f"""
+            SELECT
+                id, user_id, name, address, lat, lon,
+                level, floor_hint, entrance_hint, access_note, open_hours,
+                source,
+                verification_status, verification_score, verification_reason,
+                auto_verification_score, auto_verification_result, auto_verification_reason,
+                risk_flags, similar_toilets_json,
+                verified_at, verified_by, reject_reason,
+                created_at, updated_at
+            FROM user_toilets
+            {where_sql}
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+            LIMIT %s OFFSET %s
+        """, tuple(params + [limit, offset]))
+        rows = cur.fetchall()
+        conn.close()
+
+        items = []
+        for r in rows:
+            flags = _parse_risk_flags_value(r.get("risk_flags"))
+            similar = _parse_similar_toilets_value(r.get("similar_toilets_json"))
+            items.append({
+                "id": r.get("id"),
+                "name": r.get("name") or "",
+                "address": r.get("address") or "",
+                "lat": r.get("lat"),
+                "lon": r.get("lon"),
+                "level": r.get("level") or "",
+                "floor_hint": r.get("floor_hint") or "",
+                "entrance_hint": r.get("entrance_hint") or "",
+                "access_note": r.get("access_note") or "",
+                "open_hours": r.get("open_hours") or "",
+                "source": r.get("source") or "",
+                "status": r.get("verification_status") or "unknown",
+                "verification_score": r.get("verification_score"),
+                "auto_verification_score": r.get("auto_verification_score"),
+                "score": r.get("auto_verification_score") if r.get("auto_verification_score") is not None else r.get("verification_score"),
+                "verification_reason": r.get("verification_reason") or "",
+                "auto_verification_reason": r.get("auto_verification_reason") or "",
+                "reason": r.get("auto_verification_reason") or r.get("verification_reason") or "",
+                "risk_flags": flags,
+                "similar_count": len(similar),
+                "similar_toilets": similar[:5],
+                "verified_at": r.get("verified_at").isoformat() if hasattr(r.get("verified_at"), "isoformat") else str(r.get("verified_at") or ""),
+                "verified_by": r.get("verified_by") or "",
+                "reject_reason": r.get("reject_reason") or "",
+                "created_at": r.get("created_at").isoformat() if hasattr(r.get("created_at"), "isoformat") else str(r.get("created_at") or ""),
+                "updated_at": r.get("updated_at").isoformat() if hasattr(r.get("updated_at"), "isoformat") else str(r.get("updated_at") or "")
+            })
+
+        return jsonify({
+            "ok": True,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "items": items
+        })
+    except Exception as e:
+        logging.error(f"/api/user-toilets-admin failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+
 # === Maintenance Action 1.0：後台人工快速審核 ===
 @app.route("/api/user-toilet-review", methods=["POST"])
 def api_user_toilet_review():

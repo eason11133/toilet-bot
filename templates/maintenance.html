@@ -17,6 +17,7 @@
 
     .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.help-btn{height:34px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--text);padding:0 12px;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08)}
     .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:18px}.modal-backdrop.show{display:flex}.modal{width:min(980px,100%);max-height:88vh;overflow:auto;background:#fff;border-radius:22px;box-shadow:0 24px 80px rgba(0,0,0,.24);padding:24px}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.modal h2{margin:0;font-size:24px}.modal h3{margin:22px 0 8px;font-size:18px}.modal p{line-height:1.7;color:#374151}.modal ul{margin:8px 0 0 20px;line-height:1.8;color:#374151}.modal table{table-layout:auto;margin-top:8px}.modal th,.modal td{font-size:14px}.close-btn{border:none;background:#f3f4f6;border-radius:999px;width:38px;height:38px;cursor:pointer;font-size:20px}.note-box{background:#f8fafc;border:1px solid var(--line);border-radius:16px;padding:14px;margin:12px 0;color:#374151;line-height:1.7}.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef2ff;color:#3730a3;border-radius:6px;padding:2px 6px;font-size:12px}
+    .filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 14px}.select{height:42px;border-radius:12px;border:1px solid var(--line);background:#fff;padding:0 12px;font-size:14px;color:var(--text)}.wide-input{min-width:260px}.pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px}.muted-box{background:#f8fafc;border:1px solid var(--line);border-radius:14px;padding:12px;color:#374151;line-height:1.6;margin:10px 0}
     @media(max-width:1000px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))} table{table-layout:auto;min-width:900px}.table-scroll{overflow-x:auto}}@media(max-width:640px){.grid{grid-template-columns:1fr}.container{padding:16px}h1{font-size:26px}}
   </style>
 </head>
@@ -41,6 +42,50 @@
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
   <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th><th style="width:150px">人工處理</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
+
+  <div class="section">
+    <h2>全部資料人工審核</h2>
+    <div class="muted-box">
+      這裡可以搜尋與審核所有使用者新增資料，不只限 pending。建議把「不通過」理解成<strong>下架 / 不進推薦</strong>，不是直接從資料庫硬刪，這樣之後還能追蹤審核紀錄。
+    </div>
+    <div class="filter-row">
+      <input id="allSearchInput" class="input wide-input" placeholder="搜尋名稱、地址、原因、風險標籤">
+      <select id="allStatusFilter" class="select">
+        <option value="all">全部狀態</option>
+        <option value="approved">Approved</option>
+        <option value="pending">Pending</option>
+        <option value="rejected">Rejected</option>
+      </select>
+      <input id="allFlagFilter" class="input" placeholder="風險標籤，例如 strict_duplicate">
+      <input id="allLimitInput" class="input small" type="number" min="10" max="500" value="100" title="每頁筆數">
+      <button class="btn primary" id="loadAllBtn" type="button">載入全部資料</button>
+      <button class="btn secondary" id="resetAllFilterBtn" type="button">清除篩選</button>
+    </div>
+    <div id="allDataInfo" class="small"></div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:70px">ID</th>
+            <th style="width:220px">名稱 / 地址</th>
+            <th style="width:90px">狀態</th>
+            <th style="width:80px">分數</th>
+            <th style="width:230px">風險標籤</th>
+            <th>原因 / 備註</th>
+            <th style="width:110px">相似</th>
+            <th style="width:150px">人工處理</th>
+          </tr>
+        </thead>
+        <tbody id="allDataBody"><tr><td colspan="8"><div class="empty">尚未載入。可用上方條件搜尋所有使用者新增資料。</div></td></tr></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <button class="btn secondary" id="prevAllBtn" type="button">上一頁</button>
+      <span id="allPageText" class="small"></span>
+      <button class="btn secondary" id="nextAllBtn" type="button">下一頁</button>
+    </div>
+  </div>
+
   <div class="section"><h2>最近人工審核紀錄</h2><p class="small">這裡會記錄管理者按「通過 / 不通過」的操作，方便追蹤誰在什麼時候把哪筆資料從什麼狀態改成什麼狀態。</p><div class="table-scroll"><table><thead><tr><th style="width:150px">時間</th><th style="width:70px">ID</th><th style="width:200px">名稱</th><th style="width:150px">狀態變更</th><th style="width:140px">分數</th><th style="width:150px">審核者</th><th>原因</th></tr></thead><tbody id="reviewLogBody"></tbody></table></div></div>
 </div>
   <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
@@ -106,6 +151,7 @@
 <script>
 const queueLabels={pending:'待人工確認',possible_duplicate:'相似資料提醒總覽',strict_duplicate:'嚴格重複待審',duplicate_high:'高度相似提醒',duplicate_medium:'中度重複',duplicate_low:'低度重複提醒',shop_access_unclear:'店家開放不明',generic_name:'名稱太籠統',address_coordinate_mismatch:'地址座標不一致',spatial_outlier:'空間孤立提醒',outside_primary_region:'主要區域外',rejected:'建議排除',low_score:'低分資料'};
 let DATA=null, activeQueue='pending';
+let ALL_OFFSET=0, ALL_TOTAL=0, ALL_LIMIT=100, ALL_LOADED=false;
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function fmt(n){return Number(n||0).toLocaleString('zh-TW')}
 function statusPill(s){const c=s==='approved'?'status-approved':s==='rejected'?'status-rejected':'status-pending';return `<span class="pill ${c}">${esc(s||'unknown')}</span>`}
@@ -159,8 +205,50 @@ async function reviewToilet(id,status){
     const data=await res.json();
     if(!res.ok||!data.ok){alert(`操作失敗：${data.message||res.status}`);return;}
     await loadData();
+    if(ALL_LOADED) await loadAllToilets(ALL_OFFSET);
   }catch(err){alert(`操作失敗：${err.message||err}`);}
 }
+
+function renderAllRows(items){
+  const body=document.getElementById('allDataBody');
+  if(!body)return;
+  if(!items||!items.length){body.innerHTML='<tr><td colspan="8"><div class="empty">沒有符合條件的資料。</div></td></tr>';return;}
+  body.innerHTML=items.map(r=>{
+    const flags=(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>';
+    const reason=r.reason||r.auto_verification_reason||r.verification_reason||'';
+    const verified=r.verified_at?`<div class="small">已審：${esc(formatTimeText(r.verified_at))} ${esc(r.verified_by||'')}</div>`:'';
+    return `<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div><div class="small">${esc(r.lat??'')}, ${esc(r.lon??'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${flags}</td><td class="reason">${esc(reason)}${verified}</td><td class="mono">${fmt(r.similar_count||0)}</td><td><div class="review-actions"><button class="mini-btn approve" type="button" onclick="reviewToilet(${Number(r.id)||0},'approved')">通過</button><button class="mini-btn reject" type="button" onclick="reviewToilet(${Number(r.id)||0},'rejected')">不通過</button></div></td></tr>`;
+  }).join('');
+}
+async function loadAllToilets(offset=0){
+  const token=getToken();
+  if(!token){alert('請先輸入 ADMIN_TOKEN');return;}
+  saveToken(token); tokenInput.value=token;
+  ALL_LIMIT=Math.max(10,Math.min(500,Number(allLimitInput.value||100)));
+  ALL_OFFSET=Math.max(0,offset||0);
+  const params=new URLSearchParams({token,limit:String(ALL_LIMIT),offset:String(ALL_OFFSET)});
+  const status=allStatusFilter.value||'all';
+  const q=(allSearchInput.value||'').trim();
+  const flag=(allFlagFilter.value||'').trim();
+  if(status&&status!=='all')params.set('status',status);
+  if(q)params.set('q',q);
+  if(flag)params.set('flag',flag);
+  allDataInfo.textContent='正在載入全部資料...';
+  try{
+    const res=await fetch(`/api/user-toilets-admin?${params.toString()}`);
+    const data=await res.json();
+    if(!res.ok||!data.ok){allDataInfo.textContent=`載入失敗：${data.message||res.status}`;return;}
+    ALL_LOADED=true; ALL_TOTAL=Number(data.total||0); ALL_OFFSET=Number(data.offset||0); ALL_LIMIT=Number(data.limit||ALL_LIMIT);
+    renderAllRows(data.items||[]);
+    const start=ALL_TOTAL?ALL_OFFSET+1:0;
+    const end=Math.min(ALL_OFFSET+(data.items||[]).length,ALL_TOTAL);
+    allDataInfo.textContent=`共 ${fmt(ALL_TOTAL)} 筆，顯示 ${fmt(start)}–${fmt(end)} 筆`;
+    allPageText.textContent=`${fmt(start)}–${fmt(end)} / ${fmt(ALL_TOTAL)}`;
+    prevAllBtn.disabled=ALL_OFFSET<=0;
+    nextAllBtn.disabled=ALL_OFFSET+ALL_LIMIT>=ALL_TOTAL;
+  }catch(err){allDataInfo.textContent=`載入失敗：${err.message||err}`;}
+}
+
 async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue(); renderReviewLogs();}
 async function runReverify(apply=false){const token=getToken(); if(!token){alert('請先輸入 ADMIN_TOKEN'); return;} saveToken(token); tokenInput.value=token; const limit=Math.max(1,Math.min(500,Number(reverifyLimit.value||50))); if(apply){const ok=confirm(`確定要正式自動審核 ${limit} 筆舊資料？這會寫入 Neon，改變 approved / pending / rejected 狀態。`); if(!ok) return;} setLoading(apply?`正在正式自動審核 ${limit} 筆資料...`:`正在預覽重新驗證 ${limit} 筆資料...`); try{const res=await fetch(`/admin/reverify-user-toilets?apply=${apply?1:0}&limit=${limit}&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(data.message||data.error||res.status)}</div></div>`;return;} const msg=`${apply?'正式套用':'預覽'}完成：approved ${data.counts?.approved??0}、pending ${data.counts?.pending??0}、rejected ${data.counts?.rejected??0}；掃描 ${data.scanned??0} 筆，更新 ${data.updated??0} 筆。`; alert(msg); await loadData(); }catch(err){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(err.message||err)}</div></div>`;}}
 
@@ -169,7 +257,7 @@ helpBtn.onclick=()=>helpModal.classList.add('show');
 closeHelpBtn.onclick=()=>helpModal.classList.remove('show');
 helpModal.addEventListener('click',(e)=>{if(e.target===helpModal) helpModal.classList.remove('show');});
 window.addEventListener('keydown',(e)=>{if(e.key==='Escape') helpModal.classList.remove('show');});
-loadBtn.onclick=loadData; previewReverifyBtn.onclick=()=>runReverify(false); applyReverifyBtn.onclick=()=>runReverify(true); clearTokenBtn.onclick=()=>{clearToken(); alert('已清除本分頁記住的密碼');}; window.addEventListener('DOMContentLoaded',()=>{const t=sessionStorage.getItem('maintenance_token')||''; if(t){tokenInput.value=t; loadData();}});
+loadBtn.onclick=loadData; previewReverifyBtn.onclick=()=>runReverify(false); applyReverifyBtn.onclick=()=>runReverify(true); clearTokenBtn.onclick=()=>{clearToken(); alert('已清除本分頁記住的密碼');}; loadAllBtn.onclick=()=>loadAllToilets(0); resetAllFilterBtn.onclick=()=>{allSearchInput.value=''; allStatusFilter.value='all'; allFlagFilter.value=''; loadAllToilets(0);}; prevAllBtn.onclick=()=>loadAllToilets(Math.max(0,ALL_OFFSET-ALL_LIMIT)); nextAllBtn.onclick=()=>loadAllToilets(ALL_OFFSET+ALL_LIMIT); window.addEventListener('DOMContentLoaded',()=>{const t=sessionStorage.getItem('maintenance_token')||''; if(t){tokenInput.value=t; loadData();}});
 </script>
 </body>
 </html>
