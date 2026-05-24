@@ -41,6 +41,7 @@
   <div class="grid" id="summaryGrid"></div>
   <div class="section"><h2>風險標籤統計</h2><div id="flagList"></div></div>
   <div class="section"><h2>維護佇列</h2><div class="tabs" id="tabs"></div><div class="table-scroll"><table><thead><tr><th style="width:70px">ID</th><th style="width:180px">名稱</th><th style="width:90px">狀態</th><th style="width:90px">分數</th><th style="width:220px">風險標籤</th><th>原因</th><th style="width:150px">疑似重複</th><th style="width:150px">人工處理</th></tr></thead><tbody id="queueBody"></tbody></table></div></div>
+  <div class="section"><h2>最近人工審核紀錄</h2><p class="small">這裡會記錄管理者按「通過 / 不通過」的操作，方便追蹤誰在什麼時候把哪筆資料從什麼狀態改成什麼狀態。</p><div class="table-scroll"><table><thead><tr><th style="width:150px">時間</th><th style="width:70px">ID</th><th style="width:200px">名稱</th><th style="width:150px">狀態變更</th><th style="width:140px">分數</th><th style="width:150px">審核者</th><th>原因</th></tr></thead><tbody id="reviewLogBody"></tbody></table></div></div>
 </div>
   <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
     <div class="modal">
@@ -112,6 +113,24 @@ function renderSummary(){const s=DATA.summary||{};const cards=[['總資料數',s
 function renderFlags(){const flags=DATA.flag_counts||[]; if(!flags.length){flagList.innerHTML='<div class="empty">目前沒有風險標籤。</div>';return;} const max=Math.max(...flags.map(x=>x.count||0),1); flagList.innerHTML=flags.slice(0,20).map(x=>`<div style="display:grid;grid-template-columns:220px 70px 1fr;gap:12px;align-items:center;margin:10px 0"><strong>${esc(x.flag)}</strong><span class="mono">${fmt(x.count)}</span><div class="bar"><span style="width:${Math.round((x.count||0)/max*100)}%"></span></div></div>`).join('')}
 function renderTabs(){const q=DATA.queues||{};tabs.innerHTML=Object.keys(queueLabels).map(k=>`<button class="tab ${k===activeQueue?'active':''}" data-key="${k}">${queueLabels[k]} (${(q[k]||[]).length})</button>`).join('');tabs.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{activeQueue=b.dataset.key;renderTabs();renderQueue();});}
 function renderQueue(){const rows=((DATA.queues||{})[activeQueue]||[]); if(!rows.length){queueBody.innerHTML=`<tr><td colspan="8"><div class="empty">這個佇列目前沒有資料。</div></td></tr>`;return;} queueBody.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td><td><strong>${esc(r.name)}</strong><div class="small">${esc(r.address||'')}</div></td><td>${statusPill(r.status)}</td><td class="mono">${esc(r.score??0)}</td><td class="flags">${(r.risk_flags||[]).map(f=>`<span class="pill">${esc(f)}</span>`).join('')||'<span class="small">無</span>'}</td><td class="reason">${esc(r.reason)}</td><td class="mono">${fmt(r.similar_count||0)}<div class="small">${(r.duplicate_levels||[]).map(x=>esc(x)).join(' / ')}</div></td><td><div class="review-actions"><button class="mini-btn approve" type="button" onclick="reviewToilet(${Number(r.id)||0},'approved')">通過</button><button class="mini-btn reject" type="button" onclick="reviewToilet(${Number(r.id)||0},'rejected')">不通過</button></div></td></tr>`).join('')}
+function formatTimeText(raw){
+  if(!raw)return '';
+  try{return new Date(raw).toLocaleString('zh-TW',{hour12:false});}
+  catch(e){return raw;}
+}
+function renderReviewLogs(){
+  const rows=DATA.review_logs||[];
+  const body=document.getElementById('reviewLogBody');
+  if(!body)return;
+  if(!rows.length){body.innerHTML='<tr><td colspan="7"><div class="empty">目前尚無人工審核紀錄。</div></td></tr>';return;}
+  body.innerHTML=rows.map(r=>{
+    const oldStatus=r.old_status||'unknown';
+    const newStatus=r.new_status||'unknown';
+    const scoreText=`${r.old_score??'-'} → ${r.new_score??'-'}`;
+    const reason=r.action_reason||r.reject_reason||'';
+    return `<tr><td class="small">${esc(formatTimeText(r.created_at))}</td><td class="mono">${esc(r.toilet_id)}</td><td><strong>${esc(r.toilet_name||'')}</strong></td><td>${statusPill(oldStatus)} <span class="small">→</span> ${statusPill(newStatus)}</td><td class="mono">${esc(scoreText)}<div class="small">auto ${esc(r.auto_verification_score??'-')}</div></td><td>${esc(r.reviewer||'')}</td><td class="reason">${esc(reason)}</td></tr>`;
+  }).join('');
+}
 function getToken(){return (tokenInput.value||sessionStorage.getItem('maintenance_token')||'').trim();}
 function saveToken(token){if(token) sessionStorage.setItem('maintenance_token',token);}
 function clearToken(){sessionStorage.removeItem('maintenance_token'); tokenInput.value='';}
@@ -142,7 +161,7 @@ async function reviewToilet(id,status){
     await loadData();
   }catch(err){alert(`操作失敗：${err.message||err}`);}
 }
-async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue();}
+async function loadData(){const token=getToken(); if(token){saveToken(token); tokenInput.value=token;} setLoading('正在讀取維護資料...'); const res=await fetch(`/api/maintenance-summary?limit=1000&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>載入失敗</h3><div class="sub">${esc(data.message||res.status)}</div></div>`;return;} DATA=data; renderSummary(); renderFlags(); renderTabs(); renderQueue(); renderReviewLogs();}
 async function runReverify(apply=false){const token=getToken(); if(!token){alert('請先輸入 ADMIN_TOKEN'); return;} saveToken(token); tokenInput.value=token; const limit=Math.max(1,Math.min(500,Number(reverifyLimit.value||50))); if(apply){const ok=confirm(`確定要正式自動審核 ${limit} 筆舊資料？這會寫入 Neon，改變 approved / pending / rejected 狀態。`); if(!ok) return;} setLoading(apply?`正在正式自動審核 ${limit} 筆資料...`:`正在預覽重新驗證 ${limit} 筆資料...`); try{const res=await fetch(`/admin/reverify-user-toilets?apply=${apply?1:0}&limit=${limit}&token=${encodeURIComponent(token)}`); const data=await res.json(); if(!res.ok||!data.ok){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(data.message||data.error||res.status)}</div></div>`;return;} const msg=`${apply?'正式套用':'預覽'}完成：approved ${data.counts?.approved??0}、pending ${data.counts?.pending??0}、rejected ${data.counts?.rejected??0}；掃描 ${data.scanned??0} 筆，更新 ${data.updated??0} 筆。`; alert(msg); await loadData(); }catch(err){summaryGrid.innerHTML=`<div class="card"><h3>重新驗證失敗</h3><div class="sub">${esc(err.message||err)}</div></div>`;}}
 
 const helpModal=document.getElementById('helpModal');

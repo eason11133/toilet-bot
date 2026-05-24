@@ -1045,6 +1045,28 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_created_at ON user_toilets(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_toilets_verification ON user_toilets(verification_status)")
 
+        # === Maintenance Action 1.1：人工審核紀錄 / audit log ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_toilet_review_logs (
+            id BIGSERIAL PRIMARY KEY,
+            toilet_id BIGINT,
+            toilet_name TEXT,
+            old_status TEXT,
+            new_status TEXT,
+            old_score INTEGER,
+            new_score INTEGER,
+            auto_verification_score INTEGER,
+            reviewer TEXT,
+            action_reason TEXT,
+            reject_reason TEXT,
+            risk_flags TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_review_logs_toilet_id ON user_toilet_review_logs(toilet_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_review_logs_created_at ON user_toilet_review_logs(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_review_logs_new_status ON user_toilet_review_logs(new_status)")
+
         # === User consent ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_consent (
@@ -8851,6 +8873,25 @@ def api_maintenance_summary():
             LIMIT %s
         """, (limit,))
         rows = cur.fetchall()
+
+        recent_review_logs = []
+        try:
+            cur.execute("""
+                SELECT
+                    id, toilet_id, toilet_name,
+                    old_status, new_status,
+                    old_score, new_score, auto_verification_score,
+                    reviewer, action_reason, reject_reason,
+                    risk_flags, created_at
+                FROM user_toilet_review_logs
+                ORDER BY created_at DESC
+                LIMIT 30
+            """)
+            recent_review_logs = cur.fetchall()
+        except Exception as log_err:
+            logging.warning(f"maintenance review logs skipped: {log_err}")
+            recent_review_logs = []
+
         conn.close()
 
         status_counts = {"approved": 0, "pending": 0, "rejected": 0, "unknown": 0}
@@ -8960,6 +9001,24 @@ def api_maintenance_summary():
             for k, v in sorted(flag_counts.items(), key=lambda kv: kv[1], reverse=True)
         ]
 
+        review_logs_out = []
+        for log_row in recent_review_logs or []:
+            review_logs_out.append({
+                "id": log_row.get("id"),
+                "toilet_id": log_row.get("toilet_id"),
+                "toilet_name": log_row.get("toilet_name") or "",
+                "old_status": log_row.get("old_status") or "",
+                "new_status": log_row.get("new_status") or "",
+                "old_score": log_row.get("old_score"),
+                "new_score": log_row.get("new_score"),
+                "auto_verification_score": log_row.get("auto_verification_score"),
+                "reviewer": log_row.get("reviewer") or "",
+                "action_reason": log_row.get("action_reason") or "",
+                "reject_reason": log_row.get("reject_reason") or "",
+                "risk_flags": _parse_risk_flags_value(log_row.get("risk_flags")),
+                "created_at": log_row.get("created_at").isoformat() if hasattr(log_row.get("created_at"), "isoformat") else str(log_row.get("created_at") or "")
+            })
+
         return jsonify({
             "ok": True,
             "scanned": total,
@@ -8976,7 +9035,8 @@ def api_maintenance_summary():
                 "verification_version": "auto_verify_1_5_4"
             },
             "flag_counts": top_flags,
-            "queues": queues
+            "queues": queues,
+            "review_logs": review_logs_out
         })
     except Exception as e:
         logging.error(f"/api/maintenance-summary failed: {e}", exc_info=True)
@@ -9042,8 +9102,14 @@ def api_user_toilet_review():
         cur.execute("""
             SELECT
                 id, name,
+                verification_status,
                 verification_score,
-                auto_verification_score
+                verification_reason,
+                auto_verification_score,
+                auto_verification_result,
+                auto_verification_reason,
+                risk_flags,
+                reject_reason
             FROM user_toilets
             WHERE id = %s
         """, (toilet_id,))
@@ -9081,6 +9147,34 @@ def api_user_toilet_review():
                 verified_at, verified_by, reject_reason, updated_at
         """, (status, score, final_reason, verified_by, reject_reason, toilet_id))
         row = cur.fetchone()
+
+        # 寫入人工審核紀錄：保留前後狀態，方便追蹤誰在何時做了什麼。
+        try:
+            cur.execute("""
+                INSERT INTO user_toilet_review_logs (
+                    toilet_id, toilet_name,
+                    old_status, new_status,
+                    old_score, new_score,
+                    auto_verification_score,
+                    reviewer, action_reason, reject_reason,
+                    risk_flags
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                toilet_id,
+                exists.get("name") or "",
+                exists.get("verification_status") or "",
+                status,
+                exists.get("verification_score"),
+                score,
+                exists.get("auto_verification_score"),
+                verified_by,
+                final_reason,
+                reject_reason,
+                exists.get("risk_flags") or ""
+            ))
+        except Exception as log_err:
+            logging.warning(f"insert user_toilet_review_logs failed: {log_err}")
+
         conn.commit()
         conn.close()
 
