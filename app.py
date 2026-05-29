@@ -5841,6 +5841,334 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     }
 
 
+
+# === Demand Gap Dashboard：公共設施需求缺口分析 ===
+_GAP_SUMMARY_CACHE = {}
+_GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "180"))
+
+def _gap_cache_get(key):
+    try:
+        item = _GAP_SUMMARY_CACHE.get(key)
+        if not item:
+            return None
+        ts, data = item
+        if time.time() - ts <= _GAP_SUMMARY_CACHE_TTL:
+            return data
+    except Exception:
+        pass
+    return None
+
+def _gap_cache_set(key, data):
+    try:
+        _GAP_SUMMARY_CACHE[key] = (time.time(), data)
+        # 防止記憶體無限成長
+        if len(_GAP_SUMMARY_CACHE) > 30:
+            oldest = sorted(_GAP_SUMMARY_CACHE.items(), key=lambda kv: kv[1][0])[:10]
+            for k, _ in oldest:
+                _GAP_SUMMARY_CACHE.pop(k, None)
+    except Exception:
+        pass
+
+def _safe_float(v, default=None):
+    try:
+        if v is None or v == "":
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+def _gap_level(score):
+    try:
+        s = float(score or 0)
+    except Exception:
+        s = 0
+    if s >= 80:
+        return "高缺口"
+    if s >= 40:
+        return "中缺口"
+    if s >= 15:
+        return "低缺口"
+    return "觀察中"
+
+def _gap_suggestion(row):
+    no_result = int(row.get("no_result_count") or 0)
+    low_result = int(row.get("low_result_count") or 0)
+    slow = int(row.get("slow_query_count") or 0)
+    total = int(row.get("total_queries") or 0)
+    avg_rt = int(row.get("avg_response_ms") or 0)
+    if no_result >= 5 or (total >= 8 and no_result / max(total, 1) >= 0.35):
+        return "可能設施不足或資料缺漏，建議優先檢查"
+    if low_result >= 8 or (total >= 10 and low_result / max(total, 1) >= 0.50):
+        return "候選結果偏少，可能需要補資料或擴充設施"
+    if slow >= 8 or avg_rt >= 6000:
+        return "查詢耗時偏高，可能依賴外部資料或資料分布不足"
+    if total >= 10:
+        return "需求量較高，可列為持續觀察區域"
+    return "資料量較少，先觀察"
+
+def _build_gap_summary(range_key="30d", anchor_date=None):
+    if range_key not in ("1h", "1d", "7d", "30d", "1y"):
+        range_key = "30d"
+
+    start, end, _, _ = _dashboard_range_to_sqlite(range_key, anchor_date)
+
+    events = []
+    osm_summary = {
+        "total_source_calls": 0,
+        "osm_calls": 0,
+        "osm_success_calls": 0,
+        "avg_osm_elapsed_ms": 0,
+        "avg_non_osm_elapsed_ms": 0,
+        "max_osm_elapsed_ms": 0,
+        "osm_reasons": []
+    }
+
+    if POSTGRES_ENABLED:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, user_id, event_type, result_count, success, response_time_ms,
+                   lat, lon, area_name, query_text, created_at
+            FROM analytics_events
+            WHERE created_at >= %s AND created_at <= %s
+              AND event_type = 'location_query'
+              AND COALESCE(response_time_ms, 0) > 0
+            ORDER BY created_at DESC
+        """, (start, end))
+        events = [dict(r) for r in cur.fetchall()]
+
+        try:
+            cur.execute("""
+                SELECT
+                  COUNT(*) AS total_source_calls,
+                  COUNT(*) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS osm_calls,
+                  COUNT(*) FILTER (WHERE (used_osm = TRUE OR source_name = 'osm') AND success = TRUE) AS osm_success_calls,
+                  AVG(elapsed_ms) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS avg_osm_elapsed_ms,
+                  AVG(elapsed_ms) FILTER (WHERE NOT (used_osm = TRUE OR source_name = 'osm')) AS avg_non_osm_elapsed_ms,
+                  MAX(elapsed_ms) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS max_osm_elapsed_ms
+                FROM source_query_logs
+                WHERE created_at >= %s AND created_at <= %s
+            """, (start, end))
+            r = dict(cur.fetchone() or {})
+            osm_summary.update({
+                "total_source_calls": int(r.get("total_source_calls") or 0),
+                "osm_calls": int(r.get("osm_calls") or 0),
+                "osm_success_calls": int(r.get("osm_success_calls") or 0),
+                "avg_osm_elapsed_ms": round(float(r.get("avg_osm_elapsed_ms") or 0), 2),
+                "avg_non_osm_elapsed_ms": round(float(r.get("avg_non_osm_elapsed_ms") or 0), 2),
+                "max_osm_elapsed_ms": int(r.get("max_osm_elapsed_ms") or 0),
+            })
+            cur.execute("""
+                SELECT COALESCE(reason, 'unknown') AS reason, COUNT(*) AS count
+                FROM source_query_logs
+                WHERE created_at >= %s AND created_at <= %s
+                  AND (used_osm = TRUE OR source_name = 'osm')
+                GROUP BY COALESCE(reason, 'unknown')
+                ORDER BY count DESC
+                LIMIT 8
+            """, (start, end))
+            osm_summary["osm_reasons"] = [dict(x) for x in cur.fetchall()]
+        except Exception as e:
+            logging.warning(f"gap osm summary skipped: {e}")
+
+        conn.close()
+    else:
+        conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, event_type, result_count, success, response_time_ms,
+                   lat, lon, area_name, query_text, created_at
+            FROM analytics_events
+            WHERE created_at >= ? AND created_at <= ?
+              AND event_type = 'location_query'
+              AND COALESCE(response_time_ms, 0) > 0
+            ORDER BY created_at DESC
+        """, (start.isoformat(), end.isoformat()))
+        events = [dict(r) for r in cur.fetchall()]
+        conn.close()
+
+    total_queries = len(events)
+    no_result_count = 0
+    low_result_count = 0
+    slow_query_count = 0
+    success_count = 0
+    response_values = []
+    area_map = {}
+    grid_map = {}
+
+    # 第一版門檻：結果數 <= 2 視為低覆蓋；回應 >= 5000ms 視為慢查詢
+    LOW_RESULT_THRESHOLD = int(os.getenv("GAP_LOW_RESULT_THRESHOLD", "2"))
+    SLOW_QUERY_MS = int(os.getenv("GAP_SLOW_QUERY_MS", "5000"))
+
+    for e in events:
+        rc = int(e.get("result_count") or 0)
+        rt = int(e.get("response_time_ms") or 0)
+        success = int(e.get("success") or 0) == 1
+        area = (e.get("area_name") or "其他區域").strip() or "其他區域"
+
+        if success:
+            success_count += 1
+        if rc == 0:
+            no_result_count += 1
+        if rc <= LOW_RESULT_THRESHOLD:
+            low_result_count += 1
+        if rt >= SLOW_QUERY_MS:
+            slow_query_count += 1
+        if rt > 0:
+            response_values.append(rt)
+
+        if area not in area_map:
+            area_map[area] = {
+                "area_name": area,
+                "total_queries": 0,
+                "no_result_count": 0,
+                "low_result_count": 0,
+                "slow_query_count": 0,
+                "success_count": 0,
+                "response_values": [],
+                "avg_response_ms": 0,
+                "gap_score": 0,
+                "gap_level": "觀察中",
+                "suggestion": ""
+            }
+        a = area_map[area]
+        a["total_queries"] += 1
+        a["no_result_count"] += 1 if rc == 0 else 0
+        a["low_result_count"] += 1 if rc <= LOW_RESULT_THRESHOLD else 0
+        a["slow_query_count"] += 1 if rt >= SLOW_QUERY_MS else 0
+        a["success_count"] += 1 if success else 0
+        if rt > 0:
+            a["response_values"].append(rt)
+
+        lat = _safe_float(e.get("lat"))
+        lon = _safe_float(e.get("lon"))
+        if lat is not None and lon is not None:
+            # 約 500m 級距，避免暴露過精確位置，也方便看熱點
+            glat = round(lat, 3)
+            glon = round(lon, 3)
+            gkey = f"{glat:.3f},{glon:.3f}"
+            if gkey not in grid_map:
+                grid_map[gkey] = {
+                    "grid": gkey,
+                    "lat": glat,
+                    "lon": glon,
+                    "area_name": area,
+                    "total_queries": 0,
+                    "no_result_count": 0,
+                    "low_result_count": 0,
+                    "slow_query_count": 0,
+                    "response_values": [],
+                    "avg_response_ms": 0,
+                    "gap_score": 0,
+                    "gap_level": "觀察中",
+                    "suggestion": ""
+                }
+            g = grid_map[gkey]
+            g["total_queries"] += 1
+            g["no_result_count"] += 1 if rc == 0 else 0
+            g["low_result_count"] += 1 if rc <= LOW_RESULT_THRESHOLD else 0
+            g["slow_query_count"] += 1 if rt >= SLOW_QUERY_MS else 0
+            if rt > 0:
+                g["response_values"].append(rt)
+
+    def finish_row(r):
+        vals = r.pop("response_values", [])
+        total = int(r.get("total_queries") or 0)
+        avg_rt = round(sum(vals) / len(vals)) if vals else 0
+        r["avg_response_ms"] = avg_rt
+        r["no_result_rate"] = round((int(r.get("no_result_count") or 0) / max(total, 1)) * 100, 1)
+        r["low_result_rate"] = round((int(r.get("low_result_count") or 0) / max(total, 1)) * 100, 1)
+        r["slow_query_rate"] = round((int(r.get("slow_query_count") or 0) / max(total, 1)) * 100, 1)
+
+        # 需求缺口分數：強調「找不到」、「候選少」、「慢」，再加上查詢需求量
+        score = (
+            int(r.get("no_result_count") or 0) * 4
+            + int(r.get("low_result_count") or 0) * 2
+            + int(r.get("slow_query_count") or 0) * 1.5
+            + total * 0.5
+        )
+        r["gap_score"] = round(score, 2)
+        r["gap_level"] = _gap_level(score)
+        r["suggestion"] = _gap_suggestion(r)
+        return r
+
+    area_rows = [finish_row(dict(v)) for v in area_map.values()]
+    area_rows.sort(key=lambda x: (x["gap_score"], x["total_queries"]), reverse=True)
+
+    hotspot_rows = [finish_row(dict(v)) for v in grid_map.values()]
+    hotspot_rows.sort(key=lambda x: (x["gap_score"], x["total_queries"]), reverse=True)
+
+    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+    top_area = area_rows[0]["area_name"] if area_rows else "-"
+
+    return {
+        "ok": True,
+        "range": range_key,
+        "anchor_date": anchor_date,
+        "generated_at": datetime.now(TW_TZ).isoformat(),
+        "thresholds": {
+            "low_result_threshold": LOW_RESULT_THRESHOLD,
+            "slow_query_ms": SLOW_QUERY_MS,
+            "cache_ttl_seconds": _GAP_SUMMARY_CACHE_TTL
+        },
+        "summary": {
+            "total_queries": total_queries,
+            "success_count": success_count,
+            "no_result_count": no_result_count,
+            "low_result_count": low_result_count,
+            "slow_query_count": slow_query_count,
+            "avg_response_ms": avg_response,
+            "top_gap_area": top_area,
+            "no_result_rate": round((no_result_count / max(total_queries, 1)) * 100, 1),
+            "low_result_rate": round((low_result_count / max(total_queries, 1)) * 100, 1),
+            "slow_query_rate": round((slow_query_count / max(total_queries, 1)) * 100, 1)
+        },
+        "area_gaps": area_rows[:30],
+        "hotspots": hotspot_rows[:30],
+        "osm_summary": osm_summary,
+        "interpretation": [
+            "查無結果高：可能代表該區公共廁所設施不足，或資料庫尚未收錄完整。",
+            "低覆蓋高：代表使用者附近候選結果偏少，適合列為補資料或公共設施檢查區。",
+            "慢查詢高：可能代表資料不足導致外部查詢或 fallback 需求增加，也可能代表區域查詢較不穩定。",
+            "需求缺口分數不是直接等於必須新建廁所，而是用來優先找出值得人工檢查或提供政府參考的區域。"
+        ]
+    }
+
+@app.route("/dashboard/gap", methods=["GET"])
+def dashboard_gap_page():
+    """公共設施需求缺口分析頁。"""
+    return render_template("gap.html")
+
+@app.route("/api/gap-summary", methods=["GET"])
+def api_gap_summary():
+    """公共設施需求缺口分析 API。
+    目的：分析查無結果、低覆蓋、慢查詢與 OSM fallback 等訊號，找出值得補資料或公共設施檢查的區域。
+    """
+    try:
+        range_key = (request.args.get("range") or "30d").strip()
+        if range_key not in ("1h", "1d", "7d", "30d", "1y"):
+            range_key = "30d"
+        anchor_date = (request.args.get("anchor_date") or "").strip() or None
+        force = (request.args.get("force") or "0").strip() == "1"
+
+        cache_key = f"{range_key}:{anchor_date or ''}"
+        if not force:
+            cached = _gap_cache_get(cache_key)
+            if cached is not None:
+                out = dict(cached)
+                out["cached"] = True
+                return jsonify(out)
+
+        data = _build_gap_summary(range_key, anchor_date)
+        data["cached"] = False
+        _gap_cache_set(cache_key, data)
+        return jsonify(data)
+    except Exception as e:
+        logging.error(f"/api/gap-summary failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard_page():
     return render_template("dashboard.html")

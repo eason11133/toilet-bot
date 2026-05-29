@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>公共設施需求缺口分析</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+      --radius: 18px;
+      --primary: #111827;
+      --primary-soft: #eef2ff;
+      --primary-text: #3730a3;
+      --warn-bg: #fff7ed;
+      --warn-text: #9a3412;
+      --danger-bg: #fef2f2;
+      --danger-text: #991b1b;
+      --ok-bg: #ecfdf5;
+      --ok-text: #047857;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", "Noto Sans TC", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .container {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.2; }
+    .subtitle { margin: 0; color: var(--muted); line-height: 1.6; max-width: 980px; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .btn, .nav-btn {
+      border: none;
+      text-decoration: none;
+      background: var(--card);
+      border-radius: 999px;
+      padding: 10px 16px;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 14px;
+      color: var(--text);
+      transition: transform .15s ease, background .15s ease, color .15s ease;
+      height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+    }
+    .btn:hover, .nav-btn:hover { transform: translateY(-1px); background: #f8fafc; }
+    .btn.active { background: var(--primary); color: #fff; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      color: var(--primary-text);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .card, .panel {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .card {
+      padding: 18px;
+      min-height: 145px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .card h3 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
+    .big-number {
+      font-size: 32px;
+      font-weight: 750;
+      line-height: 1.15;
+      margin: 10px 0 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-variant-numeric: tabular-nums;
+    }
+    .subtext { font-size: 13px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+    .panel {
+      padding: 18px;
+      margin-bottom: 20px;
+      overflow-x: auto;
+    }
+    .panel h2 { margin: 0 0 8px; font-size: 20px; }
+    .panel-note { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      table-layout: fixed;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
+      height: 52px;
+    }
+    th { color: var(--muted); font-weight: 650; background: #fff; }
+    tbody tr:hover { background: #fafafa; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--ok-bg);
+      color: var(--ok-text);
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    .pill.mid { background: var(--warn-bg); color: var(--warn-text); }
+    .pill.high { background: var(--danger-bg); color: var(--danger-text); }
+    .mono { font-variant-numeric: tabular-nums; }
+    .explain-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .explain-card {
+      background: #f8fafc;
+      border-radius: 14px;
+      padding: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .explain-card strong { display: block; color: var(--text); margin-bottom: 4px; font-size: 14px; }
+    .footer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
+    @media (max-width: 1200px) {
+      .grid-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .explain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 700px) {
+      .container { padding: 16px; }
+      h1 { font-size: 26px; }
+      .grid-cards, .explain-grid { grid-template-columns: 1fr; }
+      .controls { justify-content: flex-start; }
+      th, td { padding: 10px; height: 48px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div>
+        <h1>公共設施需求缺口分析</h1>
+        <p class="subtitle">
+          從查無結果、候選數偏少、回應時間偏慢與 OSM fallback 等訊號，反向找出可能需要補資料、人工檢查或公共設施配置改善的區域。
+        </p>
+      </div>
+      <div class="controls">
+        <a class="nav-btn" href="/dashboard">主儀表板 →</a>
+        <a class="nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
+        <a class="nav-btn" href="/dashboard/maintenance">資料維護 →</a>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="controls" style="justify-content:space-between">
+        <div class="controls">
+          <button class="btn" data-range="1h">1小時</button>
+          <button class="btn" data-range="1d">1日</button>
+          <button class="btn" data-range="7d">7日</button>
+          <button class="btn active" data-range="30d">30日</button>
+          <button class="btn" data-range="1y">1年</button>
+          <button class="btn" id="refreshBtn">重新載入</button>
+        </div>
+        <div class="status" id="dataStatus">尚未載入</div>
+      </div>
+    </div>
+
+    <div class="grid-cards">
+      <div class="card">
+        <h3>總定位查詢</h3>
+        <div class="big-number" id="totalQueries">0</div>
+        <div class="subtext">所選期間內有效定位查詢次數</div>
+      </div>
+      <div class="card">
+        <h3>查無結果</h3>
+        <div class="big-number" id="noResultCount">0</div>
+        <div class="subtext" id="noResultRate">0%</div>
+      </div>
+      <div class="card">
+        <h3>低覆蓋查詢</h3>
+        <div class="big-number" id="lowResultCount">0</div>
+        <div class="subtext" id="lowResultRate">候選數 ≤ 2</div>
+      </div>
+      <div class="card">
+        <h3>慢查詢</h3>
+        <div class="big-number" id="slowQueryCount">0</div>
+        <div class="subtext" id="slowQueryRate">回應 ≥ 5000ms</div>
+      </div>
+      <div class="card">
+        <h3>最高缺口區域</h3>
+        <div class="big-number" id="topGapArea">-</div>
+        <div class="subtext">依 Demand Gap Score 排名</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Demand Gap Score 怎麼看？</h2>
+      <p class="panel-note">
+        這個分數不是直接判定「一定要新建廁所」，而是用來找出值得優先人工檢查、補資料或提供公共單位參考的區域。
+      </p>
+      <div class="explain-grid">
+        <div class="explain-card"><strong>查無結果</strong>使用者附近沒有回傳結果，可能代表資料缺漏或設施不足。</div>
+        <div class="explain-card"><strong>低覆蓋</strong>候選結果數過少，代表附近可推薦設施密度不足。</div>
+        <div class="explain-card"><strong>慢查詢</strong>回應時間偏高，可能代表需要外部資料補強或查詢不穩定。</div>
+        <div class="explain-card"><strong>OSM fallback</strong>若常需 OSM 補資料，代表本地資料庫可能需要更新。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>行政區 / 區域需求缺口排名</h2>
+      <p class="panel-note">用 area_name 匯總，適合用來回應「哪些區域找不到、找很慢、候選很少」的問題。</p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:18%">區域</th>
+            <th>查詢</th>
+            <th>查無</th>
+            <th>低覆蓋</th>
+            <th>慢查詢</th>
+            <th>平均回應</th>
+            <th>缺口分數</th>
+            <th>等級</th>
+            <th style="width:24%">建議判讀</th>
+          </tr>
+        </thead>
+        <tbody id="areaRows">
+          <tr><td colspan="9" class="footer-note">載入中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>查詢熱點 / 缺口格點</h2>
+      <p class="panel-note">以約 500 公尺級距聚合經緯度，避免暴露過精確位置，並找出小範圍需求缺口。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>格點</th>
+            <th>區域</th>
+            <th>查詢</th>
+            <th>查無</th>
+            <th>低覆蓋</th>
+            <th>慢查詢</th>
+            <th>平均回應</th>
+            <th>缺口分數</th>
+            <th>建議判讀</th>
+          </tr>
+        </thead>
+        <tbody id="hotspotRows">
+          <tr><td colspan="9" class="footer-note">載入中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>OSM fallback 效率與依賴概況</h2>
+      <p class="panel-note">這裡先看整體 OSM 使用情形。若未來要做更精細的地點層級分析，可再把 source logs 與查詢紀錄做更完整關聯。</p>
+      <div class="grid-cards" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0;">
+        <div class="card">
+          <h3>資料來源查詢紀錄</h3>
+          <div class="big-number" id="sourceCalls">0</div>
+          <div class="subtext">source_query_logs</div>
+        </div>
+        <div class="card">
+          <h3>OSM 呼叫次數</h3>
+          <div class="big-number" id="osmCalls">0</div>
+          <div class="subtext">fallback / osm source</div>
+        </div>
+        <div class="card">
+          <h3>OSM 平均耗時</h3>
+          <div class="big-number" id="osmAvg">0ms</div>
+          <div class="subtext">外部資料補強成本</div>
+        </div>
+        <div class="card">
+          <h3>非 OSM 平均耗時</h3>
+          <div class="big-number" id="nonOsmAvg">0ms</div>
+          <div class="subtext">本地 / Neon / CSV 查詢</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>研究判讀</h2>
+      <div id="interpretation" class="footer-note"></div>
+    </div>
+  </div>
+
+<script>
+  let currentRange = '30d';
+
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  const ms = (n) => `${fmt(Math.round(Number(n || 0)))}ms`;
+
+  function pillClass(level) {
+    if (level === '高缺口') return 'pill high';
+    if (level === '中缺口') return 'pill mid';
+    return 'pill';
+  }
+
+  function setStatus(text) {
+    document.getElementById('dataStatus').textContent = text;
+  }
+
+  function renderRows(elId, rows, type) {
+    const el = document.getElementById(elId);
+    if (!rows || !rows.length) {
+      el.innerHTML = `<tr><td colspan="9" class="footer-note">目前沒有足夠資料</td></tr>`;
+      return;
+    }
+    el.innerHTML = rows.map(r => {
+      if (type === 'area') {
+        return `<tr>
+          <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
+          <td class="mono">${fmt(r.total_queries)}</td>
+          <td class="mono">${fmt(r.no_result_count)} <span class="footer-note">(${r.no_result_rate || 0}%)</span></td>
+          <td class="mono">${fmt(r.low_result_count)} <span class="footer-note">(${r.low_result_rate || 0}%)</span></td>
+          <td class="mono">${fmt(r.slow_query_count)} <span class="footer-note">(${r.slow_query_rate || 0}%)</span></td>
+          <td class="mono">${ms(r.avg_response_ms)}</td>
+          <td class="mono">${r.gap_score || 0}</td>
+          <td><span class="${pillClass(r.gap_level)}">${r.gap_level || '觀察中'}</span></td>
+          <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
+        </tr>`;
+      }
+      return `<tr>
+        <td class="mono">${r.grid || '-'}</td>
+        <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
+        <td class="mono">${fmt(r.total_queries)}</td>
+        <td class="mono">${fmt(r.no_result_count)}</td>
+        <td class="mono">${fmt(r.low_result_count)}</td>
+        <td class="mono">${fmt(r.slow_query_count)}</td>
+        <td class="mono">${ms(r.avg_response_ms)}</td>
+        <td class="mono">${r.gap_score || 0}</td>
+        <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  async function loadData(force = false) {
+    try {
+      setStatus('載入中...');
+      const res = await fetch(`/api/gap-summary?range=${encodeURIComponent(currentRange)}${force ? '&force=1' : ''}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '載入失敗');
+
+      const s = data.summary || {};
+      const t = data.thresholds || {};
+      document.getElementById('totalQueries').textContent = fmt(s.total_queries);
+      document.getElementById('noResultCount').textContent = fmt(s.no_result_count);
+      document.getElementById('noResultRate').textContent = `${s.no_result_rate || 0}% 查無結果`;
+      document.getElementById('lowResultCount').textContent = fmt(s.low_result_count);
+      document.getElementById('lowResultRate').textContent = `候選數 ≤ ${t.low_result_threshold ?? 2}，${s.low_result_rate || 0}%`;
+      document.getElementById('slowQueryCount').textContent = fmt(s.slow_query_count);
+      document.getElementById('slowQueryRate').textContent = `回應 ≥ ${fmt(t.slow_query_ms || 5000)}ms，${s.slow_query_rate || 0}%`;
+      document.getElementById('topGapArea').textContent = s.top_gap_area || '-';
+
+      renderRows('areaRows', data.area_gaps || [], 'area');
+      renderRows('hotspotRows', data.hotspots || [], 'hotspot');
+
+      const osm = data.osm_summary || {};
+      document.getElementById('sourceCalls').textContent = fmt(osm.total_source_calls);
+      document.getElementById('osmCalls').textContent = fmt(osm.osm_calls);
+      document.getElementById('osmAvg').textContent = ms(osm.avg_osm_elapsed_ms);
+      document.getElementById('nonOsmAvg').textContent = ms(osm.avg_non_osm_elapsed_ms);
+
+      const interpretation = data.interpretation || [];
+      document.getElementById('interpretation').innerHTML = interpretation.map(x => `• ${x}`).join('<br>');
+
+      setStatus(data.cached ? '已載入（快取）' : '已載入最新資料');
+    } catch (err) {
+      console.error(err);
+      setStatus(`載入失敗：${err.message || err}`);
+    }
+  }
+
+  document.querySelectorAll('.btn[data-range]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentRange = btn.dataset.range;
+      loadData(false);
+    });
+  });
+
+  document.getElementById('refreshBtn').addEventListener('click', () => loadData(true));
+  loadData(false);
+</script>
+</body>
+</html>
