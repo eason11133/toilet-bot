@@ -22,7 +22,10 @@
       --danger-text: #991b1b;
       --ok-bg: #ecfdf5;
       --ok-text: #047857;
+      --blue-bg: #eff6ff;
+      --blue-text: #1d4ed8;
     }
+
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
     body {
@@ -30,21 +33,25 @@
       background: var(--bg);
       color: var(--text);
     }
+
     .container {
       max-width: 1500px;
       margin: 0 auto;
       padding: 24px;
     }
+
     .topbar {
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
       align-items: flex-start;
       gap: 16px;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
+
     h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.2; }
     .subtitle { margin: 0; color: var(--muted); line-height: 1.6; max-width: 980px; }
+
     .controls {
       display: flex;
       flex-wrap: wrap;
@@ -52,7 +59,8 @@
       align-items: center;
       justify-content: flex-end;
     }
-    .btn, .nav-btn {
+
+    .btn, .nav-btn, .chip-btn {
       border: none;
       text-decoration: none;
       background: var(--card);
@@ -69,8 +77,10 @@
       justify-content: center;
       white-space: nowrap;
     }
-    .btn:hover, .nav-btn:hover { transform: translateY(-1px); background: #f8fafc; }
-    .btn.active { background: var(--primary); color: #fff; }
+    .btn:hover, .nav-btn:hover, .chip-btn:hover { transform: translateY(-1px); background: #f8fafc; }
+    .btn.active, .chip-btn.active { background: var(--primary); color: #fff; }
+    .btn.primary { background: var(--primary); color: #fff; }
+
     .status {
       display: inline-flex;
       align-items: center;
@@ -82,16 +92,21 @@
       font-size: 13px;
       white-space: nowrap;
     }
+
+    .panel, .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .panel { padding: 18px; margin-bottom: 20px; overflow: hidden; }
+    .panel h2 { margin: 0 0 8px; font-size: 20px; }
+    .panel-note { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+
     .grid-cards {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 16px;
       margin-bottom: 20px;
-    }
-    .card, .panel {
-      background: var(--card);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
     }
     .card {
       padding: 18px;
@@ -112,13 +127,62 @@
       font-variant-numeric: tabular-nums;
     }
     .subtext { font-size: 13px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
-    .panel {
-      padding: 18px;
-      margin-bottom: 20px;
-      overflow-x: auto;
+
+    .summary-box {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 16px;
+      align-items: stretch;
     }
-    .panel h2 { margin: 0 0 8px; font-size: 20px; }
-    .panel-note { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .talk-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid #eef2f7;
+      border-radius: 16px;
+      padding: 18px;
+    }
+    .talk-card h3 { margin: 0 0 10px; font-size: 18px; }
+    .talk-card p { margin: 0; color: var(--muted); line-height: 1.8; }
+    .talk-points { display: flex; flex-direction: column; gap: 10px; }
+    .point {
+      padding: 12px 14px;
+      background: #f8fafc;
+      border-radius: 14px;
+      line-height: 1.6;
+      font-size: 14px;
+    }
+    .point strong { color: var(--text); }
+
+    .hotspot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .hotspot-card {
+      border: 1px solid #edf2f7;
+      border-radius: 16px;
+      padding: 16px;
+      background: #fff;
+      min-width: 0;
+    }
+    .hotspot-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .hotspot-title { margin: 0; font-size: 17px; line-height: 1.35; }
+    .hotspot-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .hotspot-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .metric-mini { background: #f8fafc; border-radius: 12px; padding: 10px; }
+    .metric-mini span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .metric-mini b { font-size: 18px; font-variant-numeric: tabular-nums; }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -137,6 +201,7 @@
     }
     th { color: var(--muted); font-weight: 650; background: #fff; }
     tbody tr:hover { background: #fafafa; }
+
     .pill {
       display: inline-flex;
       align-items: center;
@@ -151,56 +216,67 @@
     }
     .pill.mid { background: var(--warn-bg); color: var(--warn-text); }
     .pill.high { background: var(--danger-bg); color: var(--danger-text); }
-    .mono { font-variant-numeric: tabular-nums; }
-    .explain-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 12px;
-    }
-    .explain-card {
-      background: #f8fafc;
-      border-radius: 14px;
-      padding: 14px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
-    }
-    .explain-card strong { display: block; color: var(--text); margin-bottom: 4px; font-size: 14px; }
-    .footer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
-    .map-link {
-      color: #2563eb;
-      text-decoration: none;
-      font-weight: 650;
-    }
+    .pill.blue { background: var(--blue-bg); color: var(--blue-text); }
+
+    .map-link { color: #2563eb; text-decoration: none; font-weight: 650; }
     .map-link:hover { text-decoration: underline; }
-    .sample-list {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      max-height: 110px;
-      overflow: auto;
-      white-space: normal;
-    }
-    .sample-item {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.45;
-      background: #f8fafc;
-      border-radius: 8px;
-      padding: 5px 7px;
-    }
+    .mono { font-variant-numeric: tabular-nums; }
     .nowrap { white-space: nowrap; }
+
+    .action-text { white-space: normal; line-height: 1.6; }
+    .muted { color: var(--muted); }
+    .footer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+    details.sample-detail {
+      white-space: normal;
+      min-width: 0;
+    }
+    details.sample-detail summary {
+      cursor: pointer;
+      color: #2563eb;
+      font-weight: 650;
+      list-style: none;
+    }
+    details.sample-detail summary::-webkit-details-marker { display: none; }
+    .sample-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow: auto; margin-top: 8px; }
+    .sample-item { font-size: 12px; color: var(--muted); line-height: 1.45; background: #f8fafc; border-radius: 8px; padding: 5px 7px; }
+
+    .table-tools {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 14px;
+    }
+    .input {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 14px;
+      font-size: 14px;
+      background: #fff;
+      min-width: 230px;
+    }
+    .hide { display: none !important; }
+    .table-scroll { overflow-x: auto; }
+
+    .focus-mode .not-showcase { display: none !important; }
+    .focus-mode .container { max-width: 1280px; }
+    .focus-mode .hotspot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
     @media (max-width: 1200px) {
       .grid-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .explain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-box { grid-template-columns: 1fr; }
+      .hotspot-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
       .container { padding: 16px; }
       h1 { font-size: 26px; }
-      .grid-cards, .explain-grid { grid-template-columns: 1fr; }
+      .grid-cards { grid-template-columns: 1fr; }
       .controls { justify-content: flex-start; }
       th, td { padding: 10px; height: 48px; }
+      .input { width: 100%; min-width: 0; }
     }
   </style>
 </head>
@@ -210,7 +286,7 @@
       <div>
         <h1>公共設施需求缺口分析</h1>
         <p class="subtitle">
-          從查無結果、候選數偏少、回應時間偏慢與 OSM fallback 等訊號，反向找出可能需要補資料、人工檢查或公共設施配置改善的區域與精準格點。
+          從使用者查詢紀錄反向找出「哪裡查不到、候選太少、查詢太慢」，協助判斷哪些點位值得優先補資料、現地確認，或提供給公共單位作為設施改善參考。
         </p>
       </div>
       <div class="controls">
@@ -230,7 +306,11 @@
           <button class="btn" data-range="1y">1年</button>
           <button class="btn" id="refreshBtn">重新載入</button>
         </div>
-        <div class="status" id="dataStatus">尚未載入</div>
+        <div class="controls">
+          <button class="btn" id="showcaseBtn">展示模式</button>
+          <button class="btn" id="copyBtn">複製重點</button>
+          <div class="status" id="dataStatus">尚未載入</div>
+        </div>
       </div>
     </div>
 
@@ -263,93 +343,96 @@
     </div>
 
     <div class="panel">
-      <h2>Demand Gap Score 怎麼看？</h2>
-      <p class="panel-note">
-        這個分數不是直接判定「一定要新建廁所」，而是用來找出值得優先人工檢查、補資料或提供公共單位參考的區域。
-      </p>
-      <div class="explain-grid">
-        <div class="explain-card"><strong>查無結果</strong>使用者附近沒有回傳結果，可能代表資料缺漏或設施不足。</div>
-        <div class="explain-card"><strong>低覆蓋</strong>候選結果數過少，代表附近可推薦設施密度不足。</div>
-        <div class="explain-card"><strong>慢查詢</strong>回應時間偏高，可能代表需要外部資料補強或查詢不穩定。</div>
-        <div class="explain-card"><strong>OSM fallback</strong>若常需 OSM 補資料，代表本地資料庫可能需要更新。</div>
+      <h2>展示摘要</h2>
+      <div class="summary-box">
+        <div class="talk-card">
+          <h3>一句話結論</h3>
+          <p id="oneLineSummary">載入資料後會自動產生摘要。</p>
+        </div>
+        <div class="talk-card">
+          <h3>怎麼判讀？</h3>
+          <div class="talk-points">
+            <div class="point"><strong>查無結果</strong>附近沒有回傳結果，優先懷疑資料缺漏或設施不足。</div>
+            <div class="point"><strong>低覆蓋</strong>候選數 ≤ 2，代表附近可推薦設施選擇太少。</div>
+            <div class="point"><strong>慢查詢</strong>回應 ≥ 5 秒，代表資料查詢不穩或可能依賴外部資料。</div>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="panel">
-      <h2>精準缺口熱點：到底是哪裡需要補？</h2>
-      <p class="panel-note">
-        行政區只能看大方向；真正要判斷「哪裡需要補資料或現地檢查」，請先看這張表。每列是一個約 500 公尺等級的格點中心，可直接開 Google Maps 檢查附近是否有漏收廁所、商場、車站、公園或學校設施。
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th style="width:12%">格點中心</th>
-            <th style="width:8%">地圖</th>
-            <th style="width:12%">區域</th>
-            <th>查詢</th>
-            <th>查無</th>
-            <th>低覆蓋</th>
-            <th>慢查詢</th>
-            <th>缺口分數</th>
-            <th style="width:22%">優先處理建議</th>
-            <th style="width:24%">匿名樣本</th>
-          </tr>
-        </thead>
-        <tbody id="preciseRows">
-          <tr><td colspan="10" class="footer-note">載入中...</td></tr>
-        </tbody>
-      </table>
+      <h2>優先處理 Top 3 點位</h2>
+      <p class="panel-note">這三張卡最適合拿來展示。每張卡都可以直接開 Google Maps，判斷附近是資料漏收、設施不足，還是室內場域資訊不完整。</p>
+      <div class="hotspot-grid" id="topCards">
+        <div class="footer-note">載入中...</div>
+      </div>
     </div>
 
-    <div class="panel">
+    <div class="panel not-showcase">
+      <h2>精準缺口熱點清單</h2>
+      <p class="panel-note">真正要補資料時看這裡。預設只顯示高優先點位；需要完整資料再切換篩選。</p>
+      <div class="table-tools">
+        <div class="controls">
+          <button class="chip-btn active" data-filter="priority">只看優先</button>
+          <button class="chip-btn" data-filter="no_result">查無為主</button>
+          <button class="chip-btn" data-filter="low_cover">低覆蓋為主</button>
+          <button class="chip-btn" data-filter="slow">慢查詢為主</button>
+          <button class="chip-btn" data-filter="all">全部</button>
+        </div>
+        <input class="input" id="searchInput" placeholder="搜尋區域或座標，例如 信義、25.038" />
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:10%">優先</th>
+              <th style="width:12%">點位</th>
+              <th style="width:8%">地圖</th>
+              <th style="width:12%">區域</th>
+              <th>查詢</th>
+              <th>查無</th>
+              <th>低覆蓋</th>
+              <th>慢查詢</th>
+              <th>缺口分數</th>
+              <th style="width:24%">處理建議</th>
+              <th style="width:12%">樣本</th>
+            </tr>
+          </thead>
+          <tbody id="preciseRows">
+            <tr><td colspan="11" class="footer-note">載入中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel not-showcase">
       <h2>行政區 / 區域需求缺口排名</h2>
-      <p class="panel-note">用 area_name 匯總，只適合看大方向；實際補資料請以「精準缺口熱點」為主。</p>
-      <table>
-        <thead>
-          <tr>
-            <th style="width:18%">區域</th>
-            <th>查詢</th>
-            <th>查無</th>
-            <th>低覆蓋</th>
-            <th>慢查詢</th>
-            <th>平均回應</th>
-            <th>缺口分數</th>
-            <th>等級</th>
-            <th style="width:24%">建議判讀</th>
-          </tr>
-        </thead>
-        <tbody id="areaRows">
-          <tr><td colspan="9" class="footer-note">載入中...</td></tr>
-        </tbody>
-      </table>
+      <p class="panel-note">這裡只適合看大方向；實際補資料請看上方精準點位。</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:18%">區域</th>
+              <th>查詢</th>
+              <th>查無</th>
+              <th>低覆蓋</th>
+              <th>慢查詢</th>
+              <th>平均回應</th>
+              <th>缺口分數</th>
+              <th>等級</th>
+              <th style="width:24%">建議判讀</th>
+            </tr>
+          </thead>
+          <tbody id="areaRows">
+            <tr><td colspan="9" class="footer-note">載入中...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
-    <div class="panel">
-      <h2>查詢熱點 / 缺口格點</h2>
-      <p class="panel-note">完整格點列表。若要做人工補資料，優先從上方「精準缺口熱點」的地圖連結開始。</p>
-      <table>
-        <thead>
-          <tr>
-            <th>格點</th>
-            <th>區域</th>
-            <th>查詢</th>
-            <th>查無</th>
-            <th>低覆蓋</th>
-            <th>慢查詢</th>
-            <th>平均回應</th>
-            <th>缺口分數</th>
-            <th>建議判讀</th>
-          </tr>
-        </thead>
-        <tbody id="hotspotRows">
-          <tr><td colspan="9" class="footer-note">載入中...</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="panel">
+    <div class="panel not-showcase">
       <h2>OSM fallback 效率與依賴概況</h2>
-      <p class="panel-note">這裡先看整體 OSM 使用情形。若未來要做更精細的地點層級分析，可再把 source logs 與查詢紀錄做更完整關聯。</p>
+      <p class="panel-note">若 OSM 平均耗時明顯高於本地資料，代表 OSM 適合作為補強來源，不適合每次都即時查。</p>
       <div class="grid-cards" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0;">
         <div class="card">
           <h3>資料來源查詢紀錄</h3>
@@ -382,23 +465,48 @@
 
 <script>
   let currentRange = '30d';
+  let currentFilter = 'priority';
+  let latestData = null;
+  let showcaseMode = false;
 
   const fmt = (n) => Number(n || 0).toLocaleString();
   const ms = (n) => `${fmt(Math.round(Number(n || 0)))}ms`;
-
-  function pillClass(level) {
-    if (level === '高缺口') return 'pill high';
-    if (level === '中缺口') return 'pill mid';
-    return 'pill';
-  }
 
   function setStatus(text) {
     document.getElementById('dataStatus').textContent = text;
   }
 
-  function renderSamples(samples) {
-    if (!samples || !samples.length) return '<span class="footer-note">無樣本</span>';
-    return `<div class="sample-list">${samples.slice(0, 4).map(x => {
+  function levelClass(level) {
+    if (level === '高缺口') return 'pill high';
+    if (level === '中缺口') return 'pill mid';
+    return 'pill';
+  }
+
+  function priorityLabel(r, idx) {
+    if (Number(r.no_result_count || 0) >= 3) return 'P1 查無';
+    if (Number(r.low_result_count || 0) >= 5) return 'P1 低覆蓋';
+    if (Number(r.slow_query_count || 0) >= 5) return 'P2 慢查詢';
+    if (idx < 5) return 'P2 觀察';
+    return 'P3';
+  }
+
+  function priorityPill(r, idx) {
+    const label = priorityLabel(r, idx);
+    const cls = label.startsWith('P1') ? 'pill high' : (label.startsWith('P2') ? 'pill mid' : 'pill');
+    return `<span class="${cls}">${label}</span>`;
+  }
+
+  function pointReason(r) {
+    const parts = [];
+    if (Number(r.no_result_count || 0) > 0) parts.push(`查無 ${fmt(r.no_result_count)} 次`);
+    if (Number(r.low_result_count || 0) > 0) parts.push(`低覆蓋 ${fmt(r.low_result_count)} 次`);
+    if (Number(r.slow_query_count || 0) > 0) parts.push(`慢查詢 ${fmt(r.slow_query_count)} 次`);
+    return parts.join('、') || '需求量可觀，建議觀察';
+  }
+
+  function renderSampleDetails(samples) {
+    if (!samples || !samples.length) return '<span class="footer-note">無</span>';
+    return `<details class="sample-detail"><summary>看樣本</summary><div class="sample-list">${samples.slice(0, 5).map(x => {
       const rc = Number(x.result_count || 0);
       const rt = Number(x.response_time_ms || 0);
       const shortTime = String(x.created_at || '').replace('T', ' ').slice(0, 16);
@@ -406,56 +514,134 @@
         ${shortTime || '-'}｜結果 ${rc}｜${ms(rt)}｜
         <a class="map-link" href="${x.map_url || '#'}" target="_blank" rel="noopener">點位</a>
       </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div></details>`;
   }
 
-  function renderRows(elId, rows, type) {
-    const el = document.getElementById(elId);
-    const colspan = type === 'precise' ? 10 : 9;
-    if (!rows || !rows.length) {
-      el.innerHTML = `<tr><td colspan="${colspan}" class="footer-note">目前沒有足夠資料</td></tr>`;
+  function filteredHotspots() {
+    const rows = (latestData && (latestData.precise_hotspots || latestData.hotspots)) || [];
+    const q = (document.getElementById('searchInput')?.value || '').trim().toLowerCase();
+    return rows.filter((r, idx) => {
+      const hay = `${r.grid || ''} ${r.area_name || ''} ${r.action_label || ''} ${r.suggestion || ''}`.toLowerCase();
+      if (q && !hay.includes(q)) return false;
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'priority') return idx < 20 || Number(r.no_result_count || 0) > 0 || Number(r.low_result_count || 0) >= 5;
+      if (currentFilter === 'no_result') return Number(r.no_result_count || 0) > 0;
+      if (currentFilter === 'low_cover') return Number(r.low_result_count || 0) > 0;
+      if (currentFilter === 'slow') return Number(r.slow_query_count || 0) > 0;
+      return true;
+    });
+  }
+
+  function renderTopCards(rows) {
+    const el = document.getElementById('topCards');
+    const top = (rows || []).slice(0, 3);
+    if (!top.length) {
+      el.innerHTML = '<div class="footer-note">目前沒有足夠資料</div>';
       return;
     }
-    el.innerHTML = rows.map(r => {
-      if (type === 'area') {
-        return `<tr>
-          <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
-          <td class="mono">${fmt(r.total_queries)}</td>
-          <td class="mono">${fmt(r.no_result_count)} <span class="footer-note">(${r.no_result_rate || 0}%)</span></td>
-          <td class="mono">${fmt(r.low_result_count)} <span class="footer-note">(${r.low_result_rate || 0}%)</span></td>
-          <td class="mono">${fmt(r.slow_query_count)} <span class="footer-note">(${r.slow_query_rate || 0}%)</span></td>
-          <td class="mono">${ms(r.avg_response_ms)}</td>
-          <td class="mono">${r.gap_score || 0}</td>
-          <td><span class="${pillClass(r.gap_level)}">${r.gap_level || '觀察中'}</span></td>
-          <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
-        </tr>`;
-      }
-      if (type === 'precise') {
-        return `<tr>
-          <td class="mono" title="${r.grid || '-'}">${r.grid || '-'}</td>
-          <td><a class="map-link nowrap" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖</a></td>
-          <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
-          <td class="mono">${fmt(r.total_queries)}</td>
-          <td class="mono">${fmt(r.no_result_count)}</td>
-          <td class="mono">${fmt(r.low_result_count)}</td>
-          <td class="mono">${fmt(r.slow_query_count)}</td>
-          <td class="mono">${r.gap_score || 0}</td>
-          <td title="${r.action_label || r.suggestion || ''}">${r.action_label || r.suggestion || '-'}</td>
-          <td>${renderSamples(r.sample_queries || [])}</td>
-        </tr>`;
-      }
-      return `<tr>
-        <td class="mono">${r.grid || '-'}</td>
+    el.innerHTML = top.map((r, idx) => `
+      <div class="hotspot-card">
+        <div class="hotspot-top">
+          <div>
+            <h3 class="hotspot-title">#${idx + 1} ${r.area_name || '未分類區域'}</h3>
+            <p class="hotspot-sub mono">${r.grid || '-'}</p>
+          </div>
+          ${priorityPill(r, idx)}
+        </div>
+        <div class="hotspot-metrics">
+          <div class="metric-mini"><span>查詢</span><b>${fmt(r.total_queries)}</b></div>
+          <div class="metric-mini"><span>查無</span><b>${fmt(r.no_result_count)}</b></div>
+          <div class="metric-mini"><span>低覆蓋</span><b>${fmt(r.low_result_count)}</b></div>
+          <div class="metric-mini"><span>缺口分數</span><b>${r.gap_score || 0}</b></div>
+        </div>
+        <p class="footer-note" style="min-height:44px">${r.action_label || r.suggestion || '建議人工檢查此格點附近資料。'}</p>
+        <div class="controls" style="justify-content:flex-start; margin-top:12px">
+          <a class="btn primary" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖檢查</a>
+          <button class="btn" onclick="copyPoint('${String(r.grid || '').replace(/'/g, '')}', '${String(r.area_name || '').replace(/'/g, '')}', '${String(pointReason(r)).replace(/'/g, '')}')">複製點位</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderPreciseTable() {
+    const el = document.getElementById('preciseRows');
+    const rows = filteredHotspots();
+    if (!rows.length) {
+      el.innerHTML = '<tr><td colspan="11" class="footer-note">目前沒有符合篩選的資料</td></tr>';
+      return;
+    }
+    el.innerHTML = rows.slice(0, 80).map((r, idx) => `
+      <tr>
+        <td>${priorityPill(r, idx)}</td>
+        <td class="mono" title="${r.grid || '-'}">${r.grid || '-'}</td>
+        <td><a class="map-link nowrap" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖</a></td>
         <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
         <td class="mono">${fmt(r.total_queries)}</td>
         <td class="mono">${fmt(r.no_result_count)}</td>
         <td class="mono">${fmt(r.low_result_count)}</td>
         <td class="mono">${fmt(r.slow_query_count)}</td>
+        <td class="mono">${r.gap_score || 0}</td>
+        <td class="action-text" title="${r.action_label || r.suggestion || ''}">${r.action_label || r.suggestion || '-'}</td>
+        <td>${renderSampleDetails(r.sample_queries || [])}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderAreaRows(rows) {
+    const el = document.getElementById('areaRows');
+    if (!rows || !rows.length) {
+      el.innerHTML = '<tr><td colspan="9" class="footer-note">目前沒有足夠資料</td></tr>';
+      return;
+    }
+    el.innerHTML = rows.map(r => `
+      <tr>
+        <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
+        <td class="mono">${fmt(r.total_queries)}</td>
+        <td class="mono">${fmt(r.no_result_count)} <span class="footer-note">(${r.no_result_rate || 0}%)</span></td>
+        <td class="mono">${fmt(r.low_result_count)} <span class="footer-note">(${r.low_result_rate || 0}%)</span></td>
+        <td class="mono">${fmt(r.slow_query_count)} <span class="footer-note">(${r.slow_query_rate || 0}%)</span></td>
         <td class="mono">${ms(r.avg_response_ms)}</td>
         <td class="mono">${r.gap_score || 0}</td>
+        <td><span class="${levelClass(r.gap_level)}">${r.gap_level || '觀察中'}</span></td>
         <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
-      </tr>`;
-    }).join('');
+      </tr>
+    `).join('');
+  }
+
+  function makeOneLineSummary(data) {
+    const s = data.summary || {};
+    const top = ((data.precise_hotspots || data.hotspots || [])[0]) || {};
+    const topText = top.grid ? `目前最高優先點位約在 ${top.grid}，主要訊號為 ${pointReason(top)}。` : '目前尚無明確最高優先點位。';
+    return `所選期間共有 ${fmt(s.total_queries)} 次定位查詢，其中 ${fmt(s.no_result_count)} 次查無結果、${fmt(s.low_result_count)} 次低覆蓋、${fmt(s.slow_query_count)} 次慢查詢。${topText}`;
+  }
+
+  function renderAll(data) {
+    latestData = data;
+    const s = data.summary || {};
+    const t = data.thresholds || {};
+    document.getElementById('totalQueries').textContent = fmt(s.total_queries);
+    document.getElementById('noResultCount').textContent = fmt(s.no_result_count);
+    document.getElementById('noResultRate').textContent = `${s.no_result_rate || 0}% 查無結果`;
+    document.getElementById('lowResultCount').textContent = fmt(s.low_result_count);
+    document.getElementById('lowResultRate').textContent = `候選數 ≤ ${t.low_result_threshold ?? 2}，${s.low_result_rate || 0}%`;
+    document.getElementById('slowQueryCount').textContent = fmt(s.slow_query_count);
+    document.getElementById('slowQueryRate').textContent = `回應 ≥ ${fmt(t.slow_query_ms || 5000)}ms，${s.slow_query_rate || 0}%`;
+    document.getElementById('topGapArea').textContent = s.top_gap_area || '-';
+
+    const precise = data.precise_hotspots || data.hotspots || [];
+    renderTopCards(precise);
+    renderPreciseTable();
+    renderAreaRows(data.area_gaps || []);
+
+    const osm = data.osm_summary || {};
+    document.getElementById('sourceCalls').textContent = fmt(osm.total_source_calls);
+    document.getElementById('osmCalls').textContent = fmt(osm.osm_calls);
+    document.getElementById('osmAvg').textContent = ms(osm.avg_osm_elapsed_ms);
+    document.getElementById('nonOsmAvg').textContent = ms(osm.avg_non_osm_elapsed_ms);
+
+    document.getElementById('oneLineSummary').textContent = makeOneLineSummary(data);
+    const interpretation = data.interpretation || [];
+    document.getElementById('interpretation').innerHTML = interpretation.map(x => `• ${x}`).join('<br>');
   }
 
   async function loadData(force = false) {
@@ -464,36 +650,27 @@
       const res = await fetch(`/api/gap-summary?range=${encodeURIComponent(currentRange)}${force ? '&force=1' : ''}`);
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || '載入失敗');
-
-      const s = data.summary || {};
-      const t = data.thresholds || {};
-      document.getElementById('totalQueries').textContent = fmt(s.total_queries);
-      document.getElementById('noResultCount').textContent = fmt(s.no_result_count);
-      document.getElementById('noResultRate').textContent = `${s.no_result_rate || 0}% 查無結果`;
-      document.getElementById('lowResultCount').textContent = fmt(s.low_result_count);
-      document.getElementById('lowResultRate').textContent = `候選數 ≤ ${t.low_result_threshold ?? 2}，${s.low_result_rate || 0}%`;
-      document.getElementById('slowQueryCount').textContent = fmt(s.slow_query_count);
-      document.getElementById('slowQueryRate').textContent = `回應 ≥ ${fmt(t.slow_query_ms || 5000)}ms，${s.slow_query_rate || 0}%`;
-      document.getElementById('topGapArea').textContent = s.top_gap_area || '-';
-
-      renderRows('preciseRows', data.precise_hotspots || data.hotspots || [], 'precise');
-      renderRows('areaRows', data.area_gaps || [], 'area');
-      renderRows('hotspotRows', data.hotspots || [], 'hotspot');
-
-      const osm = data.osm_summary || {};
-      document.getElementById('sourceCalls').textContent = fmt(osm.total_source_calls);
-      document.getElementById('osmCalls').textContent = fmt(osm.osm_calls);
-      document.getElementById('osmAvg').textContent = ms(osm.avg_osm_elapsed_ms);
-      document.getElementById('nonOsmAvg').textContent = ms(osm.avg_non_osm_elapsed_ms);
-
-      const interpretation = data.interpretation || [];
-      document.getElementById('interpretation').innerHTML = interpretation.map(x => `• ${x}`).join('<br>');
-
+      renderAll(data);
       setStatus(data.cached ? '已載入（快取）' : '已載入最新資料');
     } catch (err) {
       console.error(err);
       setStatus(`載入失敗：${err.message || err}`);
     }
+  }
+
+  function copyPoint(grid, area, reason) {
+    const text = `需求缺口點位：${grid}\n區域：${area || '未分類'}\n原因：${reason}\n建議：開地圖檢查附近是否有漏收廁所、商場、車站、公園或學校設施。`;
+    navigator.clipboard?.writeText(text);
+    setStatus('已複製點位摘要');
+  }
+
+  function copySummary() {
+    if (!latestData) return;
+    const precise = latestData.precise_hotspots || latestData.hotspots || [];
+    const top = precise.slice(0, 3).map((r, i) => `${i + 1}. ${r.grid || '-'}（${r.area_name || '未分類'}）：${pointReason(r)}，缺口分數 ${r.gap_score || 0}`).join('\n');
+    const text = `${makeOneLineSummary(latestData)}\n\n優先檢查點位：\n${top}\n\n判讀：這些點位不代表一定要新建廁所，而是值得優先人工檢查、補資料，或提供公共單位參考。`;
+    navigator.clipboard?.writeText(text);
+    setStatus('已複製展示重點');
   }
 
   document.querySelectorAll('.btn[data-range]').forEach(btn => {
@@ -505,7 +682,25 @@
     });
   });
 
+  document.querySelectorAll('.chip-btn[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.chip-btn[data-filter]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFilter = btn.dataset.filter;
+      renderPreciseTable();
+    });
+  });
+
+  document.getElementById('searchInput').addEventListener('input', renderPreciseTable);
   document.getElementById('refreshBtn').addEventListener('click', () => loadData(true));
+  document.getElementById('copyBtn').addEventListener('click', copySummary);
+  document.getElementById('showcaseBtn').addEventListener('click', () => {
+    showcaseMode = !showcaseMode;
+    document.body.classList.toggle('focus-mode', showcaseMode);
+    document.getElementById('showcaseBtn').classList.toggle('active', showcaseMode);
+    document.getElementById('showcaseBtn').textContent = showcaseMode ? '完整模式' : '展示模式';
+  });
+
   loadData(false);
 </script>
 </body>
