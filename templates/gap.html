@@ -168,6 +168,29 @@
     }
     .explain-card strong { display: block; color: var(--text); margin-bottom: 4px; font-size: 14px; }
     .footer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
+    .map-link {
+      color: #2563eb;
+      text-decoration: none;
+      font-weight: 650;
+    }
+    .map-link:hover { text-decoration: underline; }
+    .sample-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 110px;
+      overflow: auto;
+      white-space: normal;
+    }
+    .sample-item {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      background: #f8fafc;
+      border-radius: 8px;
+      padding: 5px 7px;
+    }
+    .nowrap { white-space: nowrap; }
     @media (max-width: 1200px) {
       .grid-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .explain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -187,7 +210,7 @@
       <div>
         <h1>公共設施需求缺口分析</h1>
         <p class="subtitle">
-          從查無結果、候選數偏少、回應時間偏慢與 OSM fallback 等訊號，反向找出可能需要補資料、人工檢查或公共設施配置改善的區域。
+          從查無結果、候選數偏少、回應時間偏慢與 OSM fallback 等訊號，反向找出可能需要補資料、人工檢查或公共設施配置改善的區域與精準格點。
         </p>
       </div>
       <div class="controls">
@@ -253,8 +276,34 @@
     </div>
 
     <div class="panel">
+      <h2>精準缺口熱點：到底是哪裡需要補？</h2>
+      <p class="panel-note">
+        行政區只能看大方向；真正要判斷「哪裡需要補資料或現地檢查」，請先看這張表。每列是一個約 500 公尺等級的格點中心，可直接開 Google Maps 檢查附近是否有漏收廁所、商場、車站、公園或學校設施。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:12%">格點中心</th>
+            <th style="width:8%">地圖</th>
+            <th style="width:12%">區域</th>
+            <th>查詢</th>
+            <th>查無</th>
+            <th>低覆蓋</th>
+            <th>慢查詢</th>
+            <th>缺口分數</th>
+            <th style="width:22%">優先處理建議</th>
+            <th style="width:24%">匿名樣本</th>
+          </tr>
+        </thead>
+        <tbody id="preciseRows">
+          <tr><td colspan="10" class="footer-note">載入中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
       <h2>行政區 / 區域需求缺口排名</h2>
-      <p class="panel-note">用 area_name 匯總，適合用來回應「哪些區域找不到、找很慢、候選很少」的問題。</p>
+      <p class="panel-note">用 area_name 匯總，只適合看大方向；實際補資料請以「精準缺口熱點」為主。</p>
       <table>
         <thead>
           <tr>
@@ -277,7 +326,7 @@
 
     <div class="panel">
       <h2>查詢熱點 / 缺口格點</h2>
-      <p class="panel-note">以約 500 公尺級距聚合經緯度，避免暴露過精確位置，並找出小範圍需求缺口。</p>
+      <p class="panel-note">完整格點列表。若要做人工補資料，優先從上方「精準缺口熱點」的地圖連結開始。</p>
       <table>
         <thead>
           <tr>
@@ -347,10 +396,24 @@
     document.getElementById('dataStatus').textContent = text;
   }
 
+  function renderSamples(samples) {
+    if (!samples || !samples.length) return '<span class="footer-note">無樣本</span>';
+    return `<div class="sample-list">${samples.slice(0, 4).map(x => {
+      const rc = Number(x.result_count || 0);
+      const rt = Number(x.response_time_ms || 0);
+      const shortTime = String(x.created_at || '').replace('T', ' ').slice(0, 16);
+      return `<div class="sample-item">
+        ${shortTime || '-'}｜結果 ${rc}｜${ms(rt)}｜
+        <a class="map-link" href="${x.map_url || '#'}" target="_blank" rel="noopener">點位</a>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
   function renderRows(elId, rows, type) {
     const el = document.getElementById(elId);
+    const colspan = type === 'precise' ? 10 : 9;
     if (!rows || !rows.length) {
-      el.innerHTML = `<tr><td colspan="9" class="footer-note">目前沒有足夠資料</td></tr>`;
+      el.innerHTML = `<tr><td colspan="${colspan}" class="footer-note">目前沒有足夠資料</td></tr>`;
       return;
     }
     el.innerHTML = rows.map(r => {
@@ -365,6 +428,20 @@
           <td class="mono">${r.gap_score || 0}</td>
           <td><span class="${pillClass(r.gap_level)}">${r.gap_level || '觀察中'}</span></td>
           <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
+        </tr>`;
+      }
+      if (type === 'precise') {
+        return `<tr>
+          <td class="mono" title="${r.grid || '-'}">${r.grid || '-'}</td>
+          <td><a class="map-link nowrap" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖</a></td>
+          <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
+          <td class="mono">${fmt(r.total_queries)}</td>
+          <td class="mono">${fmt(r.no_result_count)}</td>
+          <td class="mono">${fmt(r.low_result_count)}</td>
+          <td class="mono">${fmt(r.slow_query_count)}</td>
+          <td class="mono">${r.gap_score || 0}</td>
+          <td title="${r.action_label || r.suggestion || ''}">${r.action_label || r.suggestion || '-'}</td>
+          <td>${renderSamples(r.sample_queries || [])}</td>
         </tr>`;
       }
       return `<tr>
@@ -399,6 +476,7 @@
       document.getElementById('slowQueryRate').textContent = `回應 ≥ ${fmt(t.slow_query_ms || 5000)}ms，${s.slow_query_rate || 0}%`;
       document.getElementById('topGapArea').textContent = s.top_gap_area || '-';
 
+      renderRows('preciseRows', data.precise_hotspots || data.hotspots || [], 'precise');
       renderRows('areaRows', data.area_gaps || [], 'area');
       renderRows('hotspotRows', data.hotspots || [], 'hotspot');
 

@@ -5842,7 +5842,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
 
 
-# === Demand Gap Dashboard：公共設施需求缺口分析 ===
+# === Demand Gap Dashboard v162：公共設施需求缺口與精準熱點分析 ===
 _GAP_SUMMARY_CACHE = {}
 _GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "180"))
 
@@ -5905,6 +5905,47 @@ def _gap_suggestion(row):
     if total >= 10:
         return "需求量較高，可列為持續觀察區域"
     return "資料量較少，先觀察"
+
+
+def _gap_action_label(row):
+    """把缺口訊號轉成比較可執行的維護建議。"""
+    no_result = int(row.get("no_result_count") or 0)
+    low_result = int(row.get("low_result_count") or 0)
+    slow = int(row.get("slow_query_count") or 0)
+    total = int(row.get("total_queries") or 0)
+    avg_rt = int(row.get("avg_response_ms") or 0)
+    if no_result >= 3 or (total >= 5 and no_result / max(total, 1) >= 0.30):
+        return "優先現地/地圖確認：可能真的缺設施或資料未收錄"
+    if low_result >= 5 or (total >= 8 and low_result / max(total, 1) >= 0.50):
+        return "優先補資料：檢查附近商場、車站、公園、學校是否漏收"
+    if slow >= 5 or avg_rt >= 6000:
+        return "優先優化資料源：可能過度依賴 OSM 或本地候選不足"
+    if total >= 8:
+        return "持續觀察：需求量夠，可列入人工抽樣清單"
+    return "先觀察：資料量仍少"
+
+def _gap_google_maps_url(lat, lon):
+    try:
+        return f"https://www.google.com/maps/search/?api=1&query={float(lat):.6f},{float(lon):.6f}"
+    except Exception:
+        return ""
+
+def _gap_sample_event(e):
+    """保留少量匿名查詢樣本，讓 dashboard 可以直接知道要查哪個點。"""
+    lat = _safe_float(e.get("lat"))
+    lon = _safe_float(e.get("lon"))
+    if lat is None or lon is None:
+        return None
+    return {
+        "created_at": str(e.get("created_at") or ""),
+        "lat": round(lat, 6),
+        "lon": round(lon, 6),
+        "result_count": int(e.get("result_count") or 0),
+        "success": int(e.get("success") or 0),
+        "response_time_ms": int(e.get("response_time_ms") or 0),
+        "area_name": (e.get("area_name") or "其他區域"),
+        "map_url": _gap_google_maps_url(lat, lon)
+    }
 
 def _build_gap_summary(range_key="30d", anchor_date=None):
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
@@ -6062,7 +6103,10 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
                     "avg_response_ms": 0,
                     "gap_score": 0,
                     "gap_level": "觀察中",
-                    "suggestion": ""
+                    "suggestion": "",
+                    "action_label": "",
+                    "map_url": _gap_google_maps_url(glat, glon),
+                    "sample_queries": []
                 }
             g = grid_map[gkey]
             g["total_queries"] += 1
@@ -6071,6 +6115,11 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
             g["slow_query_count"] += 1 if rt >= SLOW_QUERY_MS else 0
             if rt > 0:
                 g["response_values"].append(rt)
+            # 只保留最能說明問題的匿名樣本：查無、低覆蓋、慢查詢優先。
+            sample = _gap_sample_event(e)
+            if sample and (rc == 0 or rc <= LOW_RESULT_THRESHOLD or rt >= SLOW_QUERY_MS):
+                if len(g.get("sample_queries") or []) < 5:
+                    g["sample_queries"].append(sample)
 
     def finish_row(r):
         vals = r.pop("response_values", [])
@@ -6091,6 +6140,10 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
         r["gap_score"] = round(score, 2)
         r["gap_level"] = _gap_level(score)
         r["suggestion"] = _gap_suggestion(r)
+        r["action_label"] = _gap_action_label(r)
+        # 小範圍格點加上可直接開啟的地圖連結，避免只停留在行政區層級。
+        if r.get("lat") is not None and r.get("lon") is not None and not r.get("map_url"):
+            r["map_url"] = _gap_google_maps_url(r.get("lat"), r.get("lon"))
         return r
 
     area_rows = [finish_row(dict(v)) for v in area_map.values()]
@@ -6125,13 +6178,16 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
             "slow_query_rate": round((slow_query_count / max(total_queries, 1)) * 100, 1)
         },
         "area_gaps": area_rows[:30],
-        "hotspots": hotspot_rows[:30],
+        # hotspots 是小範圍格點，才是用來回答「到底哪裡需要補」的核心資料。
+        "hotspots": hotspot_rows[:50],
+        "precise_hotspots": hotspot_rows[:20],
         "osm_summary": osm_summary,
         "interpretation": [
-            "查無結果高：可能代表該區公共廁所設施不足，或資料庫尚未收錄完整。",
-            "低覆蓋高：代表使用者附近候選結果偏少，適合列為補資料或公共設施檢查區。",
+            "行政區排名只能看大方向；真正要知道哪裡需要補資料，請看『精準缺口熱點』的格點中心與地圖連結。",
+            "查無結果高：可能代表該點附近公共廁所設施不足，或資料庫尚未收錄完整。",
+            "低覆蓋高：代表該點附近候選結果偏少，適合列為補資料或公共設施檢查區。",
             "慢查詢高：可能代表資料不足導致外部查詢或 fallback 需求增加，也可能代表區域查詢較不穩定。",
-            "需求缺口分數不是直接等於必須新建廁所，而是用來優先找出值得人工檢查或提供政府參考的區域。"
+            "需求缺口分數不是直接等於必須新建廁所，而是用來優先找出值得人工檢查、補資料或提供公共單位參考的位置。"
         ]
     }
 
@@ -6143,7 +6199,7 @@ def dashboard_gap_page():
 @app.route("/api/gap-summary", methods=["GET"])
 def api_gap_summary():
     """公共設施需求缺口分析 API。
-    目的：分析查無結果、低覆蓋、慢查詢與 OSM fallback 等訊號，找出值得補資料或公共設施檢查的區域。
+    目的：分析查無結果、低覆蓋、慢查詢與 OSM fallback 等訊號，找出值得補資料或公共設施檢查的區域與精準格點。
     """
     try:
         range_key = (request.args.get("range") or "30d").strip()
