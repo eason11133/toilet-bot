@@ -5842,9 +5842,10 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
 
 
-# === Demand Gap Dashboard v162：公共設施需求缺口與精準熱點分析 ===
+# === Demand Gap Dashboard v165：去重、需求群聚與建議設點分析 ===
 _GAP_SUMMARY_CACHE = {}
 _GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "180"))
+
 
 def _gap_cache_get(key):
     try:
@@ -5858,16 +5859,17 @@ def _gap_cache_get(key):
         pass
     return None
 
+
 def _gap_cache_set(key, data):
     try:
         _GAP_SUMMARY_CACHE[key] = (time.time(), data)
-        # 防止記憶體無限成長
         if len(_GAP_SUMMARY_CACHE) > 30:
             oldest = sorted(_GAP_SUMMARY_CACHE.items(), key=lambda kv: kv[1][0])[:10]
             for k, _ in oldest:
                 _GAP_SUMMARY_CACHE.pop(k, None)
     except Exception:
         pass
+
 
 def _safe_float(v, default=None):
     try:
@@ -5877,52 +5879,80 @@ def _safe_float(v, default=None):
     except Exception:
         return default
 
-def _gap_level(score):
+
+def _gap_parse_dt(v):
     try:
-        s = float(score or 0)
+        if isinstance(v, datetime):
+            return v
+        s = str(v or "").strip()
+        if not s:
+            return None
+        # 支援 PostgreSQL / SQLite 常見字串
+        s = s.replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
     except Exception:
-        s = 0
-    if s >= 80:
-        return "高缺口"
-    if s >= 40:
-        return "中缺口"
-    if s >= 15:
-        return "低缺口"
-    return "觀察中"
-
-def _gap_suggestion(row):
-    no_result = int(row.get("no_result_count") or 0)
-    low_result = int(row.get("low_result_count") or 0)
-    slow = int(row.get("slow_query_count") or 0)
-    total = int(row.get("total_queries") or 0)
-    avg_rt = int(row.get("avg_response_ms") or 0)
-    if no_result >= 5 or (total >= 8 and no_result / max(total, 1) >= 0.35):
-        return "可能設施不足或資料缺漏，建議優先檢查"
-    if low_result >= 8 or (total >= 10 and low_result / max(total, 1) >= 0.50):
-        return "候選結果偏少，可能需要補資料或擴充設施"
-    if slow >= 8 or avg_rt >= 6000:
-        return "查詢耗時偏高，可能依賴外部資料或資料分布不足"
-    if total >= 10:
-        return "需求量較高，可列為持續觀察區域"
-    return "資料量較少，先觀察"
+        try:
+            return datetime.strptime(str(v)[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
 
 
-def _gap_action_label(row):
-    """把缺口訊號轉成比較可執行的維護建議。"""
-    no_result = int(row.get("no_result_count") or 0)
-    low_result = int(row.get("low_result_count") or 0)
-    slow = int(row.get("slow_query_count") or 0)
-    total = int(row.get("total_queries") or 0)
-    avg_rt = int(row.get("avg_response_ms") or 0)
-    if no_result >= 3 or (total >= 5 and no_result / max(total, 1) >= 0.30):
-        return "優先現地/地圖確認：可能真的缺設施或資料未收錄"
-    if low_result >= 5 or (total >= 8 and low_result / max(total, 1) >= 0.50):
-        return "優先補資料：檢查附近商場、車站、公園、學校是否漏收"
-    if slow >= 5 or avg_rt >= 6000:
-        return "優先優化資料源：可能過度依賴 OSM 或本地候選不足"
-    if total >= 8:
-        return "持續觀察：需求量夠，可列入人工抽樣清單"
-    return "先觀察：資料量仍少"
+def _gap_day_key(v):
+    dt = _gap_parse_dt(v)
+    if not dt:
+        return "unknown"
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(TW_TZ)
+    except Exception:
+        pass
+    return dt.strftime("%Y-%m-%d")
+
+
+def _gap_minutes(v):
+    dt = _gap_parse_dt(v)
+    if not dt:
+        return 0
+    try:
+        return int(dt.timestamp() // 60)
+    except Exception:
+        return 0
+
+
+def _gap_user_key(uid):
+    if uid:
+        return hashlib.sha256(str(uid).encode("utf-8")).hexdigest()[:12]
+    return "anon"
+
+
+def _gap_cell(lat, lon, decimals=3):
+    try:
+        return f"{round(float(lat), decimals):.{decimals}f},{round(float(lon), decimals):.{decimals}f}"
+    except Exception:
+        return "unknown"
+
+
+def _gap_cell_center(cell):
+    try:
+        a, b = str(cell).split(",", 1)
+        return float(a), float(b)
+    except Exception:
+        return None, None
+
+
+def _gap_haversine_m(lat1, lon1, lat2, lon2):
+    try:
+        lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
+        R = 6371000.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+        return 2 * R * math.asin(math.sqrt(a))
+    except Exception:
+        return 0
+
 
 def _gap_google_maps_url(lat, lon):
     try:
@@ -5930,8 +5960,65 @@ def _gap_google_maps_url(lat, lon):
     except Exception:
         return ""
 
+
+def _gap_level(score, unique_users=0, active_days=0):
+    try:
+        s = float(score or 0)
+    except Exception:
+        s = 0
+    # v2 不只看分數，也看是否跨使用者/跨日期，避免單人連續查詢造成假熱點
+    if s >= 80 and (unique_users >= 2 or active_days >= 2):
+        return "高可信缺口"
+    if s >= 45:
+        return "中可信缺口"
+    if s >= 18:
+        return "低可信缺口"
+    return "觀察中"
+
+
+def _gap_action_label(row):
+    no_result = int(row.get("no_result_count") or 0)
+    low_result = int(row.get("low_result_count") or 0)
+    slow = int(row.get("slow_query_count") or 0)
+    total = int(row.get("effective_queries") or row.get("total_queries") or 0)
+    unique_users = int(row.get("unique_users") or 0)
+    active_days = int(row.get("active_days") or 0)
+    no_rate = no_result / max(total, 1)
+    low_rate = low_result / max(total, 1)
+    slow_rate = slow / max(total, 1)
+
+    confidence = ""
+    if unique_users < 2 and active_days < 2:
+        confidence = "（但目前獨立性較低，需再觀察）"
+
+    if no_result >= 3 or (total >= 5 and no_rate >= 0.35):
+        return "優先現地/地圖確認：疑似設施不足或資料未收錄" + confidence
+    if low_result >= 4 or (total >= 6 and low_rate >= 0.55):
+        return "優先補資料：檢查附近商場、車站、公園、學校是否漏收" + confidence
+    if slow >= 4 or (total >= 6 and slow_rate >= 0.45):
+        return "優先補本地資料：降低 OSM 或外部查詢依賴" + confidence
+    if total >= 8 or unique_users >= 3:
+        return "持續觀察：需求量足夠，可列入人工抽樣清單"
+    return "先觀察：資料量仍少"
+
+
+def _gap_suggestion(row):
+    no_result = int(row.get("no_result_count") or 0)
+    low_result = int(row.get("low_result_count") or 0)
+    slow = int(row.get("slow_query_count") or 0)
+    total = int(row.get("effective_queries") or row.get("total_queries") or 0)
+    if no_result >= 3 or (total >= 5 and no_result / max(total, 1) >= 0.35):
+        return "可能設施不足或資料缺漏，建議優先檢查"
+    if low_result >= 4 or (total >= 6 and low_result / max(total, 1) >= 0.50):
+        return "候選結果偏少，可能需要補資料或擴充設施"
+    if slow >= 4:
+        return "查詢耗時偏高，可能依賴外部資料或資料分布不足"
+    if total >= 8:
+        return "需求量較高，可列為持續觀察區域"
+    return "資料量較少，先觀察"
+
+
 def _gap_sample_event(e):
-    """保留少量匿名查詢樣本，讓 dashboard 可以直接知道要查哪個點。"""
     lat = _safe_float(e.get("lat"))
     lon = _safe_float(e.get("lon"))
     if lat is None or lon is None:
@@ -5946,6 +6033,155 @@ def _gap_sample_event(e):
         "area_name": (e.get("area_name") or "其他區域"),
         "map_url": _gap_google_maps_url(lat, lon)
     }
+
+
+def _gap_add_metrics(obj, event, low_threshold, slow_ms):
+    rc = int(event.get("result_count") or 0)
+    rt = int(event.get("response_time_ms") or 0)
+    success = int(event.get("success") or 0) == 1
+    obj["effective_queries"] = obj.get("effective_queries", 0) + 1
+    obj["total_queries"] = obj.get("total_queries", 0) + 1  # 相容前端舊欄位
+    obj["no_result_count"] = obj.get("no_result_count", 0) + (1 if rc == 0 else 0)
+    obj["low_result_count"] = obj.get("low_result_count", 0) + (1 if rc <= low_threshold else 0)
+    obj["slow_query_count"] = obj.get("slow_query_count", 0) + (1 if rt >= slow_ms else 0)
+    obj["success_count"] = obj.get("success_count", 0) + (1 if success else 0)
+    if rt > 0:
+        obj.setdefault("response_values", []).append(rt)
+    obj.setdefault("user_set", set()).add(event.get("user_key") or "anon")
+    obj.setdefault("day_set", set()).add(event.get("day_key") or "unknown")
+    obj["raw_queries"] = obj.get("raw_queries", 0) + int(event.get("raw_weight") or 1)
+
+
+def _gap_finish_row(r):
+    vals = r.pop("response_values", [])
+    user_set = r.pop("user_set", set())
+    day_set = r.pop("day_set", set())
+    total = int(r.get("effective_queries") or r.get("total_queries") or 0)
+    avg_rt = round(sum(vals) / len(vals)) if vals else 0
+    r["avg_response_ms"] = avg_rt
+    r["unique_users"] = len(user_set) if isinstance(user_set, set) else int(r.get("unique_users") or 0)
+    r["active_days"] = len(day_set) if isinstance(day_set, set) else int(r.get("active_days") or 0)
+    r["no_result_rate"] = round((int(r.get("no_result_count") or 0) / max(total, 1)) * 100, 1)
+    r["low_result_rate"] = round((int(r.get("low_result_count") or 0) / max(total, 1)) * 100, 1)
+    r["slow_query_rate"] = round((int(r.get("slow_query_count") or 0) / max(total, 1)) * 100, 1)
+
+    # Demand Gap Score v2：加入去重後有效需求、獨立使用者與跨日期，降低單人連續查詢灌分
+    score = (
+        int(r.get("no_result_count") or 0) * 5
+        + int(r.get("low_result_count") or 0) * 2
+        + int(r.get("slow_query_count") or 0) * 1
+        + int(r.get("effective_queries") or 0) * 1
+        + int(r.get("unique_users") or 0) * 3
+        + int(r.get("active_days") or 0) * 2
+    )
+    # 若幾乎只有單一使用者同一天，分數打折，但不完全刪除，避免早期資料看不到訊號
+    if int(r.get("unique_users") or 0) <= 1 and int(r.get("active_days") or 0) <= 1:
+        score *= 0.65
+        r["confidence_note"] = "單一使用者/單日訊號，需再觀察"
+    elif int(r.get("unique_users") or 0) <= 1:
+        score *= 0.80
+        r["confidence_note"] = "使用者數偏少，需搭配現地確認"
+    else:
+        r["confidence_note"] = "可信度較高"
+
+    r["gap_score"] = round(score, 2)
+    r["gap_level"] = _gap_level(score, int(r.get("unique_users") or 0), int(r.get("active_days") or 0))
+    r["suggestion"] = _gap_suggestion(r)
+    r["action_label"] = _gap_action_label(r)
+    if r.get("lat") is not None and r.get("lon") is not None:
+        r["map_url"] = _gap_google_maps_url(r.get("lat"), r.get("lon"))
+    return r
+
+
+def _gap_cluster_rows(rows, radius_m=500):
+    """把相近缺口格點合併為需求群，輸出建議中心點。"""
+    candidates = []
+    for r in rows:
+        lat = _safe_float(r.get("lat"))
+        lon = _safe_float(r.get("lon"))
+        if lat is None or lon is None:
+            continue
+        # 只把真的有缺口訊號的點拿去群聚
+        if int(r.get("no_result_count") or 0) <= 0 and int(r.get("low_result_count") or 0) <= 0 and int(r.get("slow_query_count") or 0) <= 0:
+            continue
+        candidates.append(dict(r))
+
+    candidates.sort(key=lambda x: (float(x.get("gap_score") or 0), int(x.get("effective_queries") or 0)), reverse=True)
+    used = set()
+    clusters = []
+
+    for i, seed in enumerate(candidates):
+        if i in used:
+            continue
+        members = []
+        seed_lat, seed_lon = float(seed["lat"]), float(seed["lon"])
+        for j, r in enumerate(candidates):
+            if j in used:
+                continue
+            d = _gap_haversine_m(seed_lat, seed_lon, r.get("lat"), r.get("lon"))
+            if d <= radius_m:
+                used.add(j)
+                rr = dict(r)
+                rr["distance_to_seed_m"] = round(d, 1)
+                members.append(rr)
+
+        if not members:
+            continue
+        weight_sum = 0.0
+        lat_sum = 0.0
+        lon_sum = 0.0
+        for m in members:
+            w = max(float(m.get("gap_score") or 0), 1.0)
+            weight_sum += w
+            lat_sum += float(m.get("lat") or 0) * w
+            lon_sum += float(m.get("lon") or 0) * w
+        center_lat = lat_sum / max(weight_sum, 1)
+        center_lon = lon_sum / max(weight_sum, 1)
+        radius = max([_gap_haversine_m(center_lat, center_lon, m.get("lat"), m.get("lon")) for m in members] or [0])
+
+        area_counts = {}
+        for m in members:
+            area = m.get("area_name") or "其他區域"
+            area_counts[area] = area_counts.get(area, 0) + int(m.get("effective_queries") or 1)
+        area_name = sorted(area_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0] if area_counts else "其他區域"
+
+        agg = {
+            "cluster_id": f"C{len(clusters)+1}",
+            "center": f"{center_lat:.5f},{center_lon:.5f}",
+            "lat": round(center_lat, 6),
+            "lon": round(center_lon, 6),
+            "area_name": area_name,
+            "point_count": len(members),
+            "radius_m": round(radius),
+            "effective_queries": sum(int(m.get("effective_queries") or 0) for m in members),
+            "total_queries": sum(int(m.get("effective_queries") or 0) for m in members),
+            "raw_queries": sum(int(m.get("raw_queries") or 0) for m in members),
+            "no_result_count": sum(int(m.get("no_result_count") or 0) for m in members),
+            "low_result_count": sum(int(m.get("low_result_count") or 0) for m in members),
+            "slow_query_count": sum(int(m.get("slow_query_count") or 0) for m in members),
+            "unique_users": sum(int(m.get("unique_users") or 0) for m in members),
+            "active_days": len(set([str(m.get("day_hint") or "") for m in members if m.get("day_hint")])) or max([int(m.get("active_days") or 0) for m in members] or [0]),
+            "member_grids": [m.get("grid") for m in members[:8]],
+            "sample_queries": sum([m.get("sample_queries") or [] for m in members], [])[:6],
+            "map_url": _gap_google_maps_url(center_lat, center_lon),
+        }
+        agg = _gap_finish_row({**agg, "response_values": sum([m.get("response_values_raw") or [] for m in members], []), "user_set": set(), "day_set": set()})
+        # _gap_finish_row 會以空 set 覆蓋 unique_users；補回聚合值並重算關鍵欄位
+        agg["unique_users"] = max(sum(int(m.get("unique_users") or 0) for m in members), 0)
+        agg["active_days"] = max([int(m.get("active_days") or 0) for m in members] or [0])
+        agg["gap_score"] = round(sum(float(m.get("gap_score") or 0) for m in members) + agg["point_count"] * 3, 2)
+        agg["gap_level"] = _gap_level(agg["gap_score"], agg["unique_users"], agg["active_days"])
+        agg["suggestion"] = _gap_suggestion(agg)
+        agg["action_label"] = _gap_action_label(agg)
+        if agg["unique_users"] < 2 and agg["active_days"] < 2:
+            agg["confidence_note"] = "可能受單人重複查詢影響，展示前建議人工確認"
+        else:
+            agg["confidence_note"] = "已合併附近點位，較適合做公共設施檢查"
+        clusters.append(agg)
+
+    clusters.sort(key=lambda x: (float(x.get("gap_score") or 0), int(x.get("effective_queries") or 0)), reverse=True)
+    return clusters
+
 
 def _build_gap_summary(range_key="30d", anchor_date=None):
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
@@ -5974,7 +6210,7 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
             WHERE created_at >= %s AND created_at <= %s
               AND event_type = 'location_query'
               AND COALESCE(response_time_ms, 0) > 0
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
         """, (start, end))
         events = [dict(r) for r in cur.fetchall()]
 
@@ -6024,12 +6260,46 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
             WHERE created_at >= ? AND created_at <= ?
               AND event_type = 'location_query'
               AND COALESCE(response_time_ms, 0) > 0
-            ORDER BY created_at DESC
+            ORDER BY created_at ASC
         """, (start.isoformat(), end.isoformat()))
         events = [dict(r) for r in cur.fetchall()]
         conn.close()
 
-    total_queries = len(events)
+    raw_total_queries = len(events)
+    LOW_RESULT_THRESHOLD = int(os.getenv("GAP_LOW_RESULT_THRESHOLD", "2"))
+    SLOW_QUERY_MS = int(os.getenv("GAP_SLOW_QUERY_MS", "5000"))
+    DEDUPE_MINUTES = int(os.getenv("GAP_DEDUPE_MINUTES", "10"))
+    CLUSTER_RADIUS_M = int(os.getenv("GAP_CLUSTER_RADIUS_M", "500"))
+
+    # 1) 同人同地短時間去重：同 user、同約 100m 格點、10 分鐘內，只算一筆有效需求
+    deduped = []
+    last_seen = {}
+    duplicate_skipped = 0
+    for e in events:
+        lat = _safe_float(e.get("lat"))
+        lon = _safe_float(e.get("lon"))
+        if lat is None or lon is None:
+            continue
+        user_key = _gap_user_key(e.get("user_id"))
+        cell_key = _gap_cell(lat, lon, 3)
+        minute = _gap_minutes(e.get("created_at"))
+        # 沒 user_id 時，用較短時間窗，避免把不同使用者誤合併
+        identity = user_key if user_key != "anon" else f"anon:{cell_key}"
+        dedupe_key = (identity, cell_key)
+        last_min = last_seen.get(dedupe_key)
+        window = DEDUPE_MINUTES if user_key != "anon" else min(3, DEDUPE_MINUTES)
+        if last_min is not None and minute and (minute - last_min) <= window:
+            duplicate_skipped += 1
+            continue
+        last_seen[dedupe_key] = minute
+        ee = dict(e)
+        ee["user_key"] = user_key
+        ee["cell_key"] = cell_key
+        ee["day_key"] = _gap_day_key(e.get("created_at"))
+        ee["raw_weight"] = 1
+        deduped.append(ee)
+
+    total_queries = len(deduped)
     no_result_count = 0
     low_result_count = 0
     slow_query_count = 0
@@ -6037,16 +6307,16 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
     response_values = []
     area_map = {}
     grid_map = {}
+    all_users = set()
+    all_days = set()
 
-    # 第一版門檻：結果數 <= 2 視為低覆蓋；回應 >= 5000ms 視為慢查詢
-    LOW_RESULT_THRESHOLD = int(os.getenv("GAP_LOW_RESULT_THRESHOLD", "2"))
-    SLOW_QUERY_MS = int(os.getenv("GAP_SLOW_QUERY_MS", "5000"))
-
-    for e in events:
+    for e in deduped:
         rc = int(e.get("result_count") or 0)
         rt = int(e.get("response_time_ms") or 0)
         success = int(e.get("success") or 0) == 1
         area = (e.get("area_name") or "其他區域").strip() or "其他區域"
+        all_users.add(e.get("user_key") or "anon")
+        all_days.add(e.get("day_key") or "unknown")
 
         if success:
             success_count += 1
@@ -6062,30 +6332,23 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
         if area not in area_map:
             area_map[area] = {
                 "area_name": area,
+                "effective_queries": 0,
                 "total_queries": 0,
+                "raw_queries": 0,
                 "no_result_count": 0,
                 "low_result_count": 0,
                 "slow_query_count": 0,
                 "success_count": 0,
                 "response_values": [],
-                "avg_response_ms": 0,
-                "gap_score": 0,
-                "gap_level": "觀察中",
-                "suggestion": ""
+                "user_set": set(),
+                "day_set": set(),
             }
-        a = area_map[area]
-        a["total_queries"] += 1
-        a["no_result_count"] += 1 if rc == 0 else 0
-        a["low_result_count"] += 1 if rc <= LOW_RESULT_THRESHOLD else 0
-        a["slow_query_count"] += 1 if rt >= SLOW_QUERY_MS else 0
-        a["success_count"] += 1 if success else 0
-        if rt > 0:
-            a["response_values"].append(rt)
+        _gap_add_metrics(area_map[area], e, LOW_RESULT_THRESHOLD, SLOW_QUERY_MS)
 
         lat = _safe_float(e.get("lat"))
         lon = _safe_float(e.get("lon"))
         if lat is not None and lon is not None:
-            # 約 500m 級距，避免暴露過精確位置，也方便看熱點
+            # 100m 級別格點：先精準聚合，再由 cluster 合成約 500m 建議設點區
             glat = round(lat, 3)
             glon = round(lon, 3)
             gkey = f"{glat:.3f},{glon:.3f}"
@@ -6095,112 +6358,99 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
                     "lat": glat,
                     "lon": glon,
                     "area_name": area,
+                    "effective_queries": 0,
                     "total_queries": 0,
+                    "raw_queries": 0,
                     "no_result_count": 0,
                     "low_result_count": 0,
                     "slow_query_count": 0,
+                    "success_count": 0,
                     "response_values": [],
-                    "avg_response_ms": 0,
-                    "gap_score": 0,
-                    "gap_level": "觀察中",
-                    "suggestion": "",
-                    "action_label": "",
+                    "response_values_raw": [],
+                    "user_set": set(),
+                    "day_set": set(),
+                    "day_hint": e.get("day_key"),
+                    "sample_queries": [],
                     "map_url": _gap_google_maps_url(glat, glon),
-                    "sample_queries": []
                 }
             g = grid_map[gkey]
-            g["total_queries"] += 1
-            g["no_result_count"] += 1 if rc == 0 else 0
-            g["low_result_count"] += 1 if rc <= LOW_RESULT_THRESHOLD else 0
-            g["slow_query_count"] += 1 if rt >= SLOW_QUERY_MS else 0
+            _gap_add_metrics(g, e, LOW_RESULT_THRESHOLD, SLOW_QUERY_MS)
             if rt > 0:
-                g["response_values"].append(rt)
-            # 只保留最能說明問題的匿名樣本：查無、低覆蓋、慢查詢優先。
+                g.setdefault("response_values_raw", []).append(rt)
             sample = _gap_sample_event(e)
             if sample and (rc == 0 or rc <= LOW_RESULT_THRESHOLD or rt >= SLOW_QUERY_MS):
                 if len(g.get("sample_queries") or []) < 5:
                     g["sample_queries"].append(sample)
 
-    def finish_row(r):
-        vals = r.pop("response_values", [])
-        total = int(r.get("total_queries") or 0)
-        avg_rt = round(sum(vals) / len(vals)) if vals else 0
-        r["avg_response_ms"] = avg_rt
-        r["no_result_rate"] = round((int(r.get("no_result_count") or 0) / max(total, 1)) * 100, 1)
-        r["low_result_rate"] = round((int(r.get("low_result_count") or 0) / max(total, 1)) * 100, 1)
-        r["slow_query_rate"] = round((int(r.get("slow_query_count") or 0) / max(total, 1)) * 100, 1)
+    area_rows = [_gap_finish_row(dict(v)) for v in area_map.values()]
+    area_rows.sort(key=lambda x: (x["gap_score"], x["effective_queries"]), reverse=True)
 
-        # 需求缺口分數：強調「找不到」、「候選少」、「慢」，再加上查詢需求量
-        score = (
-            int(r.get("no_result_count") or 0) * 4
-            + int(r.get("low_result_count") or 0) * 2
-            + int(r.get("slow_query_count") or 0) * 1.5
-            + total * 0.5
-        )
-        r["gap_score"] = round(score, 2)
-        r["gap_level"] = _gap_level(score)
-        r["suggestion"] = _gap_suggestion(r)
-        r["action_label"] = _gap_action_label(r)
-        # 小範圍格點加上可直接開啟的地圖連結，避免只停留在行政區層級。
-        if r.get("lat") is not None and r.get("lon") is not None and not r.get("map_url"):
-            r["map_url"] = _gap_google_maps_url(r.get("lat"), r.get("lon"))
-        return r
+    hotspot_rows = [_gap_finish_row(dict(v)) for v in grid_map.values()]
+    hotspot_rows.sort(key=lambda x: (x["gap_score"], x["effective_queries"]), reverse=True)
 
-    area_rows = [finish_row(dict(v)) for v in area_map.values()]
-    area_rows.sort(key=lambda x: (x["gap_score"], x["total_queries"]), reverse=True)
-
-    hotspot_rows = [finish_row(dict(v)) for v in grid_map.values()]
-    hotspot_rows.sort(key=lambda x: (x["gap_score"], x["total_queries"]), reverse=True)
+    clusters = _gap_cluster_rows(hotspot_rows, radius_m=CLUSTER_RADIUS_M)
 
     avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
     top_area = area_rows[0]["area_name"] if area_rows else "-"
+    top_cluster = clusters[0]["center"] if clusters else "-"
 
     return {
         "ok": True,
+        "version": "demand_gap_v2_dedupe_cluster",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
         "thresholds": {
             "low_result_threshold": LOW_RESULT_THRESHOLD,
             "slow_query_ms": SLOW_QUERY_MS,
-            "cache_ttl_seconds": _GAP_SUMMARY_CACHE_TTL
+            "dedupe_minutes": DEDUPE_MINUTES,
+            "cluster_radius_m": CLUSTER_RADIUS_M,
+            "cache_ttl_seconds": _GAP_SUMMARY_CACHE_TTL,
         },
         "summary": {
+            "raw_total_queries": raw_total_queries,
+            "duplicate_skipped": duplicate_skipped,
             "total_queries": total_queries,
+            "effective_queries": total_queries,
+            "unique_users": len(all_users),
+            "active_days": len(all_days),
             "success_count": success_count,
             "no_result_count": no_result_count,
             "low_result_count": low_result_count,
             "slow_query_count": slow_query_count,
             "avg_response_ms": avg_response,
             "top_gap_area": top_area,
+            "top_gap_cluster": top_cluster,
+            "cluster_count": len(clusters),
             "no_result_rate": round((no_result_count / max(total_queries, 1)) * 100, 1),
             "low_result_rate": round((low_result_count / max(total_queries, 1)) * 100, 1),
-            "slow_query_rate": round((slow_query_count / max(total_queries, 1)) * 100, 1)
+            "slow_query_rate": round((slow_query_count / max(total_queries, 1)) * 100, 1),
         },
+        "demand_clusters": clusters[:30],
+        "recommended_sites": clusters[:10],
         "area_gaps": area_rows[:30],
-        # hotspots 是小範圍格點，才是用來回答「到底哪裡需要補」的核心資料。
-        "hotspots": hotspot_rows[:50],
-        "precise_hotspots": hotspot_rows[:20],
+        "hotspots": hotspot_rows[:80],
+        "precise_hotspots": hotspot_rows[:30],
         "osm_summary": osm_summary,
         "interpretation": [
-            "行政區排名只能看大方向；真正要知道哪裡需要補資料，請看『精準缺口熱點』的格點中心與地圖連結。",
-            "查無結果高：可能代表該點附近公共廁所設施不足，或資料庫尚未收錄完整。",
-            "低覆蓋高：代表該點附近候選結果偏少，適合列為補資料或公共設施檢查區。",
-            "慢查詢高：可能代表資料不足導致外部查詢或 fallback 需求增加，也可能代表區域查詢較不穩定。",
-            "需求缺口分數不是直接等於必須新建廁所，而是用來優先找出值得人工檢查、補資料或提供公共單位參考的位置。"
+            "v2 先去除同一使用者、同一地點、短時間內的重複查詢，避免單人連續查詢把缺口分數灌高。",
+            "v2 會把附近約 500 公尺內的缺口點合併成需求群，產生建議中心點，比單一查詢點更適合用來討論補資料或新增設施。",
+            "建議設點不是直接代表一定要新建廁所，而是代表該區值得先做地圖/現地檢查：可能是資料漏收、室內場域資訊不足，或真的設施覆蓋不足。",
+            "若同一需求群有多名獨立使用者、跨多天查詢、查無/低覆蓋比例高，可信度會比單人單日查詢更高。",
+            "OSM fallback 或慢查詢高的區域，通常優先做本地資料補強，降低外部 API 延遲。"
         ]
     }
+
 
 @app.route("/dashboard/gap", methods=["GET"])
 def dashboard_gap_page():
     """公共設施需求缺口分析頁。"""
     return render_template("gap.html")
 
+
 @app.route("/api/gap-summary", methods=["GET"])
 def api_gap_summary():
-    """公共設施需求缺口分析 API。
-    目的：分析查無結果、低覆蓋、慢查詢與 OSM fallback 等訊號，找出值得補資料或公共設施檢查的區域與精準格點。
-    """
+    """公共設施需求缺口分析 API：去重、群聚、建議設點。"""
     try:
         range_key = (request.args.get("range") or "30d").strip()
         if range_key not in ("1h", "1d", "7d", "30d", "1y"):
@@ -6208,7 +6458,7 @@ def api_gap_summary():
         anchor_date = (request.args.get("anchor_date") or "").strip() or None
         force = (request.args.get("force") or "0").strip() == "1"
 
-        cache_key = f"{range_key}:{anchor_date or ''}"
+        cache_key = f"v165:{range_key}:{anchor_date or ''}"
         if not force:
             cached = _gap_cache_get(cache_key)
             if cached is not None:
@@ -6223,7 +6473,6 @@ def api_gap_summary():
     except Exception as e:
         logging.error(f"/api/gap-summary failed: {e}", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
-
 
 @app.route("/dashboard", methods=["GET"])
 def dashboard_page():

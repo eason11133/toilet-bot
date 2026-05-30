@@ -5,703 +5,143 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>公共設施需求缺口分析</title>
   <style>
-    :root {
-      --bg: #f5f7fb;
-      --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --line: #e5e7eb;
-      --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-      --radius: 18px;
-      --primary: #111827;
-      --primary-soft: #eef2ff;
-      --primary-text: #3730a3;
-      --warn-bg: #fff7ed;
-      --warn-text: #9a3412;
-      --danger-bg: #fef2f2;
-      --danger-text: #991b1b;
-      --ok-bg: #ecfdf5;
-      --ok-text: #047857;
-      --blue-bg: #eff6ff;
-      --blue-text: #1d4ed8;
-    }
-
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; }
-    body {
-      font-family: "Segoe UI", "Noto Sans TC", Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }
-
-    .container {
-      max-width: 1500px;
-      margin: 0 auto;
-      padding: 24px;
-    }
-
-    .topbar {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 16px;
-      margin-bottom: 18px;
-    }
-
-    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.2; }
-    .subtitle { margin: 0; color: var(--muted); line-height: 1.6; max-width: 980px; }
-
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-      justify-content: flex-end;
-    }
-
-    .btn, .nav-btn, .chip-btn {
-      border: none;
-      text-decoration: none;
-      background: var(--card);
-      border-radius: 999px;
-      padding: 10px 16px;
-      cursor: pointer;
-      box-shadow: 0 1px 4px rgba(0,0,0,.08);
-      font-size: 14px;
-      color: var(--text);
-      transition: transform .15s ease, background .15s ease, color .15s ease;
-      height: 40px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      white-space: nowrap;
-    }
-    .btn:hover, .nav-btn:hover, .chip-btn:hover { transform: translateY(-1px); background: #f8fafc; }
-    .btn.active, .chip-btn.active { background: var(--primary); color: #fff; }
-    .btn.primary { background: var(--primary); color: #fff; }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      height: 40px;
-      padding: 0 12px;
-      border-radius: 10px;
-      background: var(--primary-soft);
-      color: var(--primary-text);
-      font-size: 13px;
-      white-space: nowrap;
-    }
-
-    .panel, .card {
-      background: var(--card);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-    }
-    .panel { padding: 18px; margin-bottom: 20px; overflow: hidden; }
-    .panel h2 { margin: 0 0 8px; font-size: 20px; }
-    .panel-note { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
-
-    .grid-cards {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 16px;
-      margin-bottom: 20px;
-    }
-    .card {
-      padding: 18px;
-      min-height: 145px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-    .card h3 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
-    .big-number {
-      font-size: 32px;
-      font-weight: 750;
-      line-height: 1.15;
-      margin: 10px 0 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      font-variant-numeric: tabular-nums;
-    }
-    .subtext { font-size: 13px; color: var(--muted); line-height: 1.5; margin-top: 8px; }
-
-    .summary-box {
-      display: grid;
-      grid-template-columns: 1.2fr .8fr;
-      gap: 16px;
-      align-items: stretch;
-    }
-    .talk-card {
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-      border: 1px solid #eef2f7;
-      border-radius: 16px;
-      padding: 18px;
-    }
-    .talk-card h3 { margin: 0 0 10px; font-size: 18px; }
-    .talk-card p { margin: 0; color: var(--muted); line-height: 1.8; }
-    .talk-points { display: flex; flex-direction: column; gap: 10px; }
-    .point {
-      padding: 12px 14px;
-      background: #f8fafc;
-      border-radius: 14px;
-      line-height: 1.6;
-      font-size: 14px;
-    }
-    .point strong { color: var(--text); }
-
-    .hotspot-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-    }
-    .hotspot-card {
-      border: 1px solid #edf2f7;
-      border-radius: 16px;
-      padding: 16px;
-      background: #fff;
-      min-width: 0;
-    }
-    .hotspot-top {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 10px;
-    }
-    .hotspot-title { margin: 0; font-size: 17px; line-height: 1.35; }
-    .hotspot-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-    .hotspot-metrics {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin: 12px 0;
-    }
-    .metric-mini { background: #f8fafc; border-radius: 12px; padding: 10px; }
-    .metric-mini span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-    .metric-mini b { font-size: 18px; font-variant-numeric: tabular-nums; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-      table-layout: fixed;
-    }
-    th, td {
-      text-align: left;
-      padding: 12px;
-      border-bottom: 1px solid var(--line);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      vertical-align: middle;
-      height: 52px;
-    }
-    th { color: var(--muted); font-weight: 650; background: #fff; }
-    tbody tr:hover { background: #fafafa; }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: var(--ok-bg);
-      color: var(--ok-text);
-      font-size: 12px;
-      line-height: 1.4;
-      white-space: nowrap;
-    }
-    .pill.mid { background: var(--warn-bg); color: var(--warn-text); }
-    .pill.high { background: var(--danger-bg); color: var(--danger-text); }
-    .pill.blue { background: var(--blue-bg); color: var(--blue-text); }
-
-    .map-link { color: #2563eb; text-decoration: none; font-weight: 650; }
-    .map-link:hover { text-decoration: underline; }
-    .mono { font-variant-numeric: tabular-nums; }
-    .nowrap { white-space: nowrap; }
-
-    .action-text { white-space: normal; line-height: 1.6; }
-    .muted { color: var(--muted); }
-    .footer-note { color: var(--muted); font-size: 13px; line-height: 1.7; }
-
-    details.sample-detail {
-      white-space: normal;
-      min-width: 0;
-    }
-    details.sample-detail summary {
-      cursor: pointer;
-      color: #2563eb;
-      font-weight: 650;
-      list-style: none;
-    }
-    details.sample-detail summary::-webkit-details-marker { display: none; }
-    .sample-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow: auto; margin-top: 8px; }
-    .sample-item { font-size: 12px; color: var(--muted); line-height: 1.45; background: #f8fafc; border-radius: 8px; padding: 5px 7px; }
-
-    .table-tools {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin: 0 0 14px;
-    }
-    .input {
-      height: 40px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 0 14px;
-      font-size: 14px;
-      background: #fff;
-      min-width: 230px;
-    }
-    .hide { display: none !important; }
-    .table-scroll { overflow-x: auto; }
-
-    .focus-mode .not-showcase { display: none !important; }
-    .focus-mode .container { max-width: 1280px; }
-    .focus-mode .hotspot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-
-    @media (max-width: 1200px) {
-      .grid-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .summary-box { grid-template-columns: 1fr; }
-      .hotspot-grid { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 700px) {
-      .container { padding: 16px; }
-      h1 { font-size: 26px; }
-      .grid-cards { grid-template-columns: 1fr; }
-      .controls { justify-content: flex-start; }
-      th, td { padding: 10px; height: 48px; }
-      .input { width: 100%; min-width: 0; }
-    }
+    :root{--bg:#f5f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--shadow:0 4px 18px rgba(15,23,42,.07);--primary:#111827;--blue:#4f46e5;--soft:#eef2ff;--good:#047857;--warn:#b45309;--bad:#b91c1c;--radius:18px}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif}.wrap{max-width:1480px;margin:0 auto;padding:24px 18px 56px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.title h1{margin:0;font-size:30px;letter-spacing:.02em}.title p{margin:8px 0 0;color:var(--muted);line-height:1.6}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--line);background:#fff;border-radius:13px;padding:10px 14px;text-decoration:none;color:var(--text);font-weight:800;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.04)}.btn:hover{border-color:#c7d2fe;color:#3730a3}.btn.active,.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.status{border-radius:999px;background:var(--soft);color:#3730a3;padding:10px 12px;font-size:13px;font-weight:700;white-space:nowrap}.cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin:16px 0}.card,.panel{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow)}.card{padding:18px;min-height:132px}.card h3{margin:0 0 12px;color:#4b5563;font-size:14px}.big{font-size:34px;font-weight:900;letter-spacing:.04em}.sub{margin-top:8px;color:var(--muted);font-size:13px;line-height:1.55}.panel{padding:20px;margin:16px 0}.panel h2{font-size:22px;margin:0 0 8px}.note{color:var(--muted);line-height:1.65;margin:0 0 14px}.summary-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.talk{background:#f8fafc;border-radius:15px;padding:16px;border:1px solid #edf2f7}.talk h3{margin:0 0 10px}.talk p{margin:0;line-height:1.75}.clusters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.cluster-card{border:1px solid #edf2f7;background:#fff;border-radius:18px;padding:16px;box-shadow:0 2px 10px rgba(15,23,42,.04)}.cluster-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.cluster-title{font-size:18px;margin:0}.cluster-sub{font-size:13px;color:var(--muted);margin:6px 0 0}.mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}.mini{background:#f8fafc;border-radius:13px;padding:10px}.mini span{display:block;color:var(--muted);font-size:12px}.mini b{display:block;margin-top:4px;font-size:18px}.pill{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:900;background:#eef2ff;color:#3730a3;white-space:nowrap}.pill.high{background:#fef2f2;color:#b91c1c}.pill.mid{background:#fffbeb;color:#b45309}.pill.good{background:#ecfdf5;color:#047857}.toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.chip{border:0;border-radius:999px;background:#f3f4f6;color:#374151;padding:9px 13px;font-weight:800;cursor:pointer}.chip.active{background:#111827;color:#fff}.input{border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:260px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f9fafb;color:#4b5563}.table-scroll{overflow:auto}.mono{font-variant-numeric:tabular-nums}.map-link{font-weight:900;color:#4f46e5;text-decoration:none}.map-link:hover{text-decoration:underline}.nowrap{white-space:nowrap}.sample-detail summary{cursor:pointer;font-weight:800;color:#4f46e5}.sample-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:130px;overflow:auto}.sample-item{background:#f8fafc;border-radius:8px;padding:7px 8px;color:#4b5563;font-size:12px}.focus .not-focus{display:none}.focus .clusters{grid-template-columns:repeat(3,minmax(0,1fr))}.help-overlay{position:fixed;inset:0;background:rgba(15,23,42,.48);display:none;align-items:center;justify-content:center;padding:18px;z-index:9999}.help-overlay.show{display:flex}.help{background:#fff;border-radius:22px;width:min(920px,100%);max-height:86vh;overflow:auto;box-shadow:0 24px 70px rgba(15,23,42,.28)}.help-head{display:flex;justify-content:space-between;gap:12px;padding:20px;border-bottom:1px solid var(--line)}.help-head h2{margin:0}.help-body{padding:20px}.help-section{margin:0 0 18px}.help-section h3{margin:0 0 8px}.help-section p,.help-section li{line-height:1.75;color:#374151}.formula{background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.7}.close{border:0;background:#f3f4f6;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.clusters{grid-template-columns:1fr}.summary-grid{grid-template-columns:1fr}}@media(max-width:700px){.top{display:block}.controls{margin-top:12px}.cards{grid-template-columns:1fr}.big{font-size:30px}.input{min-width:100%}th,td{padding:10px}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="topbar">
-      <div>
-        <h1>公共設施需求缺口分析</h1>
-        <p class="subtitle">
-          從使用者查詢紀錄反向找出「哪裡查不到、候選太少、查詢太慢」，協助判斷哪些點位值得優先補資料、現地確認，或提供給公共單位作為設施改善參考。
-        </p>
-      </div>
-      <div class="controls">
-        <a class="nav-btn" href="/dashboard">主儀表板 →</a>
-        <a class="nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
-        <a class="nav-btn" href="/dashboard/maintenance">資料維護 →</a>
-      </div>
+<div class="wrap" id="pageWrap">
+  <div class="top">
+    <div class="title">
+      <h1>公共設施需求缺口分析</h1>
+      <p>Demand Gap v2：先去除同人同地短時間重複查詢，再把附近缺口點合併成「需求群」，產生更適合展示與現地檢查的建議中心點。</p>
     </div>
-
-    <div class="panel">
-      <div class="controls" style="justify-content:space-between">
-        <div class="controls">
-          <button class="btn" data-range="1h">1小時</button>
-          <button class="btn" data-range="1d">1日</button>
-          <button class="btn" data-range="7d">7日</button>
-          <button class="btn active" data-range="30d">30日</button>
-          <button class="btn" data-range="1y">1年</button>
-          <button class="btn" id="refreshBtn">重新載入</button>
-        </div>
-        <div class="controls">
-          <button class="btn" id="showcaseBtn">展示模式</button>
-          <button class="btn" id="copyBtn">複製重點</button>
-          <div class="status" id="dataStatus">尚未載入</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid-cards">
-      <div class="card">
-        <h3>總定位查詢</h3>
-        <div class="big-number" id="totalQueries">0</div>
-        <div class="subtext">所選期間內有效定位查詢次數</div>
-      </div>
-      <div class="card">
-        <h3>查無結果</h3>
-        <div class="big-number" id="noResultCount">0</div>
-        <div class="subtext" id="noResultRate">0%</div>
-      </div>
-      <div class="card">
-        <h3>低覆蓋查詢</h3>
-        <div class="big-number" id="lowResultCount">0</div>
-        <div class="subtext" id="lowResultRate">候選數 ≤ 2</div>
-      </div>
-      <div class="card">
-        <h3>慢查詢</h3>
-        <div class="big-number" id="slowQueryCount">0</div>
-        <div class="subtext" id="slowQueryRate">回應 ≥ 5000ms</div>
-      </div>
-      <div class="card">
-        <h3>最高缺口區域</h3>
-        <div class="big-number" id="topGapArea">-</div>
-        <div class="subtext">依 Demand Gap Score 排名</div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>展示摘要</h2>
-      <div class="summary-box">
-        <div class="talk-card">
-          <h3>一句話結論</h3>
-          <p id="oneLineSummary">載入資料後會自動產生摘要。</p>
-        </div>
-        <div class="talk-card">
-          <h3>怎麼判讀？</h3>
-          <div class="talk-points">
-            <div class="point"><strong>查無結果</strong>附近沒有回傳結果，優先懷疑資料缺漏或設施不足。</div>
-            <div class="point"><strong>低覆蓋</strong>候選數 ≤ 2，代表附近可推薦設施選擇太少。</div>
-            <div class="point"><strong>慢查詢</strong>回應 ≥ 5 秒，代表資料查詢不穩或可能依賴外部資料。</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>優先處理 Top 3 點位</h2>
-      <p class="panel-note">這三張卡最適合拿來展示。每張卡都可以直接開 Google Maps，判斷附近是資料漏收、設施不足，還是室內場域資訊不完整。</p>
-      <div class="hotspot-grid" id="topCards">
-        <div class="footer-note">載入中...</div>
-      </div>
-    </div>
-
-    <div class="panel not-showcase">
-      <h2>精準缺口熱點清單</h2>
-      <p class="panel-note">真正要補資料時看這裡。預設只顯示高優先點位；需要完整資料再切換篩選。</p>
-      <div class="table-tools">
-        <div class="controls">
-          <button class="chip-btn active" data-filter="priority">只看優先</button>
-          <button class="chip-btn" data-filter="no_result">查無為主</button>
-          <button class="chip-btn" data-filter="low_cover">低覆蓋為主</button>
-          <button class="chip-btn" data-filter="slow">慢查詢為主</button>
-          <button class="chip-btn" data-filter="all">全部</button>
-        </div>
-        <input class="input" id="searchInput" placeholder="搜尋區域或座標，例如 信義、25.038" />
-      </div>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:10%">優先</th>
-              <th style="width:12%">點位</th>
-              <th style="width:8%">地圖</th>
-              <th style="width:12%">區域</th>
-              <th>查詢</th>
-              <th>查無</th>
-              <th>低覆蓋</th>
-              <th>慢查詢</th>
-              <th>缺口分數</th>
-              <th style="width:24%">處理建議</th>
-              <th style="width:12%">樣本</th>
-            </tr>
-          </thead>
-          <tbody id="preciseRows">
-            <tr><td colspan="11" class="footer-note">載入中...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="panel not-showcase">
-      <h2>行政區 / 區域需求缺口排名</h2>
-      <p class="panel-note">這裡只適合看大方向；實際補資料請看上方精準點位。</p>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:18%">區域</th>
-              <th>查詢</th>
-              <th>查無</th>
-              <th>低覆蓋</th>
-              <th>慢查詢</th>
-              <th>平均回應</th>
-              <th>缺口分數</th>
-              <th>等級</th>
-              <th style="width:24%">建議判讀</th>
-            </tr>
-          </thead>
-          <tbody id="areaRows">
-            <tr><td colspan="9" class="footer-note">載入中...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="panel not-showcase">
-      <h2>OSM fallback 效率與依賴概況</h2>
-      <p class="panel-note">若 OSM 平均耗時明顯高於本地資料，代表 OSM 適合作為補強來源，不適合每次都即時查。</p>
-      <div class="grid-cards" style="grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0;">
-        <div class="card">
-          <h3>資料來源查詢紀錄</h3>
-          <div class="big-number" id="sourceCalls">0</div>
-          <div class="subtext">source_query_logs</div>
-        </div>
-        <div class="card">
-          <h3>OSM 呼叫次數</h3>
-          <div class="big-number" id="osmCalls">0</div>
-          <div class="subtext">fallback / osm source</div>
-        </div>
-        <div class="card">
-          <h3>OSM 平均耗時</h3>
-          <div class="big-number" id="osmAvg">0ms</div>
-          <div class="subtext">外部資料補強成本</div>
-        </div>
-        <div class="card">
-          <h3>非 OSM 平均耗時</h3>
-          <div class="big-number" id="nonOsmAvg">0ms</div>
-          <div class="subtext">本地 / Neon / CSV 查詢</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>研究判讀</h2>
-      <div id="interpretation" class="footer-note"></div>
+    <div class="controls">
+      <a class="btn" href="/dashboard">← 回總覽儀表板</a>
+      <button class="btn" id="helpBtn">版本 / 操作說明</button>
+      <button class="btn" id="focusBtn">展示模式</button>
+      <button class="btn" id="copyBtn">複製重點</button>
+      <span class="status" id="dataStatus">尚未載入</span>
     </div>
   </div>
 
-<script>
-  let currentRange = '30d';
-  let currentFilter = 'priority';
-  let latestData = null;
-  let showcaseMode = false;
+  <div class="controls" style="margin-bottom:12px">
+    <button class="btn" data-range="1d">1日</button>
+    <button class="btn" data-range="7d">7日</button>
+    <button class="btn active" data-range="30d">30日</button>
+    <button class="btn" data-range="1y">1年</button>
+    <button class="btn primary" id="refreshBtn">重新載入</button>
+  </div>
 
-  const fmt = (n) => Number(n || 0).toLocaleString();
-  const ms = (n) => `${fmt(Math.round(Number(n || 0)))}ms`;
+  <div class="cards">
+    <div class="card"><h3>有效需求查詢</h3><div class="big" id="effectiveQueries">0</div><div class="sub" id="dedupeInfo">已去除短時間重複查詢</div></div>
+    <div class="card"><h3>獨立使用者</h3><div class="big" id="uniqueUsers">0</div><div class="sub">比查詢次數更能代表真實需求</div></div>
+    <div class="card"><h3>查無結果</h3><div class="big" id="noResultCount">0</div><div class="sub" id="noResultRate">0%</div></div>
+    <div class="card"><h3>低覆蓋查詢</h3><div class="big" id="lowResultCount">0</div><div class="sub" id="lowResultRate">候選數 ≤ 2</div></div>
+    <div class="card"><h3>需求群數</h3><div class="big" id="clusterCount">0</div><div class="sub">附近缺口點合併後的建議檢查區</div></div>
+  </div>
 
-  function setStatus(text) {
-    document.getElementById('dataStatus').textContent = text;
-  }
+  <div class="panel">
+    <h2>展示摘要</h2>
+    <p class="note">展示時先講這一區：這頁不是判定「一定要蓋廁所」，而是找出值得優先人工檢查、補資料或提供公部門參考的需求群。</p>
+    <div class="summary-grid">
+      <div class="talk"><h3>一句話結論</h3><p id="oneLineSummary">載入資料後會自動產生摘要。</p></div>
+      <div class="talk"><h3>v2 比上一版準在哪？</h3><p>同一個人、同一地點、短時間內重複查詢只算一次；附近多個缺口點會合併成一個需求群，並給出建議中心點，較接近「這附近如果要補資料或評估新增設施，應該先看哪裡」。</p></div>
+    </div>
+  </div>
 
-  function levelClass(level) {
-    if (level === '高缺口') return 'pill high';
-    if (level === '中缺口') return 'pill mid';
-    return 'pill';
-  }
+  <div class="panel">
+    <h2>建議優先檢查 Top 3 需求群</h2>
+    <p class="note">這三張卡最適合展示。每張卡都是把附近查詢點合併後的中心點，按「開地圖檢查」確認附近是否有漏收廁所、商場、車站、公園或學校設施。</p>
+    <div class="clusters" id="topClusters"><div class="note">載入中...</div></div>
+  </div>
 
-  function priorityLabel(r, idx) {
-    if (Number(r.no_result_count || 0) >= 3) return 'P1 查無';
-    if (Number(r.low_result_count || 0) >= 5) return 'P1 低覆蓋';
-    if (Number(r.slow_query_count || 0) >= 5) return 'P2 慢查詢';
-    if (idx < 5) return 'P2 觀察';
-    return 'P3';
-  }
-
-  function priorityPill(r, idx) {
-    const label = priorityLabel(r, idx);
-    const cls = label.startsWith('P1') ? 'pill high' : (label.startsWith('P2') ? 'pill mid' : 'pill');
-    return `<span class="${cls}">${label}</span>`;
-  }
-
-  function pointReason(r) {
-    const parts = [];
-    if (Number(r.no_result_count || 0) > 0) parts.push(`查無 ${fmt(r.no_result_count)} 次`);
-    if (Number(r.low_result_count || 0) > 0) parts.push(`低覆蓋 ${fmt(r.low_result_count)} 次`);
-    if (Number(r.slow_query_count || 0) > 0) parts.push(`慢查詢 ${fmt(r.slow_query_count)} 次`);
-    return parts.join('、') || '需求量可觀，建議觀察';
-  }
-
-  function renderSampleDetails(samples) {
-    if (!samples || !samples.length) return '<span class="footer-note">無</span>';
-    return `<details class="sample-detail"><summary>看樣本</summary><div class="sample-list">${samples.slice(0, 5).map(x => {
-      const rc = Number(x.result_count || 0);
-      const rt = Number(x.response_time_ms || 0);
-      const shortTime = String(x.created_at || '').replace('T', ' ').slice(0, 16);
-      return `<div class="sample-item">
-        ${shortTime || '-'}｜結果 ${rc}｜${ms(rt)}｜
-        <a class="map-link" href="${x.map_url || '#'}" target="_blank" rel="noopener">點位</a>
-      </div>`;
-    }).join('')}</div></details>`;
-  }
-
-  function filteredHotspots() {
-    const rows = (latestData && (latestData.precise_hotspots || latestData.hotspots)) || [];
-    const q = (document.getElementById('searchInput')?.value || '').trim().toLowerCase();
-    return rows.filter((r, idx) => {
-      const hay = `${r.grid || ''} ${r.area_name || ''} ${r.action_label || ''} ${r.suggestion || ''}`.toLowerCase();
-      if (q && !hay.includes(q)) return false;
-      if (currentFilter === 'all') return true;
-      if (currentFilter === 'priority') return idx < 20 || Number(r.no_result_count || 0) > 0 || Number(r.low_result_count || 0) >= 5;
-      if (currentFilter === 'no_result') return Number(r.no_result_count || 0) > 0;
-      if (currentFilter === 'low_cover') return Number(r.low_result_count || 0) > 0;
-      if (currentFilter === 'slow') return Number(r.slow_query_count || 0) > 0;
-      return true;
-    });
-  }
-
-  function renderTopCards(rows) {
-    const el = document.getElementById('topCards');
-    const top = (rows || []).slice(0, 3);
-    if (!top.length) {
-      el.innerHTML = '<div class="footer-note">目前沒有足夠資料</div>';
-      return;
-    }
-    el.innerHTML = top.map((r, idx) => `
-      <div class="hotspot-card">
-        <div class="hotspot-top">
-          <div>
-            <h3 class="hotspot-title">#${idx + 1} ${r.area_name || '未分類區域'}</h3>
-            <p class="hotspot-sub mono">${r.grid || '-'}</p>
-          </div>
-          ${priorityPill(r, idx)}
-        </div>
-        <div class="hotspot-metrics">
-          <div class="metric-mini"><span>查詢</span><b>${fmt(r.total_queries)}</b></div>
-          <div class="metric-mini"><span>查無</span><b>${fmt(r.no_result_count)}</b></div>
-          <div class="metric-mini"><span>低覆蓋</span><b>${fmt(r.low_result_count)}</b></div>
-          <div class="metric-mini"><span>缺口分數</span><b>${r.gap_score || 0}</b></div>
-        </div>
-        <p class="footer-note" style="min-height:44px">${r.action_label || r.suggestion || '建議人工檢查此格點附近資料。'}</p>
-        <div class="controls" style="justify-content:flex-start; margin-top:12px">
-          <a class="btn primary" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖檢查</a>
-          <button class="btn" onclick="copyPoint('${String(r.grid || '').replace(/'/g, '')}', '${String(r.area_name || '').replace(/'/g, '')}', '${String(pointReason(r)).replace(/'/g, '')}')">複製點位</button>
-        </div>
+  <div class="panel not-focus">
+    <h2>需求群完整清單</h2>
+    <p class="note">真正要整理給政府或人工補資料時看這裡。優先看高可信與中可信需求群。</p>
+    <div class="toolbar">
+      <div class="controls">
+        <button class="chip active" data-filter="priority">優先</button>
+        <button class="chip" data-filter="high">高可信</button>
+        <button class="chip" data-filter="no_result">查無為主</button>
+        <button class="chip" data-filter="low_cover">低覆蓋為主</button>
+        <button class="chip" data-filter="all">全部</button>
       </div>
-    `).join('');
-  }
+      <input class="input" id="searchInput" placeholder="搜尋區域或座標，例如 信義、25.038" />
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th>優先</th><th>建議中心</th><th>地圖</th><th>區域</th><th>半徑</th><th>有效需求</th><th>獨立使用者</th><th>跨日期</th><th>查無</th><th>低覆蓋</th><th>缺口分數</th><th style="min-width:260px">建議</th><th>樣本</th></tr></thead>
+      <tbody id="clusterRows"><tr><td colspan="13" class="note">載入中...</td></tr></tbody>
+    </table></div>
+  </div>
 
-  function renderPreciseTable() {
-    const el = document.getElementById('preciseRows');
-    const rows = filteredHotspots();
-    if (!rows.length) {
-      el.innerHTML = '<tr><td colspan="11" class="footer-note">目前沒有符合篩選的資料</td></tr>';
-      return;
-    }
-    el.innerHTML = rows.slice(0, 80).map((r, idx) => `
-      <tr>
-        <td>${priorityPill(r, idx)}</td>
-        <td class="mono" title="${r.grid || '-'}">${r.grid || '-'}</td>
-        <td><a class="map-link nowrap" href="${r.map_url || '#'}" target="_blank" rel="noopener">開地圖</a></td>
-        <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
-        <td class="mono">${fmt(r.total_queries)}</td>
-        <td class="mono">${fmt(r.no_result_count)}</td>
-        <td class="mono">${fmt(r.low_result_count)}</td>
-        <td class="mono">${fmt(r.slow_query_count)}</td>
-        <td class="mono">${r.gap_score || 0}</td>
-        <td class="action-text" title="${r.action_label || r.suggestion || ''}">${r.action_label || r.suggestion || '-'}</td>
-        <td>${renderSampleDetails(r.sample_queries || [])}</td>
-      </tr>
-    `).join('');
-  }
+  <div class="panel not-focus">
+    <h2>精準格點清單</h2>
+    <p class="note">這是需求群的來源資料，適合除錯或人工細查；展示時通常不用看。</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>格點</th><th>地圖</th><th>區域</th><th>有效需求</th><th>獨立使用者</th><th>查無</th><th>低覆蓋</th><th>慢查詢</th><th>分數</th><th style="min-width:260px">建議</th></tr></thead>
+      <tbody id="pointRows"><tr><td colspan="10" class="note">載入中...</td></tr></tbody>
+    </table></div>
+  </div>
 
-  function renderAreaRows(rows) {
-    const el = document.getElementById('areaRows');
-    if (!rows || !rows.length) {
-      el.innerHTML = '<tr><td colspan="9" class="footer-note">目前沒有足夠資料</td></tr>';
-      return;
-    }
-    el.innerHTML = rows.map(r => `
-      <tr>
-        <td title="${r.area_name || '-'}">${r.area_name || '-'}</td>
-        <td class="mono">${fmt(r.total_queries)}</td>
-        <td class="mono">${fmt(r.no_result_count)} <span class="footer-note">(${r.no_result_rate || 0}%)</span></td>
-        <td class="mono">${fmt(r.low_result_count)} <span class="footer-note">(${r.low_result_rate || 0}%)</span></td>
-        <td class="mono">${fmt(r.slow_query_count)} <span class="footer-note">(${r.slow_query_rate || 0}%)</span></td>
-        <td class="mono">${ms(r.avg_response_ms)}</td>
-        <td class="mono">${r.gap_score || 0}</td>
-        <td><span class="${levelClass(r.gap_level)}">${r.gap_level || '觀察中'}</span></td>
-        <td title="${r.suggestion || ''}">${r.suggestion || '-'}</td>
-      </tr>
-    `).join('');
-  }
+  <div class="panel not-focus">
+    <h2>行政區 / 區域排名</h2>
+    <p class="note">這裡只看大方向；真要知道哪裡補資料，請看上方需求群。</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>區域</th><th>有效需求</th><th>獨立使用者</th><th>查無</th><th>低覆蓋</th><th>慢查詢</th><th>平均回應</th><th>分數</th><th>等級</th><th style="min-width:240px">建議</th></tr></thead>
+      <tbody id="areaRows"><tr><td colspan="10" class="note">載入中...</td></tr></tbody>
+    </table></div>
+  </div>
 
-  function makeOneLineSummary(data) {
-    const s = data.summary || {};
-    const top = ((data.precise_hotspots || data.hotspots || [])[0]) || {};
-    const topText = top.grid ? `目前最高優先點位約在 ${top.grid}，主要訊號為 ${pointReason(top)}。` : '目前尚無明確最高優先點位。';
-    return `所選期間共有 ${fmt(s.total_queries)} 次定位查詢，其中 ${fmt(s.no_result_count)} 次查無結果、${fmt(s.low_result_count)} 次低覆蓋、${fmt(s.slow_query_count)} 次慢查詢。${topText}`;
-  }
+  <div class="panel not-focus">
+    <h2>OSM fallback 效率與依賴</h2>
+    <div class="cards" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0">
+      <div class="card"><h3>資料來源查詢紀錄</h3><div class="big" id="sourceCalls">0</div><div class="sub">source_query_logs</div></div>
+      <div class="card"><h3>OSM 呼叫次數</h3><div class="big" id="osmCalls">0</div><div class="sub">fallback / osm source</div></div>
+      <div class="card"><h3>OSM 平均耗時</h3><div class="big" id="osmAvg">0ms</div><div class="sub">外部資料補強成本</div></div>
+      <div class="card"><h3>非 OSM 平均耗時</h3><div class="big" id="nonOsmAvg">0ms</div><div class="sub">本地 / Neon / CSV 查詢</div></div>
+    </div>
+  </div>
 
-  function renderAll(data) {
-    latestData = data;
-    const s = data.summary || {};
-    const t = data.thresholds || {};
-    document.getElementById('totalQueries').textContent = fmt(s.total_queries);
-    document.getElementById('noResultCount').textContent = fmt(s.no_result_count);
-    document.getElementById('noResultRate').textContent = `${s.no_result_rate || 0}% 查無結果`;
-    document.getElementById('lowResultCount').textContent = fmt(s.low_result_count);
-    document.getElementById('lowResultRate').textContent = `候選數 ≤ ${t.low_result_threshold ?? 2}，${s.low_result_rate || 0}%`;
-    document.getElementById('slowQueryCount').textContent = fmt(s.slow_query_count);
-    document.getElementById('slowQueryRate').textContent = `回應 ≥ ${fmt(t.slow_query_ms || 5000)}ms，${s.slow_query_rate || 0}%`;
-    document.getElementById('topGapArea').textContent = s.top_gap_area || '-';
+  <div class="panel"><h2>研究判讀</h2><div id="interpretation" class="note"></div></div>
+</div>
 
-    const precise = data.precise_hotspots || data.hotspots || [];
-    renderTopCards(precise);
-    renderPreciseTable();
-    renderAreaRows(data.area_gaps || []);
+<div class="help-overlay" id="helpOverlay">
+  <div class="help">
+    <div class="help-head"><div><h2>Demand Gap v2 說明</h2><p class="note" style="margin:6px 0 0">去重、需求群聚、建議中心點。</p></div><button class="close" id="helpClose">×</button></div>
+    <div class="help-body">
+      <div class="help-section"><h3>一、這頁在解決什麼？</h3><p>上一版會被同一個人同一分鐘連續查詢影響，分數可能被灌高。v2 先去除同人同地短時間重複查詢，再把附近缺口點合併成需求群，讓結果更接近「哪一小區域值得補資料或評估新增設施」。</p></div>
+      <div class="help-section"><h3>二、去重規則</h3><p>同一 user、同一約 100 公尺格點、10 分鐘內重複查詢只算 1 次有效需求。若沒有 user_id，則用較短時間窗避免誤合併不同人。</p></div>
+      <div class="help-section"><h3>三、需求群是什麼？</h3><p>系統會把約 500 公尺內的缺口格點合併，計算一個建議中心點。這比單一查詢點更適合拿來討論「這附近要不要補資料或新增公共設施」。</p></div>
+      <div class="help-section"><h3>四、分數怎麼算？</h3><div class="formula">Demand Gap Score v2 =<br>查無結果 × 5<br>+ 低覆蓋 × 2<br>+ 慢查詢 × 1<br>+ 有效需求 × 1<br>+ 獨立使用者 × 3<br>+ 跨日期天數 × 2</div><p>若幾乎只有單一使用者或單日訊號，分數會降權，避免誤判。</p></div>
+      <div class="help-section"><h3>五、展示時怎麼講？</h3><ol><li>先開展示模式。</li><li>講「有效需求」與「去重後資料」。</li><li>展示 Top 3 需求群，點開地圖檢查。</li><li>強調：這不是直接判定要蓋廁所，而是提供人工檢查與公部門參考的優先清單。</li></ol></div>
+    </div>
+  </div>
+</div>
 
-    const osm = data.osm_summary || {};
-    document.getElementById('sourceCalls').textContent = fmt(osm.total_source_calls);
-    document.getElementById('osmCalls').textContent = fmt(osm.osm_calls);
-    document.getElementById('osmAvg').textContent = ms(osm.avg_osm_elapsed_ms);
-    document.getElementById('nonOsmAvg').textContent = ms(osm.avg_non_osm_elapsed_ms);
-
-    document.getElementById('oneLineSummary').textContent = makeOneLineSummary(data);
-    const interpretation = data.interpretation || [];
-    document.getElementById('interpretation').innerHTML = interpretation.map(x => `• ${x}`).join('<br>');
-  }
-
-  async function loadData(force = false) {
-    try {
-      setStatus('載入中...');
-      const res = await fetch(`/api/gap-summary?range=${encodeURIComponent(currentRange)}${force ? '&force=1' : ''}`);
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || '載入失敗');
-      renderAll(data);
-      setStatus(data.cached ? '已載入（快取）' : '已載入最新資料');
-    } catch (err) {
-      console.error(err);
-      setStatus(`載入失敗：${err.message || err}`);
-    }
-  }
-
-  function copyPoint(grid, area, reason) {
-    const text = `需求缺口點位：${grid}\n區域：${area || '未分類'}\n原因：${reason}\n建議：開地圖檢查附近是否有漏收廁所、商場、車站、公園或學校設施。`;
-    navigator.clipboard?.writeText(text);
-    setStatus('已複製點位摘要');
-  }
-
-  function copySummary() {
-    if (!latestData) return;
-    const precise = latestData.precise_hotspots || latestData.hotspots || [];
-    const top = precise.slice(0, 3).map((r, i) => `${i + 1}. ${r.grid || '-'}（${r.area_name || '未分類'}）：${pointReason(r)}，缺口分數 ${r.gap_score || 0}`).join('\n');
-    const text = `${makeOneLineSummary(latestData)}\n\n優先檢查點位：\n${top}\n\n判讀：這些點位不代表一定要新建廁所，而是值得優先人工檢查、補資料，或提供公共單位參考。`;
-    navigator.clipboard?.writeText(text);
-    setStatus('已複製展示重點');
-  }
-
-  document.querySelectorAll('.btn[data-range]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.btn[data-range]').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentRange = btn.dataset.range;
-      loadData(false);
-    });
-  });
-
-  document.querySelectorAll('.chip-btn[data-filter]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.chip-btn[data-filter]').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentFilter = btn.dataset.filter;
-      renderPreciseTable();
-    });
-  });
-
-  document.getElementById('searchInput').addEventListener('input', renderPreciseTable);
-  document.getElementById('refreshBtn').addEventListener('click', () => loadData(true));
-  document.getElementById('copyBtn').addEventListener('click', copySummary);
-  document.getElementById('showcaseBtn').addEventListener('click', () => {
-    showcaseMode = !showcaseMode;
-    document.body.classList.toggle('focus-mode', showcaseMode);
-    document.getElementById('showcaseBtn').classList.toggle('active', showcaseMode);
-    document.getElementById('showcaseBtn').textContent = showcaseMode ? '完整模式' : '展示模式';
-  });
-
-  loadData(false);
+<script>
+let currentRange='30d', currentFilter='priority', latestData=null, focusMode=false;
+const fmt=n=>Number(n||0).toLocaleString(); const ms=n=>`${fmt(Math.round(Number(n||0)))}ms`;
+function setStatus(t){document.getElementById('dataStatus').textContent=t}
+function levelClass(level){ if(String(level).includes('高')) return 'pill high'; if(String(level).includes('中')) return 'pill mid'; if(String(level).includes('低')) return 'pill good'; return 'pill'; }
+function priorityPill(r,idx){ const lv=r.gap_level||''; if(lv.includes('高')) return `<span class="pill high">P1 高可信</span>`; if(lv.includes('中')) return `<span class="pill mid">P2 中可信</span>`; if(idx<3) return `<span class="pill mid">P2 展示</span>`; return `<span class="pill">P3 觀察</span>`; }
+function reason(r){const p=[]; if(Number(r.no_result_count)>0)p.push(`查無 ${fmt(r.no_result_count)} 次`); if(Number(r.low_result_count)>0)p.push(`低覆蓋 ${fmt(r.low_result_count)} 次`); if(Number(r.slow_query_count)>0)p.push(`慢查詢 ${fmt(r.slow_query_count)} 次`); return p.join('、')||'需求量可觀';}
+function sampleDetails(samples){ if(!samples||!samples.length)return '<span class="note">無</span>'; return `<details class="sample-detail"><summary>看樣本</summary><div class="sample-list">${samples.slice(0,6).map(x=>{const t=String(x.created_at||'').replace('T',' ').slice(0,16);return `<div class="sample-item">${t||'-'}｜結果 ${Number(x.result_count||0)}｜${ms(x.response_time_ms)}｜<a class="map-link" href="${x.map_url||'#'}" target="_blank">點位</a></div>`}).join('')}</div></details>`}
+function clusters(){return (latestData&&latestData.demand_clusters)||[]}
+function filteredClusters(){const q=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();return clusters().filter((r,idx)=>{const hay=`${r.center||''} ${r.area_name||''} ${r.action_label||''} ${r.suggestion||''}`.toLowerCase(); if(q&&!hay.includes(q))return false; if(currentFilter==='all')return true; if(currentFilter==='priority')return idx<15||String(r.gap_level||'').includes('高')||String(r.gap_level||'').includes('中'); if(currentFilter==='high')return String(r.gap_level||'').includes('高'); if(currentFilter==='no_result')return Number(r.no_result_count||0)>0; if(currentFilter==='low_cover')return Number(r.low_result_count||0)>0; return true})}
+function renderTopClusters(rows){const el=document.getElementById('topClusters'); const top=(rows||[]).slice(0,3); if(!top.length){el.innerHTML='<div class="note">目前沒有足夠資料</div>';return} el.innerHTML=top.map((r,idx)=>`<div class="cluster-card"><div class="cluster-top"><div><h3 class="cluster-title">#${idx+1} ${r.area_name||'未分類區域'}</h3><p class="cluster-sub mono">建議中心：${r.center||'-'}｜半徑約 ${fmt(r.radius_m)}m</p></div>${priorityPill(r,idx)}</div><div class="mini-grid"><div class="mini"><span>有效需求</span><b>${fmt(r.effective_queries)}</b></div><div class="mini"><span>獨立使用者</span><b>${fmt(r.unique_users)}</b></div><div class="mini"><span>涵蓋格點</span><b>${fmt(r.point_count)}</b></div><div class="mini"><span>查無</span><b>${fmt(r.no_result_count)}</b></div><div class="mini"><span>低覆蓋</span><b>${fmt(r.low_result_count)}</b></div><div class="mini"><span>缺口分數</span><b>${r.gap_score||0}</b></div></div><p class="note" style="min-height:52px"><b>${r.confidence_note||''}</b><br>${r.action_label||r.suggestion||'建議人工檢查此需求群附近資料。'}</p><div class="controls"><a class="btn primary" href="${r.map_url||'#'}" target="_blank">開地圖檢查</a><button class="btn" onclick="copyPoint('${String(r.center||'').replace(/'/g,'')}','${String(r.area_name||'').replace(/'/g,'')}','${String(reason(r)).replace(/'/g,'')}')">複製點位</button></div></div>`).join('')}
+function renderClusterTable(){const el=document.getElementById('clusterRows'); const rows=filteredClusters(); if(!rows.length){el.innerHTML='<tr><td colspan="13" class="note">沒有符合篩選的需求群</td></tr>';return} el.innerHTML=rows.slice(0,80).map((r,idx)=>`<tr><td>${priorityPill(r,idx)}</td><td class="mono">${r.center||'-'}</td><td><a class="map-link nowrap" href="${r.map_url||'#'}" target="_blank">開地圖</a></td><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.radius_m)}m</td><td class="mono">${fmt(r.effective_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.active_days)}</td><td class="mono">${fmt(r.no_result_count)}</td><td class="mono">${fmt(r.low_result_count)}</td><td class="mono">${r.gap_score||0}</td><td title="${r.action_label||''}">${r.action_label||r.suggestion||'-'}<div class="sub">${r.confidence_note||''}</div></td><td>${sampleDetails(r.sample_queries||[])}</td></tr>`).join('')}
+function renderPointRows(rows){const el=document.getElementById('pointRows'); if(!rows||!rows.length){el.innerHTML='<tr><td colspan="10" class="note">沒有資料</td></tr>';return} el.innerHTML=rows.slice(0,80).map(r=>`<tr><td class="mono">${r.grid||'-'}</td><td><a class="map-link" href="${r.map_url||'#'}" target="_blank">開地圖</a></td><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.effective_queries||r.total_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.no_result_count)}</td><td class="mono">${fmt(r.low_result_count)}</td><td class="mono">${fmt(r.slow_query_count)}</td><td class="mono">${r.gap_score||0}</td><td>${r.action_label||r.suggestion||'-'}</td></tr>`).join('')}
+function renderAreaRows(rows){const el=document.getElementById('areaRows'); if(!rows||!rows.length){el.innerHTML='<tr><td colspan="10" class="note">沒有資料</td></tr>';return} el.innerHTML=rows.map(r=>`<tr><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.effective_queries||r.total_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.no_result_count)} <span class="sub">(${r.no_result_rate||0}%)</span></td><td class="mono">${fmt(r.low_result_count)} <span class="sub">(${r.low_result_rate||0}%)</span></td><td class="mono">${fmt(r.slow_query_count)} <span class="sub">(${r.slow_query_rate||0}%)</span></td><td class="mono">${ms(r.avg_response_ms)}</td><td class="mono">${r.gap_score||0}</td><td><span class="${levelClass(r.gap_level)}">${r.gap_level||'觀察中'}</span></td><td>${r.suggestion||'-'}</td></tr>`).join('')}
+function oneLine(data){const s=data.summary||{}; const top=(data.demand_clusters||[])[0]||{}; const topText=top.center?`目前最高優先需求群中心約在 ${top.center}，半徑約 ${fmt(top.radius_m)}m，主要訊號為 ${reason(top)}。`:'目前尚無明確需求群。'; return `所選期間原始查詢 ${fmt(s.raw_total_queries)} 次，去重後有效需求 ${fmt(s.effective_queries||s.total_queries)} 次，獨立使用者 ${fmt(s.unique_users)} 人；其中查無 ${fmt(s.no_result_count)} 次、低覆蓋 ${fmt(s.low_result_count)} 次。${topText}`}
+function renderAll(data){latestData=data; const s=data.summary||{}, t=data.thresholds||{}; document.getElementById('effectiveQueries').textContent=fmt(s.effective_queries||s.total_queries); document.getElementById('dedupeInfo').textContent=`原始 ${fmt(s.raw_total_queries)}，去重 ${fmt(s.duplicate_skipped)}，時間窗 ${t.dedupe_minutes||10} 分鐘`; document.getElementById('uniqueUsers').textContent=fmt(s.unique_users); document.getElementById('noResultCount').textContent=fmt(s.no_result_count); document.getElementById('noResultRate').textContent=`${s.no_result_rate||0}% 查無結果`; document.getElementById('lowResultCount').textContent=fmt(s.low_result_count); document.getElementById('lowResultRate').textContent=`候選數 ≤ ${t.low_result_threshold??2}，${s.low_result_rate||0}%`; document.getElementById('clusterCount').textContent=fmt(s.cluster_count); document.getElementById('oneLineSummary').textContent=oneLine(data); renderTopClusters(data.demand_clusters||[]); renderClusterTable(); renderPointRows(data.precise_hotspots||data.hotspots||[]); renderAreaRows(data.area_gaps||[]); const osm=data.osm_summary||{}; document.getElementById('sourceCalls').textContent=fmt(osm.total_source_calls); document.getElementById('osmCalls').textContent=fmt(osm.osm_calls); document.getElementById('osmAvg').textContent=ms(osm.avg_osm_elapsed_ms); document.getElementById('nonOsmAvg').textContent=ms(osm.avg_non_osm_elapsed_ms); document.getElementById('interpretation').innerHTML=(data.interpretation||[]).map(x=>`• ${x}`).join('<br>')}
+async function loadData(force=false){try{setStatus('載入中...'); const res=await fetch(`/api/gap-summary?range=${encodeURIComponent(currentRange)}${force?'&force=1':''}`); const data=await res.json(); if(!data.ok)throw new Error(data.error||'載入失敗'); renderAll(data); setStatus(data.cached?'已載入（快取）':'已載入最新資料')}catch(e){console.error(e);setStatus(`載入失敗：${e.message||e}`)}}
+function copyPoint(center,area,rsn){const text=`建議檢查需求群：${center}\n區域：${area||'未分類'}\n原因：${rsn}\n建議：開地圖確認附近是否有漏收廁所/商場/車站/公園/學校；若真的無可用設施，可提供公部門作為補點參考。`; navigator.clipboard?.writeText(text); setStatus('已複製點位摘要')}
+function copySummary(){if(!latestData)return; const top=(latestData.demand_clusters||[]).slice(0,3).map((r,i)=>`${i+1}. ${r.center||'-'}（${r.area_name||'未分類'}，半徑約${fmt(r.radius_m)}m）：${reason(r)}，有效需求${fmt(r.effective_queries)}，獨立使用者${fmt(r.unique_users)}，分數${r.gap_score||0}`).join('\n'); const text=`${oneLine(latestData)}\n\n優先檢查需求群：\n${top}\n\n判讀：以上不代表一定要新建廁所，而是經去重與群聚後，值得優先人工檢查、補資料或提供公共單位參考的區域。`; navigator.clipboard?.writeText(text); setStatus('已複製展示重點')}
+document.querySelectorAll('.btn[data-range]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.btn[data-range]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentRange=btn.dataset.range;loadData(false)}));
+document.querySelectorAll('.chip[data-filter]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip[data-filter]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentFilter=btn.dataset.filter;renderClusterTable()}));
+document.getElementById('searchInput').addEventListener('input',renderClusterTable); document.getElementById('refreshBtn').addEventListener('click',()=>loadData(true)); document.getElementById('copyBtn').addEventListener('click',copySummary); document.getElementById('focusBtn').addEventListener('click',()=>{focusMode=!focusMode;document.getElementById('pageWrap').classList.toggle('focus',focusMode);document.getElementById('focusBtn').textContent=focusMode?'完整模式':'展示模式'}); document.getElementById('helpBtn').addEventListener('click',()=>document.getElementById('helpOverlay').classList.add('show')); document.getElementById('helpClose').addEventListener('click',()=>document.getElementById('helpOverlay').classList.remove('show')); document.getElementById('helpOverlay').addEventListener('click',e=>{if(e.target.id==='helpOverlay')document.getElementById('helpOverlay').classList.remove('show')});
+loadData(false);
 </script>
 </body>
 </html>
