@@ -25,8 +25,6 @@ from linebot.models import (
 )
 from linebot.models import QuickReply, QuickReplyButton
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
 import hashlib
@@ -181,7 +179,7 @@ NEARBY_LRU_SIZE     = int(os.getenv("NEARBY_LRU_SIZE", "300"))
 
 FEEDBACK_INDEX_TTL  = int(os.getenv("FEEDBACK_INDEX_TTL", "180"))  # 由 60 → 180
 STATUS_INDEX_TTL    = int(os.getenv("STATUS_INDEX_TTL", "180"))    # 由 60 → 180
-MAX_SHEET_ROWS      = int(os.getenv("MAX_SHEET_ROWS", "4000"))     # 只讀尾端 N 列
+FEEDBACK_LOOKBACK_LIMIT = int(os.getenv("FEEDBACK_LOOKBACK_LIMIT", "4000"))
 
 # === internal TTL aliases (single source of truth) ===
 _FEEDBACK_INDEX_TTL = int(os.getenv("FEEDBACK_INDEX_TTL_SEC", str(FEEDBACK_INDEX_TTL)))
@@ -196,139 +194,6 @@ try:
     logging.info(f"🔍 ENRICH_CACHE={_ENRICH_CACHE.__class__.__name__} NEARBY_CACHE={_CACHE.__class__.__name__}")
 except Exception:
     pass
-
-# ======================== Sheets 安全外掛層（沿用你現有的設定即可） ========================
-SHEETS_MAX_CONCURRENCY = int(os.getenv("SHEETS_MAX_CONCURRENCY", "4"))
-SHEETS_RETRY_MAX = int(os.getenv("SHEETS_RETRY_MAX", "6"))
-SHEETS_READ_TTL_SEC = int(os.getenv("SHEETS_READ_TTL_SEC", "45"))
-SHEETS_CACHE_MAX_ROWS = int(os.getenv("SHEETS_CACHE_MAX_ROWS", "20000"))
-
-_sheets_sem = threading.Semaphore(SHEETS_MAX_CONCURRENCY)
-_read_cache = {}            # key: (sheet_id, ws_title, op) -> {ts, val}
-_cache_lock = threading.Lock()
-_gsheet_lock = threading.Lock()
-_fallback_lock = threading.Lock()
-
-def _is_quota_or_retryable(exc: Exception) -> bool:
-    s = str(exc).lower()
-    return ("429" in s or "quota" in s or "rate limit" in s or
-            "timeout" in s or "timed out" in s or "503" in s or "500" in s)
-
-def delay_request():
-    delay_time = random.uniform(0.5, 1.5)  # 隨機延遲時間，根據需求調整
-    time.sleep(delay_time)
-
-def _with_retry(func, *args, **kwargs):
-    backoff = 0.7
-    last_exc = None
-    for i in range(SHEETS_RETRY_MAX):
-        try:
-            with _sheets_sem:
-                return func(*args, **kwargs)
-        except Exception as e:
-            last_exc = e
-            if _is_quota_or_retryable(e):
-                delay_request()
-                sleep_s = backoff * (2 ** i) + random.uniform(0, 0.25*i)
-                time.sleep(sleep_s)
-                continue
-            raise
-    raise last_exc if last_exc else RuntimeError("Sheets retry exhausted")
-
-def batch_query_sheets(query_keys):
-    # 同時查詢多個快取的資料
-    results = []
-    for key in query_keys:
-        cached_data = get_cached_data(key)
-        if cached_data:
-            results.append(cached_data)
-        else:
-            results.append(None)  # 若無快取，會再進行 API 請求
-    return results
-
-def retry_request(func, *args, **kwargs):
-    retries = 3
-    for i in range(retries):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            if i < retries - 1:
-                time.sleep(2 ** i)  # Exponential backoff
-                continue
-            else:
-                raise e
-
-class SafeWS:
-    def __init__(self, ws, sheet_id: str, name: str):
-        self._ws = ws
-        self._sheet_id = sheet_id
-        self._name = name
-
-    # ---------- 讀取（含快取） ----------
-    def get_all_values(self):
-        key = (self._sheet_id, self._name, "get_all_values")
-        now = time.time()
-        with _cache_lock:
-            c = _read_cache.get(key)
-            if c and now - c["ts"] < SHEETS_READ_TTL_SEC:
-                return c["val"]
-
-        def _do():
-            return self._ws.get_all_values()
-
-        val = _with_retry(_do)
-        # 只快取合理大小，避免把整個超大表塞進記憶體
-        if isinstance(val, list) and len(val) <= SHEETS_CACHE_MAX_ROWS:
-            with _cache_lock:
-                _read_cache[key] = {"ts": now, "val": val}
-        return val
-
-    def row_values(self, i):
-        return _with_retry(self._ws.row_values, i)
-
-    # ✅ 新增：給 _get_header_and_tail / 輕量估算總列數用
-    def col_values(self, i):
-        return _with_retry(self._ws.col_values, i)
-
-    # ✅ 新增：給區段讀取（如 "A2:AZ100"）
-    def get(self, rng):
-        return _with_retry(self._ws.get, rng)
-
-    # ---------- 寫入（成功後失效快取） ----------
-    def _invalidate(self):
-        key = (self._sheet_id, self._name, "get_all_values")
-        with _cache_lock:
-            _read_cache.pop(key, None)
-
-    def update(self, rng, values):
-        def _do():
-            return self._ws.update(rng, values)
-        out = _with_retry(_do)
-        self._invalidate()
-        return out
-
-    def append_row(self, values, value_input_option="RAW"):
-        def _do():
-            return self._ws.append_row(values, value_input_option=value_input_option)
-        out = _with_retry(_do)
-        self._invalidate()
-        return out
-
-    def delete_rows(self, index):
-        def _do():
-            return self._ws.delete_rows(index)
-        out = _with_retry(_do)
-        self._invalidate()
-        return out
-
-    # ---------- 其他 ----------
-    def worksheet(self, title):
-        # 取得同試算表內的其他工作表，持續沿用 SafeWS 包裝
-        return self.__class__(self._ws.worksheet(title), self._sheet_id, title)
-
-    @property
-    def title(self):
-        return self._ws.title
 
 # 使用者語言（記憶體版，之後可換 DB）
 user_lang = {}
@@ -437,6 +302,13 @@ TEXTS.update({
     "lang_switch_fail": {
         "zh": "❌ 切換語言失敗，請稍後再試",
         "en": "❌ Failed to switch language. Please try again later."
+    },
+    # Used by ensure_consent_or_prompt() — must include {url} placeholder.
+    # Previously missing after Google Sheets removal, causing the bot to
+    # send the literal string "consent_required" instead of real text.
+    "consent_required": {
+        "zh": "📋 使用「智慧廁所助手」前，請先閱讀並同意個資使用條款：\n{url}",
+        "en": "📋 Before using the Smart Toilet Assistant, please read and agree to our privacy policy:\n{url}"
     }
 })
 
@@ -958,6 +830,12 @@ DATA_DIR = os.path.join(os.getcwd(), "data")
 TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")
 FAVORITES_FILE_PATH = os.path.join(DATA_DIR, "favorites.txt")
 _FAV_LOCK = threading.Lock()
+
+# public_toilets.csv is in the hot path for every location query.
+# Cache it in memory and reload only when the file mtime changes.
+_PUBLIC_CSV_CACHE = {"mtime": None, "rows": []}
+_PUBLIC_CSV_CACHE_LOCK = threading.Lock()
+
 os.makedirs(DATA_DIR, exist_ok=True)
 
 if not os.path.exists(FAVORITES_FILE_PATH):
@@ -1096,6 +974,29 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_lat_lon ON toilet_status_reports(lat, lon)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_status_reports_created_at ON toilet_status_reports(created_at)")
 
+        # === Toilet feedbacks ===
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS toilet_feedbacks (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT,
+            address TEXT,
+            rating INTEGER,
+            toilet_paper TEXT,
+            accessibility TEXT,
+            time_of_use TEXT,
+            comment TEXT,
+            cleanliness_score DOUBLE PRECISION,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            floor_hint TEXT,
+            user_id_hash TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_toilet_feedbacks_lat_lon ON toilet_feedbacks(lat, lon)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_toilet_feedbacks_created_at ON toilet_feedbacks(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_toilet_feedbacks_name ON toilet_feedbacks(name)")
+
         # === Favorites ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS favorites (
@@ -1215,81 +1116,15 @@ def init_persistent_store():
     except Exception as e:
         logging.error(f"❌ init_persistent_store failed: {e}")
 
-# === Google Sheets 設定 ===
-GSHEET_SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-GSHEET_CREDENTIALS_JSON = os.getenv("GSHEET_CREDENTIALS_JSON")
-USE_GOOGLE_SHEETS = os.getenv("USE_GOOGLE_SHEETS", "0") == "1"  # 主流程已搬到 Neon；預設停用 Google Sheets
-TOILET_SPREADSHEET_ID = "1Vg3tiqlXcXjcic2cAWCG-xTXfNzcI7wegEnZx8Ak7ys"
-FEEDBACK_SPREADSHEET_ID = "15Ram7EZ9QMN6SZAVYQFNpL5gu4vTaRn4M5mpWUKmmZk"
-
 # === 同意書設定 ===
-CONSENT_SHEET_TITLE = "consent"
-CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL", "https://school-i9co.onrender.com/consent")
-
-gc = worksheet = feedback_sheet = consent_ws = None
-
-# === 狀態回報設定 ===
-STATUS_SHEET_TITLE = "status"
-status_ws = None
+_PUBLIC_URL_FOR_CONSENT = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL") or (f"{_PUBLIC_URL_FOR_CONSENT}/consent" if _PUBLIC_URL_FOR_CONSENT else "")
 
 # 近點/快取/有效期
 _STATUS_NEAR_M = 35
 _STATUS_TTL_HOURS = 6
 _status_index_cache = {"ts": 0, "data": {}}
 # _STATUS_INDEX_TTL is defined in global config section (see above)
-# MAX_SHEET_ROWS is defined in global config section (see above)
-def _a1_col(n: int) -> str:
-    if n <= 0:
-        return "A"
-    out = []
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        out.append(chr(65 + r))
-    return "".join(reversed(out))
-
-
-def _get_header_and_tail(ws, max_rows: int = MAX_SHEET_ROWS):
-    try:
-        max_rows = int(max_rows)
-        if max_rows <= 0:
-            max_rows = 1
-    except Exception:
-        max_rows = 1000  
-
-    try:
-        header = ws.row_values(1) or []
-        if not header:
-            return [], []
-
-        col_a = ws.col_values(1) or []
-        last_row = len(col_a)
-        if last_row < 2:  
-            return header, []
-
-        start_row = max(2, last_row - max_rows + 1)
-
-        end_col = _a1_col(max(1, len(header)))
-        rng = f"A{start_row}:{end_col}{last_row}"
-
-        data = ws.get(rng) or []
-        return header, data
-
-    except Exception as e:
-        logging.warning(f"_get_header_and_tail primary path failed: {e}")
-
-        # === Fallback：一次抓，然後只保留尾端 max_rows，避免佔記憶體 ===
-        try:
-            rows = ws.get_all_values() or []
-            if not rows:
-                return [], []
-            header = rows[0]
-            data = rows[1:]
-            if len(data) > max_rows:
-                data = data[-max_rows:]
-            return header, data
-        except Exception as e2:
-            logging.warning(f"_get_header_and_tail fallback failed: {e2}")
-            return [], []
 
 # === 載入模型 ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -1554,7 +1389,19 @@ def _findability_bonus(t):
     return b
 
 def sort_toilets(toilets):
-    toilets.sort(key=lambda x: (int(x.get("distance", 1e9)), -_findability_bonus(x)))
+    def _dist_key(x):
+        # haversine() now returns float("inf") on error (Batch 3A).
+        # int(float("inf")) raises OverflowError in Python, so cap the
+        # value at 1e9 before converting.  Any non-numeric value also
+        # falls back safely to the maximum sentinel distance.
+        try:
+            d = float(x.get("distance", 1e9))
+            if not math.isfinite(d):
+                d = 1e9
+            return (int(d), -_findability_bonus(x))
+        except (TypeError, ValueError, OverflowError):
+            return (int(1e9), 0)
+    toilets.sort(key=_dist_key)
     return toilets
 
 def _score_distance(distance_m):
@@ -2024,87 +1871,12 @@ def log_source_query(query_id, uid, source_name, result_count=0, elapsed_ms=None
     except Exception as e:
         logging.warning(f"log_source_query failed: {e}", exc_info=True)
 
-# === 初始化 Google Sheets（包 SafeWS；其餘不變） ===
-def init_gsheet():
-    global gc, worksheet, feedback_sheet, consent_ws, status_ws
-    if not USE_GOOGLE_SHEETS:
-        logging.info("⏭️ Google Sheets disabled; using Neon as primary store.")
-        return
-    try:
-        if not GSHEET_CREDENTIALS_JSON:
-            logging.critical("❌ 缺少 GSHEET_CREDENTIALS_JSON")
-            return  # 不 raise，讓服務先活著
-        creds_dict = json.loads(GSHEET_CREDENTIALS_JSON)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, GSHEET_SCOPE)
-        gc = gspread.authorize(creds)
-
-        worksheet_raw = gc.open_by_key(TOILET_SPREADSHEET_ID).sheet1
-        fb_spread = gc.open_by_key(FEEDBACK_SPREADSHEET_ID)
-        feedback_raw = fb_spread.sheet1
-
-        try:
-            consent_raw = fb_spread.worksheet(CONSENT_SHEET_TITLE)
-        except gspread.exceptions.WorksheetNotFound:
-            consent_raw = fb_spread.add_worksheet(title=CONSENT_SHEET_TITLE, rows=1000, cols=10)
-            consent_raw.update("A1:F1", [["user_id","agreed","display_name","source_type","ua","timestamp"]])
-
-        worksheet = SafeWS(worksheet_raw, TOILET_SPREADSHEET_ID, worksheet_raw.title)
-        feedback_sheet = SafeWS(feedback_raw, FEEDBACK_SPREADSHEET_ID, feedback_raw.title)
-        consent_ws = SafeWS(consent_raw, FEEDBACK_SPREADSHEET_ID, consent_raw.title)
-        
-        try:
-            status_raw = fb_spread.worksheet(STATUS_SHEET_TITLE)
-        except gspread.exceptions.WorksheetNotFound:
-            status_raw = fb_spread.add_worksheet(title=STATUS_SHEET_TITLE, rows=1000, cols=10)
-            status_raw.update("A1:G1", [["lat","lon","status","user_id","display_name","note","timestamp"]])
-
-        status_ws = SafeWS(status_raw, FEEDBACK_SPREADSHEET_ID, status_raw.title)
-
-        logging.info("✅ Sheets 初始化完成")
-    except Exception as e:
-        logging.critical(f"❌ Sheets 初始化失敗（改為延後再試）: {e}")
-        return
-
-def _ensure_sheets_ready():
-    if not USE_GOOGLE_SHEETS:
-        return
-    if any(x is None for x in (worksheet, feedback_sheet, consent_ws)):
-        try:
-            init_gsheet()
-        except Exception:
-            # 保持靜默，呼叫端要自己容錯（例如回空結果 / 優雅降級）
-            pass
-
-init_gsheet()
-
-# === 使用者新增廁所 ===
-TOILET_REQUIRED_HEADER = [
+# === 使用者新增廁所資料欄位 ===
+USER_TOILET_ROW_HEADER = [
     "user_id", "name", "address", "lat", "lon",
     "level", "floor_hint", "entrance_hint", "access_note", "open_hours",
     "timestamp"
 ]
-
-def ensure_toilet_sheet_header(ws):
-    _ensure_sheets_ready()
-    if ws is None:
-        return TOILET_REQUIRED_HEADER[:]
-    try:
-        header = ws.row_values(1) or []
-        if not header:
-            ws.update("A1", [TOILET_REQUIRED_HEADER])
-            return TOILET_REQUIRED_HEADER[:]
-
-        changed = False
-        for col in TOILET_REQUIRED_HEADER:
-            if col not in header:
-                header.append(col)
-                changed = True
-        if changed:
-            ws.update("A1", [header])
-        return header
-    except Exception as e:
-        logging.error(f"ensure_toilet_sheet_header 失敗：{e}")
-        return header if 'header' in locals() and header else TOILET_REQUIRED_HEADER[:]
 
 # === 計算距離 ===
 def haversine(lat1, lon1, lat2, lon2):
@@ -2116,7 +1888,7 @@ def haversine(lat1, lon1, lat2, lon2):
         return 2 * asin(sqrt(a)) * 6371000  # m
     except Exception as e:
         logging.error(f"計算距離失敗: {e}")
-        return 0
+        return float("inf")
 
 # === 防重複（簡單版：避免同一 webhook 在短時間內重複處理）===
 DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "10"))
@@ -2311,7 +2083,7 @@ _consent_cache = {}   # user_id -> (ts, bool)
 _CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
 
 def has_consented(user_id: str) -> bool:
-    """Read consent from Neon user_consent. Google Sheets is no longer in the main path."""
+    """Read consent from Neon user_consent."""
     if not user_id:
         return False
     if not POSTGRES_ENABLED:
@@ -2338,7 +2110,7 @@ def has_consented(user_id: str) -> bool:
 
 
 def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: str, ua: str, ts_iso: str):
-    """Write consent to Neon user_consent. Google Sheets is no longer in the main path."""
+    """Write consent to Neon user_consent."""
     if not user_id:
         return False
     if not POSTGRES_ENABLED:
@@ -2372,23 +2144,75 @@ def ensure_consent_or_prompt(user_id: str):
     tip = T("consent_required", uid=user_id, url=CONSENT_PAGE_URL)
     return TextSendMessage(text=tip)
 
-# === 從 Google Sheets 查使用者新增廁所 ===
+# === SQLite 本機快取與分析資料 ===
 # 設定 SQLite 資料庫位置
 CACHE_DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
+
+def _get_db():
+    """Return a SQLite connection to the app database (CACHE_DB_PATH).
+
+    This is the single entry point for all SQLite access in the app
+    (user_lang, search_log, ai_quota, request_cache, analytics_events).
+    It was previously provided by a now-deleted initialization block;
+    restored here so that set_user_lang / get_user_lang /
+    handle_location / _ai_quota_check_and_inc work correctly.
+    """
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 # 建立 SQLite 連線
 def create_cache_db():
-    if not os.path.exists(CACHE_DB_PATH):
-        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sheets_cache (
-            query_key TEXT PRIMARY KEY,
-            data TEXT,
-            timestamp REAL
-        )
-        """)
-        conn.commit()
-        conn.close()
+    # Always open (not just when file is missing) so that new tables added
+    # here are created on existing deployments that already have cache.db.
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
+    cursor = conn.cursor()
+
+    # Original request cache table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS request_cache (
+        query_key TEXT PRIMARY KEY,
+        data TEXT,
+        timestamp REAL
+    )
+    """)
+
+    # User language preference — read/written by set_user_lang / get_user_lang.
+    # Was missing after Google Sheets removal; restored here.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_lang (
+        user_id TEXT PRIMARY KEY,
+        lang TEXT NOT NULL DEFAULT 'zh'
+    )
+    """)
+
+    # Per-user location query log — written by handle_location,
+    # read by get_search_count for the usage-review / badges pages.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS search_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        lat TEXT,
+        lon TEXT,
+        ts TEXT
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_search_log_user_id ON search_log(user_id)"
+    )
+
+    # AI quota tracking — read/written by _ai_quota_check_and_inc.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ai_quota (
+        key  TEXT NOT NULL,
+        date TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (key, date)
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 # === SQLite 參數強化（新增） ===
 def tune_sqlite_for_concurrency():
@@ -2409,7 +2233,7 @@ def tune_sqlite_for_concurrency():
 def get_cached_data(query_key, ttl_sec=60*5):
     conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT data, timestamp FROM sheets_cache WHERE query_key = ?", (query_key,))
+    cursor.execute("SELECT data, timestamp FROM request_cache WHERE query_key = ?", (query_key,))
     result = cursor.fetchone()
     conn.close()
 
@@ -2424,7 +2248,7 @@ def save_cache(query_key, data):
     conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT OR REPLACE INTO sheets_cache (query_key, data, timestamp)
+    INSERT OR REPLACE INTO request_cache (query_key, data, timestamp)
     VALUES (?, ?, ?)
     """, (query_key, json.dumps(data), time.time()))
     conn.commit()
@@ -2549,86 +2373,6 @@ def get_area_name(lat, lon):
     return "其他區域"
 
 # 查詢廁所資料
-def query_sheet_toilets(user_lat, user_lon, radius=500):
-    _ensure_sheets_ready()
-    if worksheet is None:
-        return []
-
-    try:
-        SHEET_MAX_ITEMS = int(os.getenv("SHEET_MAX_ITEMS", "120"))
-    except Exception:
-        SHEET_MAX_ITEMS = 120
-
-    toilets_heap = []
-
-    try:
-        header, data = _get_header_and_tail(worksheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return []
-
-        idx = _toilet_sheet_indices(header)
-        if idx.get("lat") is None or idx.get("lon") is None:
-            return []
-
-        lat = float(user_lat)
-        lon = float(user_lon)
-        dlat = radius / 111000.0
-        dlon = radius / (111000.0 * max(0.1, math.cos(math.radians(lat))))
-
-        min_lat, max_lat = lat - dlat, lat + dlat
-        min_lon, max_lon = lon - dlon, lon + dlon
-
-        for row in data:
-            if len(row) <= max(idx["lat"], idx["lon"]):
-                continue
-
-            try:
-                t_lat = float(row[idx["lat"]])
-                t_lon = float(row[idx["lon"]])
-            except Exception:
-                continue
-
-            if not (min_lat <= t_lat <= max_lat and min_lon <= t_lon <= max_lon):
-                continue
-
-            dist = haversine(lat, lon, t_lat, t_lon)
-            if dist > radius:
-                continue
-
-            name = (
-                row[idx["name"]].strip()
-                if idx["name"] is not None and len(row) > idx["name"]
-                else "無名稱"
-            )
-            address = (
-                row[idx["address"]].strip()
-                if idx["address"] is not None and len(row) > idx["address"]
-                else ""
-            )
-
-            floor_hint = _floor_from_name(name)
-
-            item = {
-                "name": name,
-                "lat": float(norm_coord(t_lat)),
-                "lon": float(norm_coord(t_lon)),
-                "address": address,
-                "distance": dist,
-                "type": "sheet",
-                "floor_hint": floor_hint,
-            }
-
-            heapq.heappush(toilets_heap, (-dist, item))
-            if len(toilets_heap) > SHEET_MAX_ITEMS:
-                heapq.heappop(toilets_heap)
-
-        toilets = [item for _, item in sorted(toilets_heap, key=lambda x: -x[0])]
-        return toilets
-
-    except Exception as e:
-        logging.error(f"讀取 Google Sheets 廁所主資料錯誤: {e}")
-        return []
-
 # === OSM Overpass ===
 def query_overpass_toilets(lat, lon, radius=500):
     overall_deadline = time.time() + 8.0
@@ -2852,53 +2596,83 @@ def query_saved_toilets(user_lat, user_lon, radius=500):
     return [item for _, _, item in sorted(heap, key=lambda x: -x[0])]
 
 # === 讀取 public_toilets.csv ===
-def query_public_csv_toilets(user_lat, user_lon, radius=500):
+def _load_public_csv_rows_cached():
+    """Load public_toilets.csv once and refresh only when the file changes."""
     if not os.path.exists(TOILETS_FILE_PATH):
         return []
 
-    heap = []  
+    try:
+        mtime = os.path.getmtime(TOILETS_FILE_PATH)
+    except Exception as e:
+        logging.error(f"讀 public_toilets.csv mtime 失敗：{e}")
+        return []
+
+    cached_rows = _PUBLIC_CSV_CACHE.get("rows") or []
+    if _PUBLIC_CSV_CACHE.get("mtime") == mtime:
+        return cached_rows
+
+    with _PUBLIC_CSV_CACHE_LOCK:
+        cached_rows = _PUBLIC_CSV_CACHE.get("rows") or []
+        if _PUBLIC_CSV_CACHE.get("mtime") == mtime:
+            return cached_rows
+
+        try:
+            with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+            _PUBLIC_CSV_CACHE["mtime"] = mtime
+            _PUBLIC_CSV_CACHE["rows"] = rows
+            logging.info(f"✅ public_toilets.csv cached: {len(rows)} rows")
+            return rows
+        except Exception as e:
+            logging.error(f"讀 public_toilets.csv 失敗：{e}")
+            return cached_rows
+
+
+def query_public_csv_toilets(user_lat, user_lon, radius=500):
+    rows = _load_public_csv_rows_cached()
+    if not rows:
+        return []
+
+    heap = []
     limit = LOC_MAX_RESULTS
 
     try:
-        with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
+        for row in rows:
+            try:
+                t_lat = float(row.get("latitude"))
+                t_lon = float(row.get("longitude"))
+            except Exception:
+                continue
 
-            for row in reader:
-                try:
-                    t_lat = float(row.get("latitude"))
-                    t_lon = float(row.get("longitude"))
-                except Exception:
-                    continue
+            if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+                continue
 
-                if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
-                    continue
+            dist = haversine(user_lat, user_lon, t_lat, t_lon)
+            if dist > radius:
+                continue
 
-                dist = haversine(user_lat, user_lon, t_lat, t_lon)
-                if dist > radius:
-                    continue
+            name = (row.get("name") or "無名稱").strip()
+            addr = (row.get("address") or "").strip()
+            floor_hint = _floor_from_name(name)
 
-                name = (row.get("name") or "無名稱").strip()
-                addr = (row.get("address") or "").strip()
-                floor_hint = _floor_from_name(name)
+            item = {
+                "name": name,
+                "lat": float(norm_coord(t_lat)),
+                "lon": float(norm_coord(t_lon)),
+                "address": addr,
+                "distance": dist,
+                "type": "public_csv",
+                "grade": row.get("grade", ""),
+                "category": row.get("type2", ""),
+                "floor_hint": floor_hint,
+            }
 
-                item = {
-                    "name": name,
-                    "lat": float(norm_coord(t_lat)),
-                    "lon": float(norm_coord(t_lon)),
-                    "address": addr,
-                    "distance": dist,
-                    "type": "public_csv",
-                    "grade": row.get("grade", ""),
-                    "category": row.get("type2", ""),
-                    "floor_hint": floor_hint,
-                }
-
-                heapq.heappush(heap, (-dist, id(item), item))   
-                if len(heap) > limit:
-                    heapq.heappop(heap)
+            heapq.heappush(heap, (-dist, id(item), item))
+            if len(heap) > limit:
+                heapq.heappop(heap)
 
     except Exception as e:
-        logging.error(f"讀 public_toilets.csv 失敗：{e}")
+        logging.error(f"查詢 public_toilets.csv 快取資料失敗：{e}")
         return []
 
     return [item for _, _, item in sorted(heap, key=lambda x: -x[0])]
@@ -2907,23 +2681,54 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
 def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
     all_pts = []
     for l in lists:
-        if l: all_pts.extend(l)
-    all_pts.sort(key=lambda x: x["distance"])
+        if l:
+            all_pts.extend(l)
+    all_pts.sort(key=lambda x: x.get("distance", 1e9))
 
     merged = []
+    buckets = {}
+    # 0.0005 degrees is roughly 50m in Taiwan latitude, enough for a 35m duplicate threshold.
+    grid_size = 0.0005
+
+    def _bucket_key(lat, lon):
+        return (int(float(lat) / grid_size), int(float(lon) / grid_size))
+
+    def _neighbor_keys(key):
+        x, y = key
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                yield (x + dx, y + dy)
+
     for p in all_pts:
+        try:
+            p_key = _bucket_key(p["lat"], p["lon"])
+            candidate_pool = []
+            for k in _neighbor_keys(p_key):
+                candidate_pool.extend(buckets.get(k, []))
+        except Exception:
+            p_key = None
+            candidate_pool = merged
+
         dup = False
-        for q in merged:
+        p_name = (p.get("name") or "").lower()
+        for q in candidate_pool:
             try:
                 near = haversine(p["lat"], p["lon"], q["lat"], q["lon"]) <= dist_th
             except Exception:
                 near = False
-            sim = SequenceMatcher(None, (p.get("name") or "").lower(), (q.get("name") or "").lower()).ratio()
-            if near and sim >= name_sim_th:
+            if not near:
+                continue
+
+            q_name = (q.get("name") or "").lower()
+            sim = SequenceMatcher(None, p_name, q_name).ratio()
+            if sim >= name_sim_th:
                 dup = True
                 break
+
         if not dup:
             merged.append(p)
+            if p_key is not None:
+                buckets.setdefault(p_key, []).append(p)
     return merged
 
 # === 最愛管理 ===
@@ -3157,8 +2962,9 @@ def nearby_toilets():
     if not user_lat or not user_lon:
         return {"error": _api_L("缺少位置參數", "Missing location parameters")}, 400
 
-    user_lat = float(user_lat)
-    user_lon = float(user_lon)
+    user_lat, user_lon = _parse_lat_lon(user_lat, user_lon)
+    if user_lat is None or user_lon is None:
+        return {"error": _api_L("位置參數錯誤", "Invalid location parameters")}, 400
 
     public_csv_toilets = query_public_csv_toilets(user_lat, user_lon, radius=500) or []
     saved_toilets = query_saved_toilets(user_lat, user_lon, radius=500) or []
@@ -3290,11 +3096,10 @@ def _pred_from_row(r, idx):
 
 # === 即時預測 / 95% CI ===
 def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
+    """Compute nowcast from Neon/Postgres feedback."""
+    if not POSTGRES_ENABLED:
         return None
 
-    # k 上限，避免一次吃太多列
     try:
         NOWCAST_MAX_K = int(os.getenv("NOWCAST_MAX_K", "8"))
     except Exception:
@@ -3303,87 +3108,35 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
         k = LAST_N_HISTORY
     k = min(k, NOWCAST_MAX_K)
 
-    # 目標座標轉為 float，用於比較
-    try:
-        target_lat = float(lat)
-        target_lon = float(lon)
-    except Exception:
+    lat_f, lon_f = _parse_lat_lon(lat, lon)
+    if lat_f is None or lon_f is None:
         return None
 
     try:
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
+        rows = _fetch_feedback_pg_by_coord(lat_f, lon_f, tol=1e-4, limit=max(k * 3, k))
+        if not rows:
             return None
 
-        idx = _feedback_indices(header)
-        i_lat, i_lon = idx.get("lat"), idx.get("lon")
-        if i_lat is None or i_lon is None:
-            return None
-
-        def close(a, b):
+        vals = []
+        for row in rows[:k]:
+            sc = row.get("cleanliness_score")
             try:
-                return abs(float(a) - float(b)) <= tol
+                if sc not in (None, ""):
+                    vals.append(float(sc))
+                    continue
             except Exception:
-                return False
-
-        # 只保留同座標的最近 k 筆
-        same_rows = []
-        for r in data:
-            # 長度檢查
-            if max(i_lat, i_lon) >= len(r):
-                continue
-            if close(r[i_lat], target_lat) and close(r[i_lon], target_lon):
-                same_rows.append(r)
-                if len(same_rows) >= k * 3:
-                    # 多抓一點備用，稍後按時間取前 k
-                    break
-
-        if not same_rows:
-            return None
-
-        # 若有 created 欄位就按時間新到舊排，再取前 k 筆
-        i_created = idx.get("created")
-        if i_created is not None:
+                pass
             try:
-                same_rows.sort(key=lambda x: (x[i_created] if len(x) > i_created else ""), reverse=True)
+                if row.get("rating") not in (None, ""):
+                    vals.append(float(row.get("rating")))
             except Exception:
                 pass
 
-        recent = same_rows[:k]
-        if not recent:
-            return None
-
-        # 一次走訪，同時計算模型分數與備用簡化分數
-        vals_model = []
-        vals_simple = []
-        for r in recent:
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            if isinstance(sc, (int, float)):
-                try:
-                    vals_model.append(float(sc))
-                except Exception:
-                    pass
-            # 簡化分數隨手備著，避免之後再跑一次
-            s2 = _simple_score(rr, pp, aa)
-            if isinstance(s2, (int, float)):
-                vals_simple.append(float(s2))
-
-        # 沒有模型分數就用簡化分數
-        vals = vals_model[:] if vals_model else vals_simple[:]
         if not vals:
             return None
 
-        # 若模型分數全相同（極常見於少量樣本），改用簡化分數以打開分佈
-        if vals_model and len(vals_model) >= 2:
-            try:
-                if max(vals_model) - min(vals_model) < 1e-6 and vals_simple:
-                    vals = vals_simple[:]
-            except Exception:
-                pass
-
         n = len(vals)
         mean = round(sum(vals) / n, 2)
-
         if n == 1:
             return {"mean": mean, "lower": mean, "upper": mean, "n": 1}
 
@@ -3391,14 +3144,15 @@ def compute_nowcast_ci(lat, lon, k=LAST_N_HISTORY, tol=1e-6):
             s = statistics.stdev(vals)
         except statistics.StatisticsError:
             s = 0.0
-
         se = s / (n ** 0.5)
-        lower = max(1.0, round(mean - 1.96 * se, 2))
-        upper = min(5.0, round(mean + 1.96 * se, 2))
-        return {"mean": mean, "lower": lower, "upper": upper, "n": n}
-
+        return {
+            "mean": mean,
+            "lower": max(1.0, round(mean - 1.96 * se, 2)),
+            "upper": min(10.0, round(mean + 1.96 * se, 2)),
+            "n": n,
+        }
     except Exception as e:
-        logging.error(f"❌ compute_nowcast_ci 失敗: {e}")
+        logging.error(f"❌ compute_nowcast_ci failed: {e}", exc_info=True)
         return None
 
 # === Nowcast API ===
@@ -3431,7 +3185,7 @@ def api_status_candidates():
             out.append({
                 "title": t.get("name") or t.get("place_hint") or "（未命名）廁所",
                 "address": t.get("address") or "",
-                # 用 norm_coord（字串）讓之後比對試算表座標更穩定
+                # 用 norm_coord（字串）讓之後比對座標更穩定
                 "lat": norm_coord(t["lat"]),
                 "lon": norm_coord(t["lon"]),
                 "distance": int(t.get("distance", 0))
@@ -3466,13 +3220,150 @@ def api_status_report():
         logging.error(f"/api/status_report 寫入失敗: {e}")
         return {"ok": False, "message": "server error"}, 500
 
+
+# === Neon feedback storage（正式回饋儲存） ===
+def _insert_feedback_pg(name, address, rating, toilet_paper, accessibility, time_of_use,
+                        comment, cleanliness_score, lat, lon, floor_hint="", uid=""):
+    if not POSTGRES_ENABLED:
+        return False
+    conn = None
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO toilet_feedbacks
+            (name, address, rating, toilet_paper, accessibility, time_of_use,
+             comment, cleanliness_score, lat, lon, floor_hint, user_id_hash, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (
+            name or "",
+            address or "",
+            int(rating) if str(rating).strip() else None,
+            toilet_paper or "",
+            accessibility or "",
+            time_of_use or "",
+            comment or "",
+            float(cleanliness_score) if isinstance(cleanliness_score, (int, float)) or str(cleanliness_score).replace('.', '', 1).isdigit() else None,
+            float(lat),
+            float(lon),
+            floor_hint or "",
+            mask_user_id(uid) if uid else None,
+        ))
+        conn.commit()
+        return True
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        logging.error(f"insert toilet_feedbacks failed: {e}", exc_info=True)
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _fetch_feedback_pg_by_coord(lat, lon, tol=1e-6, limit=None):
+    if not POSTGRES_ENABLED:
+        return []
+    lat_f, lon_f = _parse_lat_lon(lat, lon)
+    if lat_f is None or lon_f is None:
+        return []
+    try:
+        limit = int(limit or FEEDBACK_LOOKBACK_LIMIT or 4000)
+    except Exception:
+        limit = 4000
+    conn = None
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT name, address, rating, toilet_paper, accessibility, time_of_use,
+                   comment, cleanliness_score, lat, lon, floor_hint, created_at
+            FROM toilet_feedbacks
+            WHERE ABS(lat - %s) <= %s AND ABS(lon - %s) <= %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (float(lat_f), float(tol), float(lon_f), float(tol), limit))
+        return [dict(r) for r in (cur.fetchall() or [])]
+    except Exception as e:
+        logging.error(f"fetch toilet_feedbacks by coord failed: {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _feedback_pg_to_public(row):
+    def _clean(v):
+        return "" if v is None else str(v)
+    created = row.get("created_at")
+    if hasattr(created, "isoformat"):
+        created_s = created.isoformat()
+    else:
+        created_s = _clean(created)
+    score = row.get("cleanliness_score")
+    try:
+        score_s = str(round(float(score), 2)) if score is not None else ""
+    except Exception:
+        score_s = _clean(score)
+    return {
+        "rating": _clean(row.get("rating")),
+        "toilet_paper": _clean(row.get("toilet_paper")),
+        "accessibility": _clean(row.get("accessibility")),
+        "time_of_use": _clean(row.get("time_of_use")),
+        "comment": safe_html(_clean(row.get("comment"))),
+        "cleanliness_score": score_s,
+        "created_at": created_s,
+    }
+
+
+def _feedback_rows_to_summary(rows):
+    if not rows:
+        return "尚無回饋資料"
+    paper_counts = {"有": 0, "沒有": 0}
+    access_counts = {"有": 0, "沒有": 0}
+    scores = []
+    comments = []
+    for row in rows:
+        if row.get("toilet_paper") in paper_counts:
+            paper_counts[row.get("toilet_paper")] += 1
+        if row.get("accessibility") in access_counts:
+            access_counts[row.get("accessibility")] += 1
+        try:
+            if row.get("cleanliness_score") is not None:
+                scores.append(float(row.get("cleanliness_score")))
+            elif row.get("rating") is not None:
+                scores.append(float(row.get("rating")))
+        except Exception:
+            pass
+        c = (row.get("comment") or "").strip()
+        if c:
+            comments.append(c)
+    avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
+    summary = f"🔍 筆數：{len(rows)}\n"
+    summary += f"🧼 平均清潔分數：{avg_score}\n"
+    summary += f"🧻 衛生紙：{'有' if paper_counts['有'] >= paper_counts['沒有'] else '沒有'}\n"
+    summary += f"♿ 無障礙：{'有' if access_counts['有'] >= access_counts['沒有'] else '沒有'}\n"
+    if comments:
+        summary += f"💬 最新留言：{comments[0]}"
+    return summary
+
 # === 回饋 ===
 @app.route("/submit_feedback", methods=["POST"])
 def submit_feedback():
-    _ensure_sheets_ready()
     logging.info(f"[submit_feedback] content_type={request.content_type}")
-    logging.info(f"[submit_feedback] form={request.form.to_dict(flat=True)}")
-    logging.info(f"[submit_feedback] args={request.args.to_dict(flat=True)}")
+
+    if not POSTGRES_ENABLED:
+        logging.error("submit_feedback failed: Postgres storage is not enabled")
+        return "提交失敗：回饋儲存尚未設定", 503
 
     try:
         payload_json = request.get_json(silent=True)
@@ -3480,38 +3371,22 @@ def submit_feedback():
             data = payload_json
             src = "json"
             getv = lambda k, d="": (data.get(k) if data.get(k) is not None else d)
-            debug_dump = str(data)
         else:
             data = request.form
             src = "form"
             getv = lambda k, d="": (data.get(k, d) if data.get(k, d) is not None else d)
-            try:
-                debug_dump = str(data.to_dict(flat=True))
-            except Exception:
-                debug_dump = "<form>"
 
-        # ✅ 基本欄位（統一用 getv）
         name = (getv("name", "") or "").strip()
         address = (getv("address", "") or "").strip()
-
-        # ✅ 修正重點：lat/lon 也統一用 getv，並允許從 args 補救
         lat_raw = ((getv("lat", "") or request.args.get("lat") or "")).strip()
         lon_raw = ((getv("lon", "") or request.args.get("lon") or "")).strip()
 
         lat_f, lon_f = _parse_lat_lon(lat_raw, lon_raw)
         if lat_f is None or lon_f is None:
-            return (
-                "座標格式錯誤\n"
-                f"src={src}\n"
-                f"lat_raw={lat_raw}\n"
-                f"lon_raw={lon_raw}\n"
-                f"payload={debug_dump}"
-            ), 400
+            return "座標格式錯誤", 400
 
         lat = norm_coord(lat_f)
         lon = norm_coord(lon_f)
-
-        # ✅ 其他欄位（統一用 getv）
         rating = ((getv("rating", "") or "")).strip()
         toilet_paper = ((getv("toilet_paper", "") or "")).strip()
         accessibility = ((getv("accessibility", "") or "")).strip()
@@ -3519,7 +3394,11 @@ def submit_feedback():
         comment = ((getv("comment", "") or "")).strip()
         floor_hint = ((getv("floor_hint", "") or "")).strip()
 
-        # ✅ 必填檢查（與前端 required 對齊）
+        logging.info(
+            f"[submit_feedback] src={src} name={name[:40]} rating={rating} "
+            f"lat={lat} lon={lon} paper={toilet_paper} access={accessibility}"
+        )
+
         missing = []
         if not name: missing.append("name")
         if not rating: missing.append("rating")
@@ -3527,26 +3406,15 @@ def submit_feedback():
         if not lon_raw: missing.append("lon")
         if not toilet_paper: missing.append("toilet_paper")
         if not accessibility: missing.append("accessibility")
-
         if missing:
-            return (
-                "缺少必要欄位（需要：name、rating、toilet_paper、accessibility、lat、lon）\n"
-                f"missing={missing}\n"
-                f"src={src}\n"
-                f"收到：name={name}, rating={rating}, paper={toilet_paper}, access={accessibility}, lat={lat_raw}, lon={lon_raw}\n"
-                f"payload={debug_dump}"
-            ), 400
+            return "缺少必要欄位：" + ", ".join(missing), 400
 
-        # ✅ rating 檢查
         try:
             r = int(rating)
             if r < 1 or r > 10:
                 return "清潔度評分必須在 1 到 10 之間", 400
         except ValueError:
             return "清潔度評分必須是數字", 400
-
-        if floor_hint and len(floor_hint) < 1:
-            return "『位置描述』太短，請至少 4 個字", 400
 
         if not floor_hint:
             inferred = _floor_from_name(name)
@@ -3559,52 +3427,33 @@ def submit_feedback():
 
         hist_feats = []
         try:
-            rows = feedback_sheet.get_all_values()
-            header = rows[0]; data_rows = rows[1:]
-            idx = _feedback_indices(header)
-
-            def close(a, b, tol=1e-6):
-                try: return abs(float(a) - float(b)) <= tol
-                except: return False
-
-            same_coord = []
-            for row in data_rows:
-                if idx["lat"] is None or idx["lon"] is None:
-                    break
-                if len(row) <= max(idx["lat"], idx["lon"]):
+            recent = _fetch_feedback_pg_by_coord(lat, lon, tol=1e-4, limit=LAST_N_HISTORY)
+            for row in recent:
+                try:
+                    rr = int(row.get("rating"))
+                except Exception:
                     continue
-                if close(row[idx["lat"]], lat) and close(row[idx["lon"]], lon):
-                    same_coord.append(row)
-
-            if idx["created"] is not None:
-                same_coord.sort(key=lambda x: x[idx["created"]], reverse=True)
-            recent = same_coord[:LAST_N_HISTORY]
-
-            if idx["rating"] is not None:
-                for row in recent:
-                    try:
-                        rr = int((row[idx["rating"]] or "").strip())
-                    except:
-                        continue
-                    pp = (row[idx["paper"]] or "").strip() if idx["paper"] is not None else "沒注意"
-                    aa = (row[idx["access"]] or "").strip() if idx["access"] is not None else "沒注意"
-                    hist_feats.append([rr, paper_map.get(pp,0), access_map.get(aa,0)])
+                pp = (row.get("toilet_paper") or "沒注意").strip()
+                aa = (row.get("accessibility") or "沒注意").strip()
+                hist_feats.append([rr, paper_map.get(pp, 0), access_map.get(aa, 0)])
         except Exception as e:
             logging.warning(f"讀歷史回饋失敗，僅用單筆特徵預測：{e}")
 
         pred_with_hist = expected_from_feats([cur_feat] + hist_feats) or expected_from_feats([cur_feat]) or "未預測"
-
-        feedback_sheet.append_row([
-            name, address, rating, toilet_paper, accessibility, time_of_use,
-            comment, pred_with_hist, lat, lon, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            floor_hint
-        ], value_input_option="USER_ENTERED")
-
         uid = (request.args.get("uid") or "").strip()
+
+        ok = _insert_feedback_pg(
+            name=name, address=address, rating=rating, toilet_paper=toilet_paper,
+            accessibility=accessibility, time_of_use=time_of_use, comment=comment,
+            cleanliness_score=pred_with_hist, lat=lat, lon=lon, floor_hint=floor_hint, uid=uid
+        )
+        if not ok:
+            return "提交失敗：回饋資料寫入 Neon 失敗", 500
+
         lang = (request.args.get("lang") or "").strip().lower()
         target = f"/toilet_feedback_by_coord/{lat}/{lon}"
         if uid:
-            target = _append_uid_lang(target, uid, (lang if lang in ("en","zh") else _user_lang_q(uid)))
+            target = _append_uid_lang(target, uid, (lang if lang in ("en", "zh") else _user_lang_q(uid)))
         return redirect(target)
 
     except Exception as e:
@@ -3613,105 +3462,22 @@ def submit_feedback():
 
 # === 讀座標的回饋清單 ===
 def get_feedbacks_by_coord(lat, lon, tol=1e-6):
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
+    if not POSTGRES_ENABLED:
         return []
     try:
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return []
-
-        # 🔧 補上這行
-        idx = _feedback_indices(header)
-
-        def close(a, b):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
-
-        out = []
-        for r in data:
-            if idx["lat"] is None or idx["lon"] is None:
-                break
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                def val(key):
-                    i = idx[key]
-                    return (r[i] if i is not None and len(r) > i else "").strip()
-                out.append({
-                    "rating": val("rating"),
-                    "toilet_paper": val("paper"),
-                    "accessibility": val("access"),
-                    "time_of_use": val("time"),
-                    "comment": safe_html(val("comment")),
-                    "cleanliness_score": val("pred"),
-                    "created_at": val("created"),
-                })
-        out.sort(key=lambda d: d.get("created_at", ""), reverse=True)
-        return out
+        return [_feedback_pg_to_public(row) for row in _fetch_feedback_pg_by_coord(lat, lon, tol=tol)]
     except Exception as e:
-        logging.error(f"❌ 讀取回饋列表（座標）錯誤: {e}")
+        logging.error(f"❌ 讀取回饋列表（Neon 座標）錯誤: {e}", exc_info=True)
         return []
 
 # === 座標聚合統計 ===
 def get_feedback_summary_by_coord(lat, lon, tol=1e-6):
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
+    if not POSTGRES_ENABLED:
         return "尚無回饋資料"
     try:
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return "尚無回饋資料"
-
-        # 🔧 補上這行
-        idx = _feedback_indices(header)
-
-        if idx["lat"] is None or idx["lon"] is None:
-            return "（表頭缺少 lat/lon 欄位）"
-
-        def close(a, b):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
-
-        matched = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                matched.append(r)
-
-        if not matched:
-            return "尚無回饋資料"
-
-        paper_counts = {"有": 0, "沒有": 0}
-        access_counts = {"有": 0, "沒有": 0}
-        scores = []
-        comments = []
-
-        for r in matched:
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            if isinstance(sc, (int, float)):
-                scores.append(float(sc))
-            if pp in paper_counts: paper_counts[pp] += 1
-            if aa in access_counts: access_counts[aa] += 1
-            if idx["comment"] is not None and len(r) > idx["comment"]:
-                c = (r[idx["comment"]] or "").strip()
-                if c:
-                    comments.append(c)
-
-        avg_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
-
-        summary = f"🔍 筆數：{len(matched)}\n"
-        summary += f"🧼 平均清潔分數：{avg_score}\n"
-        summary += f"🧻 衛生紙：{'有' if paper_counts['有'] >= paper_counts['沒有'] else '沒有'}\n"
-        summary += f"♿ 無障礙：{'有' if access_counts['有'] >= access_counts['沒有'] else '沒有'}\n"
-        if comments:
-            # 你現在拿 comments[-1]，因為 _get_header_and_tail 取尾巴，
-            # 通常最後一筆就是最新，這邏輯 OK。
-            summary += f"💬 最新留言：{comments[-1]}"
-        return summary
+        return _feedback_rows_to_summary(_fetch_feedback_pg_by_coord(lat, lon, tol=tol))
     except Exception as e:
-        logging.error(f"❌ 查詢回饋統計（座標）錯誤: {e}")
+        logging.error(f"❌ 查詢回饋統計（Neon 座標）錯誤: {e}", exc_info=True)
         return "讀取錯誤"
 
 # === 指示燈索引 ===
@@ -4530,8 +4296,7 @@ def api_badges():
 # === 舊路由保留===
 @app.route("/toilet_feedback/<toilet_name>")
 def toilet_feedback(toilet_name):
-    _ensure_sheets_ready()
-
+    """Legacy name-based feedback page; use coordinate page."""
     liff_id = _get_liff_status_id()
     uid = (request.args.get("uid") or "").strip()
     lang = (request.args.get("lang") or "").strip().lower()
@@ -4543,84 +4308,18 @@ def toilet_feedback(toilet_name):
         qs = request.args.to_dict(flat=True)
         qs["lang"] = lang
         return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
-    if worksheet is None or feedback_sheet is None:
-        return render_template("toilet_feedback.html", toilet_name=toilet_name,
-                               summary="（暫時無法連到雲端資料）",
-                               feedbacks=[], address="", avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
-    try:
-        address = "未知地址"
-        rows = worksheet.get_all_values()
-        data = rows[1:]
-        for row in data:
-            if len(row) > 1 and row[1] == toilet_name:
-                address = (row[2] if len(row) > 2 else "") or "未知地址"
-                break
-
-        if address == "未知地址":
-            return render_template("toilet_feedback.html", toilet_name=toilet_name,
-                                   summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。",
-                                   feedbacks=[], address="", avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
-
-        rows_fb = feedback_sheet.get_all_values()
-        header = rows_fb[0]; data_fb = rows_fb[1:]
-        idx = _feedback_indices(header)
-        if idx["address"] is None:
-            return render_template("toilet_feedback.html", toilet_name=toilet_name,
-                                   summary="（表頭缺少『地址』欄位）", feedbacks=[], address=address,
-                                   avg_pred_score=("N/A" if lang=="en" else "未預測"), lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
-
-        matched = [r for r in data_fb
-                   if len(r) > idx["address"] and (r[idx["address"]] or "").strip() == address.strip()]
-
-        fbs = []
-        nums = []
-        for r in matched:
-            def val(k):
-                i = idx[k]
-                return (r[i] if i is not None and len(r) > i else "").strip()
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            try: nums.append(float(sc))
-            except: pass
-            fbs.append({
-                "rating": val("rating"),
-                "toilet_paper": val("paper"),
-                "accessibility": val("access"),
-                "time_of_use": val("time"),
-                "comment": safe_html(val("comment")),
-                "cleanliness_score": str(sc) if sc is not None else "",
-                "created_at": val("created"),
-            })
-        fbs.sort(key=lambda d: d.get("created_at",""), reverse=True)
-        avg_pred_score = round(sum(nums)/len(nums), 2) if nums else "未預測"
-
-        if matched:
-            paper_counts = {"有": 0, "沒有": 0}
-            access_counts = {"有": 0, "沒有": 0}
-            for r in matched:
-                _, _, pp, aa = _pred_from_row(r, idx)
-                if pp in paper_counts: paper_counts[pp] += 1
-                if aa in access_counts: access_counts[aa] += 1
-            avg = avg_pred_score
-            summary = f"🔍 筆數：{len(matched)}\n🧼 平均清潔分數：{avg}\n🧻 衛生紙：{'有' if paper_counts['有']>=paper_counts['沒有'] else '沒有'}\n♿ 無障礙：{'有' if access_counts['有']>=access_counts['沒有'] else '沒有'}\n"
-        else:
-            summary = "尚無回饋資料"
-
-        return render_template("toilet_feedback.html",
-                               toilet_name=toilet_name, summary=summary,
-                               feedbacks=fbs, address=address,
-                               avg_pred_score=avg_pred_score, lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
-    except Exception as e:
-        logging.error(f"❌ 渲染回饋頁面錯誤: {e}")
-        return "查詢失敗", 500
+    return render_template(
+        "toilet_feedback.html",
+        toilet_name=toilet_name,
+        summary="請改用座標版入口（卡片上的『查詢回饋（座標）』）。",
+        feedbacks=[], address="", avg_pred_score=("N/A" if lang == "en" else "未預測"),
+        lat="", lon="", liff_id=liff_id, uid=uid, lang=(lang if lang in ["en", "zh"] else "zh")
+    )
 
 # === 新路由 ===
 @app.route("/toilet_feedback_by_coord/<lat>/<lon>")
 def toilet_feedback_by_coord(lat, lon):
-    _ensure_sheets_ready()
-
     liff_id = _get_liff_status_id()
-
-    # ✅ 語言：優先用 querystring ?lang=，沒有就用資料庫記錄（需帶 uid）
     uid = (request.args.get("uid") or "").strip()
     lang = (request.args.get("lang") or "").strip().lower()
     if uid and not lang:
@@ -4631,159 +4330,68 @@ def toilet_feedback_by_coord(lat, lon):
         qs = request.args.to_dict(flat=True)
         qs["lang"] = lang
         return redirect(request.path + "?" + urllib.parse.urlencode(qs), code=302)
-    if feedback_sheet is None:
-        return render_template("toilet_feedback.html",
-                               toilet_name=f"廁所（{lat}, {lon}）",
-                               summary="（暫時無法連到雲端資料）",
-                               feedbacks=[], address=f"{lat},{lon}",
-                               avg_pred_score=("N/A" if lang=="en" else "未預測"), lat=lat, lon=lon,
-                               liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh"))
+
+    if not POSTGRES_ENABLED:
+        return render_template(
+            "toilet_feedback.html",
+            toilet_name=f"廁所（{lat}, {lon}）",
+            summary="（回饋資料庫尚未就緒）",
+            feedbacks=[], address=f"{lat},{lon}", avg_pred_score=("N/A" if lang == "en" else "未預測"),
+            lat=lat, lon=lon, liff_id=liff_id, uid=uid, lang=(lang if lang in ["en", "zh"] else "zh")
+        )
+
     try:
         name = f"廁所（{lat}, {lon}）"
         summary = get_feedback_summary_by_coord(lat, lon)
         feedbacks = get_feedbacks_by_coord(lat, lon)
-
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header:
-            header = []
-        if not data:
-            data = []
-
-        idx = _feedback_indices(header)
-
-        def close(a, b, tol=1e-6):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
-
         scores = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                sc, _, _, _ = _pred_from_row(r, idx)
-                if isinstance(sc, (int, float)):
+        for fb in feedbacks:
+            try:
+                sc = fb.get("cleanliness_score")
+                if sc not in (None, ""):
                     scores.append(float(sc))
-        avg_pred_score = round(sum(scores)/len(scores), 2) if scores else "未預測"
-
+            except Exception:
+                pass
+        avg_pred_score = round(sum(scores) / len(scores), 2) if scores else "未預測"
         return render_template(
             "toilet_feedback.html",
-            toilet_name=name,
-            summary=summary,
-            feedbacks=feedbacks,
-            address=f"{lat},{lon}",
-            avg_pred_score=avg_pred_score,
-            lat=lat,
-            lon=lon,
-            liff_id=liff_id, uid=uid, lang=(lang if lang in ["en","zh"] else "zh")
+            toilet_name=name, summary=summary, feedbacks=feedbacks, address=f"{lat},{lon}",
+            avg_pred_score=avg_pred_score, lat=lat, lon=lon,
+            liff_id=liff_id, uid=uid, lang=(lang if lang in ["en", "zh"] else "zh")
         )
     except Exception as e:
-        logging.error(f"❌ 渲染回饋頁面（座標）錯誤: {e}")
+        logging.error(f"❌ 渲染回饋頁面（Neon 座標）錯誤: {e}", exc_info=True)
         return "查詢失敗", 500
 
 # === 清潔度趨勢（名稱版別名） ===
 @app.route("/get_clean_trend/<path:toilet_name>")
 def get_clean_trend_by_name(toilet_name):
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
-        return {"success": True, "data": []}, 200
-
-    try:
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return {"success": True, "data": []}, 200
-        idx = _feedback_indices(header)
-
-        name_idx = idx.get("name")
-        lat_idx = idx.get("lat")
-        lon_idx = idx.get("lon")
-        created_idx = idx.get("created")
-
-        if name_idx is None or lat_idx is None or lon_idx is None:
-            # 表頭缺少必要欄位
-            return {"success": True, "data": []}, 200
-
-        # 找出同名的所有紀錄，取出座標
-        matched = [r for r in data if len(r) > name_idx and (r[name_idx] or "").strip() == toilet_name.strip()]
-        if not matched:
-            return {"success": True, "data": []}, 200
-
-        # 以最新一筆的座標為主
-        if created_idx is not None:
-            matched.sort(key=lambda x: (x[created_idx] if len(x) > created_idx else ""), reverse=True)
-        ref = matched[0]
-        lat = ref[lat_idx] if len(ref) > lat_idx else ""
-        lon = ref[lon_idx] if len(ref) > lon_idx else ""
-
-        # 轉呼叫座標版（邏輯一致）
-        return get_clean_trend_by_coord(lat, lon)
-
-    except Exception as e:
-        logging.error(f"❌ 趨勢 API（名稱版）錯誤: {e}")
-        return {"success": False, "data": []}, 500
+    # Name-based lookup is no longer supported. Use coordinate API instead.
+    return {"success": True, "data": []}, 200
 
 # === 清潔度趨勢 API ===
 @app.route("/get_clean_trend_by_coord/<lat>/<lon>")
 def get_clean_trend_by_coord(lat, lon):
-    _ensure_sheets_ready()
-    if feedback_sheet is None:
-        return {"success": True, "data": []}, 200 
+    if not POSTGRES_ENABLED:
+        return {"success": True, "data": []}, 200
     try:
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return {"success": True, "data": []}, 200
-        
-        idx = _feedback_indices(header)
-
-        if idx["lat"] is None or idx["lon"] is None:
-            return {"success": False, "data": []}, 200
-
-        # ✅ 放寬比對精度到 1e-4
-        def close(a, b, tol=1e-4):
-            try: return abs(float(a) - float(b)) <= tol
-            except: return False
-
-        matched_rows = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
+        rows = _fetch_feedback_pg_by_coord(lat, lon, tol=1e-4)
+        data = []
+        for row in rows:
+            created = row.get("created_at")
+            t = created.isoformat() if hasattr(created, "isoformat") else str(created or "")
+            score = row.get("cleanliness_score")
+            try:
+                if score is None and row.get("rating") is not None:
+                    score = float(row.get("rating"))
+                if score is not None:
+                    data.append({"t": t, "score": round(float(score), 2)})
+            except Exception:
                 continue
-            if close(r[idx["lat"]], lat) and close(r[idx["lon"]], lon):
-                matched_rows.append(r)
-
-        if not matched_rows:
-            return {"success": True, "data": []}, 200
-
-        recomputed = []
-        for r in matched_rows:
-            created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-            sc, rr, pp, aa = _pred_from_row(r, idx)
-            if sc is None:
-                sc = _simple_score(rr, pp, aa)
-            if isinstance(sc, (int, float)):
-                # ✅ 順便把時間也回出去，前端畫圖更穩
-                recomputed.append({"t": created, "score": round(float(sc), 2)})
-
-        if not recomputed:
-            return {"success": True, "data": []}, 200
-
-        # 如果全部分數完全一樣，再嘗試用簡化版分數
-        vals = [p["score"] for p in recomputed]
-        if len(vals) >= 2 and (max(vals) - min(vals) < 1e-6):
-            forced = []
-            for r in matched_rows:
-                created = r[idx["created"]] if idx["created"] is not None and len(r) > idx["created"] else ""
-                _, rr, pp, aa = _pred_from_row(r, idx)
-                sc2 = _simple_score(rr, pp, aa)
-                if sc2 is not None:
-                    forced.append({"t": created, "score": round(float(sc2), 2)})
-            if forced:
-                recomputed = forced
-
-        # ✅ 確保時間排序
-        recomputed.sort(key=lambda d: d["t"])
-        return {"success": True, "data": recomputed}, 200
-
+        data.sort(key=lambda d: d["t"])
+        return {"success": True, "data": data}, 200
     except Exception as e:
-        logging.error(f"❌ 趨勢 API（座標）錯誤: {e}")
+        logging.error(f"❌ 趨勢 API（Neon 座標版）錯誤: {e}", exc_info=True)
         return {"success": False, "data": []}, 500
 
 # === AI 回饋摘要頁面 ===
@@ -4867,18 +4475,14 @@ import json
 
 @app.route("/api/ai_feedback_summary/<lat>/<lon>")
 def api_ai_feedback_summary(lat, lon):
-    """
-    依照座標讀取 feedback_sheet 的回饋紀錄，
-    丟給 OpenAI 做摘要，依使用者語言回傳中 / 英文 JSON。
-    """
-    uid = (request.args.get("uid") or "").strip()  # ✅ 先放最前面，避免 except 用不到 uid
+    """Read feedback from Neon/Postgres and ask OpenAI for a summary."""
+    uid = (request.args.get("uid") or "").strip()
 
     try:
-        _ensure_sheets_ready()
-        if feedback_sheet is None:
+        if not POSTGRES_ENABLED:
             return jsonify({
                 "success": False,
-                "message": L(uid, "回饋表尚未就緒，請稍後再試", "Feedback sheet not ready, please try again later")
+                "message": L(uid, "回饋資料庫尚未就緒，請稍後再試", "Feedback storage not ready, please try again later")
             }), 503
 
         if client is None:
@@ -4887,10 +4491,7 @@ def api_ai_feedback_summary(lat, lon):
                 "message": L(uid, "AI 金鑰尚未設定", "AI key not configured")
             }), 500
 
-        # === 語言判斷 ===
         lang = resolve_lang(uid=uid, lang=request.args.get("lang"))
-
-        # ✅ 讓 system 也跟語言一致（避免混語）
         lang_rule = "請使用繁體中文回答。" if lang != "en" else "Please answer in English."
         system_msg = (
             f"You analyze restroom feedback and summarize it clearly. {lang_rule}"
@@ -4898,56 +4499,24 @@ def api_ai_feedback_summary(lat, lon):
             else f"你負責分析廁所回饋並清楚摘要重點。{lang_rule}"
         )
 
-        # 驗證 lat / lon
-        try:
-            lat_f = float(lat)
-            lon_f = float(lon)
-        except Exception:
+        lat_f, lon_f = _parse_lat_lon(lat, lon)
+        if lat_f is None or lon_f is None:
             return jsonify({
                 "success": False,
                 "message": L(uid, "lat/lon 格式錯誤", "Invalid latitude / longitude")
             }), 400
 
-        # 1️⃣ 從雲端回饋表抓資料
-        header, data = _get_header_and_tail(feedback_sheet, MAX_SHEET_ROWS)
-        if not header or not data:
-            return jsonify({
-                "success": True,
-                "summary": "",  # 讓前端依 lang 顯示自己的 no_data 文案，避免混語
-                "data": [],
-                "has_data": False
-            }), 200
-
-        idx = _feedback_indices(header)
-        if idx["lat"] is None or idx["lon"] is None:
-            return jsonify({
-                "success": False,
-                "message": L(uid, "缺少 lat/lon 欄位", "lat/lon column missing")
-            }), 400
-
-        def close(a, b, tol=1e-4):
-            try:
-                return abs(float(a) - float(b)) <= tol
-            except Exception:
-                return False
-
         matched = []
-        for r in data:
-            if len(r) <= max(idx["lat"], idx["lon"]):
-                continue
-            if not (close(r[idx["lat"]], lat_f) and close(r[idx["lon"]], lon_f)):
-                continue
-
-            def v(key):
-                i = idx.get(key)
-                return (r[i] if i is not None and i < len(r) else "").strip()
-
+        rows = _fetch_feedback_pg_by_coord(lat_f, lon_f, tol=1e-4, limit=FEEDBACK_LOOKBACK_LIMIT)
+        for row in rows:
+            created = row.get("created_at")
+            created_s = created.isoformat() if hasattr(created, "isoformat") else str(created or "")
             matched.append({
-                "rating":     v("rating"),
-                "paper":      v("paper"),
-                "access":     v("access"),
-                "comment":    v("comment"),
-                "created_at": v("created"),
+                "rating": str(row.get("rating") or ""),
+                "paper": row.get("toilet_paper") or "",
+                "access": row.get("accessibility") or "",
+                "comment": row.get("comment") or "",
+                "created_at": created_s,
             })
 
         if not matched:
@@ -7566,7 +7135,7 @@ def handle_text(event):
             reply_messages.append(TextSendMessage(text=L(uid, "你還沒有新增過廁所喔。", "You haven't added any toilets yet.")))
 
     elif cmd == "add":
-        base = "https://school-i9co.onrender.com/add"
+        base = f"{_base_url()}/add"
         loc = get_user_location(uid)
         if loc:
             la, lo = loc
@@ -8022,7 +7591,7 @@ def handle_postback(event):
 
             # 新增廁所
             if cmd == "add":
-                base = "https://school-i9co.onrender.com/add"
+                base = f"{_base_url()}/add"
                 loc = get_user_location(uid)
                 if loc:
                     la, lo = loc
@@ -8168,253 +7737,13 @@ def render_add_page():
         preset_lon=lon
     )
 
-# === Sheets 寫入保護：超過 1e7 cells 就 fallback 到本機儲存 ===
-_toilet_sheet_over_quota = False
-_toilet_sheet_over_quota_ts = 0
-
-def _fallback_store_toilet_row_locally(row_values):
-    # CSV + SQLite 都不是 thread-safe，需要鎖住整段
-    with _fallback_lock:
-
-        # 1) 附加到 public_toilets.csv
-        try:
-            if not os.path.exists(TOILETS_FILE_PATH):
-                with open(TOILETS_FILE_PATH, "w", encoding="utf-8", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(PUBLIC_HEADERS)
-
-            header = ensure_toilet_sheet_header(worksheet)
-            idx = {h:i for i,h in enumerate(header)}
-
-            def v(col):
-                try:
-                    return row_values[idx[col]]
-                except Exception:
-                    return ""
-
-            name = v("name")
-            addr = v("address")
-            lat_s = v("lat")
-            lon_s = v("lon")
-
-            with open(TOILETS_FILE_PATH, "a", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "00000","0000000","未知里","USERADD",
-                    name, addr, "使用者補充",
-                    lat_s, lon_s,
-                    "普通級","公共場所","未知","使用者","0"
-                ])
-
-        except Exception as e:
-            logging.warning(f"備份至本地 CSV 失敗：{e}")
-
-        # 2) 寫入 Postgres / SQLite
-        try:
-            header = ensure_toilet_sheet_header(worksheet)
-            idx = {h:i for i,h in enumerate(header)}
-
-            def v(col):
-                try:
-                    return row_values[idx[col]]
-                except:
-                    return ""
-
-            if POSTGRES_ENABLED:
-                conn = _pg_connect()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO user_toilets (
-                        user_id, name, address, lat, lon,
-                        level, floor_hint, entrance_hint,
-                        access_note, open_hours, created_at, updated_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    v("user_id"), v("name"), v("address"),
-                    float(v("lat")), float(v("lon")),
-                    v("level"), v("floor_hint"), v("entrance_hint"),
-                    v("access_note"), v("open_hours"),
-                    datetime.utcnow(), datetime.utcnow()
-                ))
-                conn.commit()
-                conn.close()
-            else:
-                conn = sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-                cur = conn.cursor()
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS user_toilets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT, name TEXT, address TEXT,
-                    lat TEXT, lon TEXT,
-                    level TEXT, floor_hint TEXT, entrance_hint TEXT,
-                    access_note TEXT, open_hours TEXT, timestamp TEXT
-                )
-                """)
-                cur.execute("""
-                    INSERT INTO user_toilets (
-                        user_id, name, address, lat, lon,
-                        level, floor_hint, entrance_hint,
-                        access_note, open_hours, timestamp
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    v("user_id"), v("name"), v("address"),
-                    v("lat"), v("lon"),
-                    v("level"), v("floor_hint"), v("entrance_hint"),
-                    v("access_note"), v("open_hours"),
-                    v("timestamp")
-                ))
-                conn.commit()
-                conn.close()
-
-        except Exception as e:
-            logging.warning(f"備份至資料庫失敗：{e}")
-
-def _append_toilet_row_safely(ws, row_values):
-    global _toilet_sheet_over_quota, _toilet_sheet_over_quota_ts
-
-    if _toilet_sheet_over_quota:
-        _fallback_store_toilet_row_locally(row_values)
-        return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
-
-    try:
-        with _gsheet_lock:
-            ws.append_row(row_values, value_input_option="USER_ENTERED")
-        return ("ok", "已寫入 Google 試算表")
-
-    except Exception as e:
-        s = str(e)
-        if "10000000" in s or "above the limit" in s:
-            logging.error("🧱 Google 試算表達到 1e7 cells 上限，啟用本機暫存。")
-            _toilet_sheet_over_quota = True
-            _toilet_sheet_over_quota_ts = time.time()
-            logging.error("❌ Sheets 已滿，SQLite fallback 已停用，請處理資料儲存策略")
-            return ("fallback", "Google 試算表已達儲存上限，改為暫存本機。")
-
-        raise
-
-def _get_db():
-    return sqlite3.connect(CACHE_DB_PATH, timeout=5, check_same_thread=False)
-
-def _ensure_pending_table():
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS pending_gsheet (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        payload_json TEXT NOT NULL,
-        created_ts REAL
-    )
-    """)
-    conn.commit(); conn.close()
-
-_ensure_pending_table()
-
-# === 查詢紀錄 search_log ===
-def _ensure_search_table():
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS search_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        lat TEXT,
-        lon TEXT,
-        ts TEXT
-    )
-    """)
-    conn.commit()
-    conn.close()
-
-_ensure_search_table()
-
-def _ensure_user_lang_table():
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS user_lang (
-        user_id TEXT PRIMARY KEY,
-        lang TEXT
-    )
-    """)
-    conn.commit()
-    conn.close()
-
-_ensure_user_lang_table()
-
-def _ensure_search_index():
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_search_user ON search_log(user_id)")
-    conn.commit()
-    conn.close()
-
-_ensure_search_index()
-# === 查詢紀錄 search_log ===
-def _ensure_ai_quota_table():
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS ai_quota (
-        key TEXT,
-        date TEXT,
-        count INTEGER,
-        PRIMARY KEY(key, date)
-    )
-    """)
-    conn.commit()
-    conn.close()
-
-_ensure_ai_quota_table()
-
-def _queue_pending_row(row_values):
-    try:
-        conn = _get_db(); cur = conn.cursor()
-        cur.execute("INSERT INTO pending_gsheet (payload_json, created_ts) VALUES (?, ?)",
-                    (json.dumps(row_values, ensure_ascii=False), time.time()))
-        conn.commit(); conn.close()
-    except Exception as e:
-        logging.warning(f"queue pending failed: {e}")
-
-def _drain_pending(limit=200):
-    _ensure_sheets_ready()
-    if worksheet is None:
-        return 0, "worksheet not ready"
-
-    conn = _get_db(); cur = conn.cursor()
-    cur.execute("SELECT id, payload_json FROM pending_gsheet ORDER BY id ASC LIMIT ?", (limit,))
-    rows = cur.fetchall()
-    if not rows:
-        conn.close(); return 0, "empty"
-
-    ok = 0
-    for row_id, payload in rows:
-        try:
-            vals = json.loads(payload)
-            with _gsheet_lock:
-                worksheet.append_row(vals, value_input_option="USER_ENTERED")
-            cur.execute("DELETE FROM pending_gsheet WHERE id=?", (row_id,))
-            ok += 1
-        except Exception as e:
-            logging.warning(f"backfill append failed: {e}")
-            break
-    conn.commit(); conn.close()
-    return ok, "done"
-
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
-
-@app.route("/admin/backfill", methods=["POST"])
-def admin_backfill():
-    token = (request.headers.get("X-Admin-Token") or "").strip()
-    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
-        return {"ok": False, "message": "unauthorized"}, 401
-
-    n, note = _drain_pending(limit=500)
-    return {"ok": True, "written": n, "note": note}, 200
 
 @app.route("/api/events")
 def api_events():
+    if not _maintenance_auth_ok():
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+
     conn = _get_db()
     cur = conn.cursor()
 
@@ -8447,6 +7776,9 @@ def api_events():
 
 @app.route("/api/line-insights")
 def api_line_insights():
+    if not _maintenance_auth_ok():
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+
     try:
         headers = {
             "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
@@ -9204,7 +8536,6 @@ def submit_toilet():
         return {"success": False, "message": "資料庫尚未啟用，無法新增廁所"}, 503
     try:
         data = request.get_json(force=True, silent=False) or {}
-        logging.info(f"📥 收到表單資料: {data}")
 
         uid   = (data.get("user_id") or "web").strip()
         name  = (data.get("name") or "").strip()
@@ -9218,6 +8549,7 @@ def submit_toilet():
 
         lat_in = (data.get("lat") or "").strip()
         lon_in = (data.get("lon") or "").strip()
+        logging.info(f"📥 收到新增廁所表單: name={name!r}, lat={lat_in!r}, lon={lon_in!r}")
 
         # 必填檢查
         if not name or not addr:
@@ -9345,8 +8677,7 @@ def submit_toilet():
 # === Admin：重新自動判定既有使用者新增資料 ===
 @app.route("/admin/reverify-user-toilets", methods=["POST", "GET"])
 def admin_reverify_user_toilets():
-    token = (request.headers.get("X-Admin-Token") or request.args.get("token") or "").strip()
-    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+    if not _maintenance_auth_ok():
         return jsonify({"ok": False, "message": "unauthorized"}), 401
     if not POSTGRES_ENABLED:
         return jsonify({"ok": False, "message": "postgres disabled"}), 503
@@ -9476,8 +8807,25 @@ def _parse_similar_toilets_value(value):
 
 
 def _maintenance_auth_ok():
-    token = (request.headers.get("X-Admin-Token") or request.args.get("token") or "").strip()
-    return (not ADMIN_TOKEN) or token == ADMIN_TOKEN
+    if not ADMIN_TOKEN:
+        logging.critical("ADMIN_TOKEN not set; rejecting admin request")
+        return False
+
+    json_token = ""
+    try:
+        data = request.get_json(silent=True) if request.is_json else None
+        if isinstance(data, dict):
+            json_token = data.get("token") or ""
+    except Exception:
+        json_token = ""
+
+    token = (
+        request.headers.get("X-Admin-Token")
+        or request.args.get("token")
+        or json_token
+        or ""
+    ).strip()
+    return token == ADMIN_TOKEN
 
 
 @app.route("/api/maintenance-summary", methods=["GET"])
@@ -9810,13 +9158,7 @@ def api_user_toilet_review():
     """
     try:
         data = request.get_json(silent=True) or {}
-        token = (
-            request.headers.get("X-Admin-Token")
-            or data.get("token")
-            or request.args.get("token")
-            or ""
-        ).strip()
-        if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        if not _maintenance_auth_ok():
             return jsonify({"ok": False, "message": "unauthorized"}), 401
         if not POSTGRES_ENABLED:
             return jsonify({"ok": False, "message": "postgres disabled"}), 503
@@ -9956,12 +9298,6 @@ def dashboard_maintenance():
     return render_template("maintenance.html")
 
 
-# === Migration endpoints removed after Google Sheets → Neon migration completed ===
-@app.route("/admin/migrate-sheets-to-neon", methods=["POST", "GET"])
-def admin_migrate_sheets_to_neon_disabled():
-    return jsonify({"ok": False, "error": "migration endpoint disabled"}), 410
-
-
 # === 背景排程（預留） ===
 def auto_predict_cleanliness_background():
     while True:
@@ -9973,7 +9309,9 @@ def auto_predict_cleanliness_background():
 
 # === 啟動 ===
 if __name__ == "__main__":
-    threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
+    # auto_predict_cleanliness_background is currently log-only, so keep it disabled
+    # to avoid wasting a background thread and polluting production logs.
+    # threading.Thread(target=auto_predict_cleanliness_background, daemon=True).start()
     threading.Thread(target=_self_keepalive_background, daemon=True).start()
 
     port = int(os.getenv("PORT", 10000))
