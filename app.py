@@ -2289,7 +2289,40 @@ def create_analytics_tables():
     conn.close()
 
 create_analytics_tables()
-init_persistent_store()
+
+# === Postgres startup init ===
+# IMPORTANT for Render/Gunicorn:
+# Do NOT run init_persistent_store() synchronously during module import.
+# Gunicorn must finish importing `app:app` quickly so Render can detect the bound port.
+# Running Neon/Postgres DDL at import time can delay startup enough to trigger
+# "Port scan timeout reached, no open ports detected".
+#
+# We start it in a daemon background thread instead. The CREATE TABLE / INDEX
+# statements are idempotent, so if Gunicorn starts multiple workers, duplicate
+# background init attempts are safe.
+_PERSISTENT_INIT_STARTED = False
+_PERSISTENT_INIT_LOCK = threading.Lock()
+
+def _start_persistent_store_init_background():
+    global _PERSISTENT_INIT_STARTED
+    with _PERSISTENT_INIT_LOCK:
+        if _PERSISTENT_INIT_STARTED:
+            return
+        _PERSISTENT_INIT_STARTED = True
+
+    def _job():
+        try:
+            init_persistent_store()
+        except Exception as e:
+            logging.error(f"❌ background init_persistent_store failed: {e}", exc_info=True)
+
+    try:
+        threading.Thread(target=_job, name="postgres-init", daemon=True).start()
+        logging.info("⏳ Postgres init scheduled in background")
+    except Exception as e:
+        logging.error(f"❌ failed to start Postgres init thread: {e}", exc_info=True)
+
+_start_persistent_store_init_background()
 
 def log_analytics_event(
     user_id=None,
