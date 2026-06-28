@@ -3,1161 +3,216 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>公共設施需求缺口地圖儀表板｜Eason Systems</title>
-
-  <!--
-    Phase 1A: single-file dashboard template.
-    CSP note: app.py's non-LIFF CSP allows external scripts from unpkg/cdnjs/jsdelivr,
-    but external stylesheets may be blocked. Therefore the required Leaflet CSS subset
-    is embedded below instead of using a CDN stylesheet.
-  -->
+  <title>公共設施需求缺口地圖｜Eason Systems</title>
   <style>
-    /* ===== Minimal Leaflet CSS subset, embedded for CSP compatibility ===== */
-    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{-webkit-user-select:none;-moz-user-select:none;user-select:none;-webkit-user-drag:none}.leaflet-tile::selection{background:transparent}.leaflet-safari .leaflet-tile{image-rendering:-webkit-optimize-contrast}.leaflet-safari .leaflet-tile-container{width:1600px;height:1600px;-webkit-transform-origin:0 0}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container .leaflet-overlay-pane svg{max-width:none!important;max-height:none!important}.leaflet-container .leaflet-marker-pane img,.leaflet-container .leaflet-shadow-pane img,.leaflet-container .leaflet-tile-pane img,.leaflet-container img.leaflet-image-layer,.leaflet-container .leaflet-tile{max-width:none!important;max-height:none!important;width:auto;padding:0}.leaflet-container.leaflet-touch-zoom{touch-action:pan-x pan-y}.leaflet-container.leaflet-touch-drag{touch-action:none;touch-action:pinch-zoom}.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom{touch-action:none}.leaflet-container{font-family:inherit;background:#08111f;outline-offset:1px}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}.leaflet-map-pane canvas{z-index:100}.leaflet-map-pane svg{z-index:200}.leaflet-vml-shape{width:1px;height:1px}.lvml{behavior:url(#default#VML);display:inline-block;position:absolute}.leaflet-control{position:relative;z-index:800;pointer-events:visiblePainted;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:12px}.leaflet-bottom .leaflet-control{margin-bottom:12px}.leaflet-left .leaflet-control{margin-left:12px}.leaflet-right .leaflet-control{margin-right:12px}.leaflet-fade-anim .leaflet-popup{opacity:0;transition:opacity .2s linear}.leaflet-fade-anim .leaflet-map-pane .leaflet-popup{opacity:1}.leaflet-zoom-animated{transform-origin:0 0}.leaflet-zoom-anim .leaflet-zoom-animated{transition:transform .25s cubic-bezier(0,0,.25,1)}.leaflet-zoom-anim .leaflet-tile,.leaflet-pan-anim .leaflet-tile{transition:none}.leaflet-zoom-anim .leaflet-zoom-hide{visibility:hidden}.leaflet-interactive{cursor:pointer}.leaflet-grab{cursor:grab}.leaflet-crosshair,.leaflet-crosshair .leaflet-interactive{cursor:crosshair}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{padding:1px;text-align:left;border-radius:14px;background:#0b1426;color:#e5edf8;box-shadow:0 20px 70px rgba(0,0,0,.45),0 0 0 1px rgba(148,163,184,.18)}.leaflet-popup-content{margin:14px 16px;line-height:1.4;font-size:13px;min-width:220px}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-top:-1px;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#0b1426;box-shadow:0 0 0 1px rgba(148,163,184,.18)}.leaflet-container a.leaflet-popup-close-button{position:absolute;top:0;right:0;border:none;text-align:center;width:28px;height:28px;font:20px/28px Tahoma,Verdana,sans-serif;color:#94a3b8;text-decoration:none;background:transparent}.leaflet-container a.leaflet-popup-close-button:hover{color:#f8fafc}.leaflet-control-zoom a{display:block;text-align:center;text-decoration:none;width:34px;height:34px;line-height:34px;background:rgba(15,23,42,.92);color:#e5edf8;border-bottom:1px solid rgba(148,163,184,.18);font-size:22px;box-shadow:0 10px 30px rgba(0,0,0,.22)}.leaflet-control-zoom a:first-child{border-radius:10px 10px 0 0}.leaflet-control-zoom a:last-child{border-bottom:0;border-radius:0 0 10px 10px}.leaflet-control-attribution{padding:4px 8px;background:rgba(15,23,42,.72);color:#94a3b8;font-size:10px;border-radius:10px}.leaflet-control-attribution a{color:#cbd5e1}.leaflet-control-scale-line{border:2px solid #777;border-top:none;line-height:1.1;padding:2px 5px;background:rgba(255,255,255,.8)}
+    /* Minimal Leaflet CSS subset, kept inline for the current CSP. */
+    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img.leaflet-tile,.leaflet-container .leaflet-marker-pane img,.leaflet-container img.leaflet-image-layer{max-width:none!important;max-height:none!important}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:14px}.leaflet-bottom .leaflet-control{margin-bottom:14px}.leaflet-left .leaflet-control{margin-left:14px}.leaflet-right .leaflet-control{margin-right:14px}.leaflet-zoom-animated{transform-origin:0 0}.leaflet-interactive{cursor:pointer}.leaflet-grab{cursor:grab}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{padding:1px;text-align:left;border-radius:18px;background:#fff;color:#152033;box-shadow:0 22px 70px rgba(23,36,56,.22),0 0 0 1px rgba(17,24,39,.09)}.leaflet-popup-content{margin:15px 16px;line-height:1.5;font-size:13px;min-width:240px}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff}.leaflet-container a.leaflet-popup-close-button{position:absolute;top:0;right:0;border:none;text-align:center;width:30px;height:30px;font:22px/30px Tahoma,Verdana,sans-serif;color:#64748b;text-decoration:none;background:transparent}.leaflet-control-zoom a{display:block;text-align:center;text-decoration:none;width:38px;height:38px;line-height:38px;background:#fff;color:#172033;border-bottom:1px solid rgba(17,24,39,.12);font-size:22px;box-shadow:0 12px 28px rgba(23,36,56,.16)}.leaflet-control-zoom a:first-child{border-radius:12px 12px 0 0}.leaflet-control-zoom a:last-child{border-radius:0 0 12px 12px;border-bottom:0}.leaflet-control-attribution{padding:5px 9px;background:rgba(255,255,255,.82);color:#64748b;font-size:10px;border-radius:999px}.leaflet-control-attribution a{color:#475569}.leaflet-container{font-family:inherit;background:#eef2f1;outline:none}
 
-    :root {
-      --bg: #f4f1e8;
-      --bg2: #e8edf0;
-      --paper: rgba(255, 255, 255, 0.86);
-      --paper-solid: #ffffff;
-      --panel: rgba(255, 255, 255, 0.84);
-      --panel2: rgba(250, 252, 252, 0.72);
-      --line: rgba(31, 41, 55, 0.12);
-      --line2: rgba(31, 41, 55, 0.08);
-      --text: #172033;
-      --muted: #5d6b7c;
-      --muted2: #8792a0;
-      --red: #dc2626;
-      --red2: #b91c1c;
-      --amber: #d97706;
-      --blue: #2563eb;
-      --slate: #64748b;
-      --green: #059669;
-      --cyan: #0e7490;
-      --purple: #7c3aed;
-      --sand: #d9b76f;
-      --shadow: 0 22px 70px rgba(29, 43, 62, .16);
-      --soft-shadow: 0 12px 34px rgba(29, 43, 62, .10);
-      --radius: 24px;
+    :root{
+      --ink:#152033; --muted:#64748b; --sub:#8a97a8; --line:rgba(15,23,42,.10);
+      --paper:rgba(255,255,255,.86); --white:#fff; --cream:#f4efe4; --teal:#0f766e;
+      --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6; --slate:#94a3b8; --green:#10b981;
+      --shadow:0 24px 70px rgba(31,48,70,.14); --soft:0 12px 32px rgba(31,48,70,.09);
+      --radius:24px;
     }
-
-    * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
-    body {
-      margin: 0;
-      color: var(--text);
+    *{box-sizing:border-box} html,body{min-height:100%}
+    body{
+      margin:0; color:var(--ink);
+      font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;
       background:
-        linear-gradient(90deg, rgba(15, 118, 110, .055) 1px, transparent 1px),
-        linear-gradient(0deg, rgba(15, 118, 110, .055) 1px, transparent 1px),
-        radial-gradient(circle at 14% 10%, rgba(217, 119, 6, .16), transparent 28%),
-        radial-gradient(circle at 92% 6%, rgba(14, 116, 144, .14), transparent 30%),
-        radial-gradient(circle at 80% 90%, rgba(22, 163, 74, .10), transparent 32%),
-        linear-gradient(135deg, #f7f3e8 0%, #eef3f5 44%, #f6f8f3 100%);
-      background-size: 42px 42px, 42px 42px, auto, auto, auto, auto;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
-      letter-spacing: .01em;
+        radial-gradient(circle at 13% 6%, rgba(245,158,11,.12), transparent 28%),
+        radial-gradient(circle at 88% 10%, rgba(15,118,110,.10), transparent 32%),
+        linear-gradient(90deg, rgba(15,118,110,.045) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(15,118,110,.045) 1px, transparent 1px),
+        linear-gradient(135deg,#f7f2e8 0%,#eef3f4 48%,#f8faf7 100%);
+      background-size:auto,auto,40px 40px,40px 40px,auto;
     }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(115deg, transparent 0 58%, rgba(15, 118, 110, .07) 58% 58.4%, transparent 58.4%),
-        linear-gradient(22deg, transparent 0 68%, rgba(217, 119, 6, .10) 68% 68.45%, transparent 68.45%);
-      opacity: .72;
-      z-index: -1;
+    a{color:inherit} button{font:inherit}
+    .page{width:min(1640px,calc(100% - 28px)); margin:0 auto; padding:18px 0 38px}
+    .topbar{
+      display:flex; justify-content:space-between; align-items:center; gap:18px;
+      background:linear-gradient(120deg,rgba(255,255,255,.95),rgba(255,255,255,.75));
+      border:1px solid rgba(15,23,42,.10); border-radius:26px; padding:18px 20px; box-shadow:var(--shadow); backdrop-filter:blur(18px);
+      position:relative; overflow:hidden;
     }
-
-    a { color: inherit; }
-    button, select { font: inherit; }
-
-    .dashboard {
-      width: min(1520px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 24px 0 42px;
-    }
-
-    .topbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 18px;
-      padding: 20px 22px;
-      border: 1px solid rgba(22, 78, 99, .16);
-      background:
-        linear-gradient(115deg, rgba(255,255,255,.94), rgba(255,255,255,.72)),
-        linear-gradient(90deg, rgba(14,116,144,.09), rgba(217,119,6,.08));
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(16px);
-      position: relative;
-      overflow: hidden;
-    }
-    .topbar::before {
-      content: "";
-      position: absolute;
-      left: -80px;
-      bottom: -100px;
-      width: 270px;
-      height: 270px;
-      border-radius: 999px;
-      border: 36px solid rgba(14, 116, 144, .08);
-      pointer-events: none;
-    }
-    .topbar::after {
-      content: "GIS / GAP INTELLIGENCE";
-      position: absolute;
-      right: 22px;
-      bottom: 10px;
-      color: rgba(23, 32, 51, .055);
-      font-size: clamp(34px, 5.2vw, 78px);
-      font-weight: 950;
-      letter-spacing: -.06em;
-      pointer-events: none;
-      white-space: nowrap;
-    }
-    .titleblock { position: relative; z-index: 1; }
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
-      color: #0f766e;
-      font-size: 12px;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      font-weight: 900;
-    }
-    .pulse-dot {
-      width: 9px; height: 9px; border-radius: 999px; background: #d97706;
-      box-shadow: 0 0 0 0 rgba(217,119,6,.55);
-      animation: pulseDot 1.9s infinite;
-    }
-    @keyframes pulseDot {
-      0% { box-shadow: 0 0 0 0 rgba(217,119,6,.42); }
-      70% { box-shadow: 0 0 0 10px rgba(217,119,6,0); }
-      100% { box-shadow: 0 0 0 0 rgba(217,119,6,0); }
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(24px, 3vw, 38px);
-      line-height: 1.08;
-      letter-spacing: -0.04em;
-      color: #122033;
-    }
-    .subtitle {
-      margin: 9px 0 0;
-      color: var(--muted);
-      font-size: 14px;
-      max-width: 760px;
-      line-height: 1.7;
-    }
-
-    .controls {
-      position: relative;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .control, .btn {
-      border: 1px solid rgba(22, 78, 99, .18);
-      background: rgba(255, 255, 255, .84);
-      color: #172033;
-      border-radius: 15px;
-      padding: 10px 12px;
-      min-height: 42px;
-      outline: none;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.75), 0 8px 24px rgba(29,43,62,.08);
-    }
-    select.control { cursor: pointer; }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      cursor: pointer;
-      transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
-      font-weight: 800;
-    }
-    .btn:hover { transform: translateY(-1px); border-color: rgba(217,119,6,.45); background: #fffaf1; box-shadow: 0 13px 28px rgba(217,119,6,.13); }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      border: 1px solid rgba(22, 78, 99, .13);
-      background: rgba(255, 255, 255, .78);
-      color: #536174;
-      border-radius: 999px;
-      padding: 9px 11px;
-      font-size: 12px;
-      white-space: nowrap;
-      box-shadow: 0 6px 18px rgba(29,43,62,.06);
-    }
-
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(160px, 1fr));
-      gap: 14px;
-      margin: 16px 0;
-    }
-    .kpi {
-      position: relative;
-      overflow: hidden;
-      border: 1px solid rgba(31,41,55,.10);
-      background: rgba(255,255,255,.82);
-      border-radius: 22px;
-      padding: 16px 16px 15px;
-      min-height: 118px;
-      box-shadow: var(--soft-shadow);
-      backdrop-filter: blur(14px);
-    }
-    .kpi::before {
-      content: "";
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 5px;
-      background: var(--accent, rgba(14,116,144,.45));
-    }
-    .kpi::after {
-      content: "";
-      position: absolute;
-      right: -48px; top: -48px;
-      width: 126px; height: 126px;
-      border-radius: 999px;
-      background: var(--accent, rgba(14,116,144,.18));
-      opacity: .5;
-    }
-    .kpi-label {
-      position: relative; z-index: 1;
-      color: #667085;
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-    }
-    .kpi-value {
-      position: relative; z-index: 1;
-      margin-top: 8px;
-      font-size: clamp(26px, 3.4vw, 38px);
-      line-height: 1;
-      font-weight: 950;
-      letter-spacing: -.04em;
-      color: #172033;
-    }
-    .kpi-sub {
-      position: relative; z-index: 1;
-      margin-top: 10px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .main-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 390px;
-      gap: 16px;
-      align-items: stretch;
-    }
-
-    .map-card, .side-card, .table-card, .method-card {
-      border: 1px solid rgba(31,41,55,.10);
-      background: rgba(255,255,255,.78);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(16px);
-    }
-
-    .map-card {
-      padding: 14px;
-      min-height: 660px;
-      position: relative;
-      overflow: hidden;
-    }
-    .map-toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    .section-title {
-      margin: 0;
-      font-size: 16px;
-      letter-spacing: -.02em;
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      color: #172033;
-    }
-    .legend-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .legend-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 9px;
-      border-radius: 999px;
-      border: 1px solid rgba(31,41,55,.10);
-      color: #536174;
-      background: rgba(255,255,255,.72);
-      font-size: 11px;
-      white-space: nowrap;
-      box-shadow: 0 5px 14px rgba(29,43,62,.06);
-    }
-    .legend-dot { width: 8px; height: 8px; border-radius: 99px; background: var(--c); box-shadow: 0 0 14px color-mix(in srgb, var(--c), transparent 35%); }
-
-    #gapMap {
-      position: relative;
-      width: 100%;
-      height: 592px;
-      border-radius: 20px;
-      border: 1px solid rgba(31,41,55,.14);
-      overflow: hidden;
-      background: #eaf0ee;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.65), 0 18px 50px rgba(29,43,62,.15);
-    }
-
-    .layer-panel {
-      position: absolute;
-      right: 28px;
-      top: 72px;
-      z-index: 900;
-      display: grid;
-      gap: 8px;
-      width: 194px;
-      padding: 12px;
-      border-radius: 17px;
-      border: 1px solid rgba(31,41,55,.14);
-      background: rgba(255,255,255,.86);
-      box-shadow: 0 18px 45px rgba(29,43,62,.18);
-      backdrop-filter: blur(14px);
-    }
-    .layer-panel strong { font-size: 12px; color: #334155; letter-spacing: .08em; text-transform: uppercase; }
-    .layer-toggle {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: #536174;
-      font-size: 13px;
-      cursor: pointer;
-      user-select: none;
-    }
-    .layer-toggle input { accent-color: #d97706; }
-
-    .map-overlay {
-      position: absolute;
-      inset: 14px;
-      border-radius: 20px;
-      pointer-events: none;
-      z-index: 850;
-      display: none;
-      place-items: center;
-      background: radial-gradient(circle at center, rgba(255,255,255,.86), rgba(245,241,232,.74));
-      border: 1px solid rgba(31,41,55,.10);
-      text-align: center;
-      padding: 30px;
-    }
-    .map-overlay.show { display: grid; }
-    .empty-box {
-      max-width: 520px;
-      padding: 22px;
-      border-radius: 20px;
-      border: 1px solid rgba(31,41,55,.12);
-      background: rgba(255,255,255,.88);
-      color: #172033;
-      box-shadow: 0 20px 54px rgba(29,43,62,.14);
-    }
-    .empty-box h3 { margin: 0 0 8px; font-size: 22px; }
-    .empty-box p { margin: 0; color: var(--muted); line-height: 1.65; }
-
-    .side-card {
-      padding: 14px;
-      min-height: 660px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .side-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      padding: 4px 2px 12px;
-      border-bottom: 1px solid rgba(31,41,55,.10);
-    }
-    .priority-list {
-      overflow: auto;
-      padding: 12px 4px 4px 0;
-      display: grid;
-      gap: 10px;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(31,41,55,.25) transparent;
-    }
-    .priority-item {
-      border: 1px solid rgba(31,41,55,.10);
-      background: rgba(255,255,255,.74);
-      border-radius: 18px;
-      padding: 13px;
-      cursor: pointer;
-      transition: transform .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
-      position: relative;
-      overflow: hidden;
-      box-shadow: 0 8px 22px rgba(29,43,62,.06);
-    }
-    .priority-item:hover, .priority-item.active {
-      transform: translateY(-1px);
-      border-color: rgba(217,119,6,.38);
-      background: #fffaf1;
-      box-shadow: 0 16px 34px rgba(217,119,6,.12);
-    }
-    .priority-item::before {
-      content: "";
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 5px;
-      background: var(--severity, #0e7490);
-    }
-    .priority-top {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-    }
-    .rank {
-      flex: 0 0 auto;
-      width: 42px; height: 42px;
-      border-radius: 14px;
-      display: grid;
-      place-items: center;
-      background: var(--severity, #0e7490);
-      color: #fff;
-      font-weight: 950;
-      box-shadow: 0 8px 20px color-mix(in srgb, var(--severity, #0e7490), transparent 70%);
-    }
-    .priority-main { min-width: 0; flex: 1; }
-    .area-name {
-      font-weight: 850;
-      font-size: 15px;
-      line-height: 1.25;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: #172033;
-    }
-    .action-label {
-      margin-top: 5px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .level-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 9px;
-      border: 1px solid rgba(31,41,55,.10);
-      background: rgba(255,255,255,.72);
-      color: #172033;
-      padding: 5px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-    .stats-row {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 7px;
-      margin-top: 11px;
-    }
-    .mini-stat {
-      border: 1px solid rgba(31,41,55,.09);
-      background: rgba(247,250,250,.76);
-      border-radius: 12px;
-      padding: 8px;
-    }
-    .mini-stat b { display: block; font-size: 14px; line-height: 1; color: #172033; }
-    .mini-stat span { display: block; color: #8792a0; font-size: 10px; margin-top: 5px; }
-    .priority-links {
-      display: flex;
-      gap: 8px;
-      margin-top: 11px;
-    }
-    .mini-btn {
-      flex: 1;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      text-decoration: none;
-      border: 1px solid rgba(31,41,55,.12);
-      color: #1f4054;
-      background: rgba(255,255,255,.78);
-      border-radius: 12px;
-      min-height: 34px;
-      font-size: 12px;
-      cursor: pointer;
-      font-weight: 800;
-    }
-    .mini-btn:hover { border-color: rgba(217,119,6,.42); color: #92400e; background: #fffaf1; }
-
-    .below-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
-      gap: 16px;
-      margin-top: 16px;
-    }
-    .table-card, .method-card { padding: 16px; overflow: hidden; }
-    .table-wrap { overflow: auto; margin-top: 12px; border-radius: 16px; border: 1px solid rgba(31,41,55,.10); }
-    table { width: 100%; border-collapse: collapse; min-width: 720px; background: rgba(255,255,255,.72); }
-    th, td { padding: 12px 14px; border-bottom: 1px solid rgba(31,41,55,.08); text-align: left; font-size: 13px; }
-    th { color: #334155; background: rgba(239,246,246,.84); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-    td { color: var(--muted); }
-    td strong { color: var(--text); }
-    tr:last-child td { border-bottom: 0; }
-    .bar {
-      width: 120px;
-      height: 8px;
-      border-radius: 999px;
-      background: rgba(31,41,55,.10);
-      overflow: hidden;
-      position: relative;
-    }
-    .bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--amber), var(--red)); }
-
-    .method-list {
-      margin: 12px 0 0;
-      padding: 0;
-      list-style: none;
-      display: grid;
-      gap: 10px;
-    }
-    .method-list li {
-      color: var(--muted);
-      line-height: 1.55;
-      border: 1px solid rgba(31,41,55,.09);
-      background: rgba(255,255,255,.68);
-      border-radius: 14px;
-      padding: 12px;
-      font-size: 13px;
-    }
-    .footer-meta {
-      margin-top: 18px;
-      color: #7a8796;
-      font-size: 12px;
-      text-align: center;
-    }
-
-    .status-banner {
-      display: none;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin: 16px 0 0;
-      padding: 12px 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(220,38,38,.22);
-      background: rgba(254,226,226,.76);
-      color: #991b1b;
-    }
-    .status-banner.show { display: flex; }
-    .loading-shimmer {
-      position: fixed;
-      left: 0; right: 0; top: 0;
-      height: 3px;
-      z-index: 2000;
-      background: linear-gradient(90deg, transparent, #0e7490, #d97706, #dc2626, transparent);
-      transform: translateX(-100%);
-      opacity: 0;
-      transition: opacity .2s;
-    }
-    body.loading .loading-shimmer { opacity: 1; animation: shimmer 1.2s linear infinite; }
-    @keyframes shimmer { to { transform: translateX(100%); } }
-
-    .pin-icon {
-      width: 34px; height: 34px;
-      border-radius: 999px 999px 999px 8px;
-      transform: rotate(-45deg);
-      background: var(--pin, #0e7490);
-      display: grid;
-      place-items: center;
-      color: #fff;
-      font-weight: 950;
-      border: 2px solid rgba(255,255,255,.9);
-      box-shadow: 0 0 0 7px rgba(255,255,255,.52), 0 12px 24px rgba(29,43,62,.28);
-      animation: pinPulse 2.4s ease-in-out infinite;
-    }
-    .pin-icon span { transform: rotate(45deg); font-size: 13px; }
-    @keyframes pinPulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.12); } }
-
-    .popup-title { font-size: 15px; font-weight: 850; margin-bottom: 8px; color: #172033; }
-    .popup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
-    .popup-metric { border: 1px solid rgba(31,41,55,.10); background: rgba(248,250,252,.9); border-radius: 10px; padding: 8px; }
-    .popup-metric b { display: block; color: #172033; }
-    .popup-metric span { color: var(--muted); font-size: 11px; }
-    .popup-note { color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .popup-link { display: inline-flex; margin-top: 10px; color: #0e7490; text-decoration: none; font-weight: 800; }
-
-    .leaflet-container { font-family: inherit; background: #eaf0ee; outline-offset: 1px; }
-    .leaflet-popup-content-wrapper { background: rgba(255,255,255,.96); color: #172033; box-shadow: 0 20px 60px rgba(29,43,62,.23),0 0 0 1px rgba(31,41,55,.10); }
-    .leaflet-popup-tip { background: rgba(255,255,255,.96); box-shadow: 0 0 0 1px rgba(31,41,55,.10); }
-    .leaflet-container a.leaflet-popup-close-button { color: #64748b; }
-    .leaflet-container a.leaflet-popup-close-button:hover { color: #172033; }
-    .leaflet-control-zoom a { background: rgba(255,255,255,.94); color: #172033; border-bottom:1px solid rgba(31,41,55,.10); box-shadow:0 8px 22px rgba(29,43,62,.12); }
-    .leaflet-control-attribution { background:rgba(255,255,255,.74); color:#64748b; }
-    .leaflet-control-attribution a { color:#334155; }
-
-    @media (max-width: 1180px) {
-      .kpi-grid { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
-      .main-grid { grid-template-columns: 1fr; }
-      .side-card { min-height: 420px; }
-      .priority-list { max-height: 560px; }
-      .below-grid { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 760px) {
-      .dashboard { width: min(100% - 20px, 1520px); padding-top: 10px; }
-      .topbar { align-items: stretch; flex-direction: column; }
-      .controls { justify-content: flex-start; }
-      .kpi-grid { grid-template-columns: 1fr; }
-      .map-card { min-height: auto; padding: 10px; }
-      #gapMap { height: 520px; }
-      .map-toolbar { align-items: flex-start; flex-direction: column; }
-      .legend-row { justify-content: flex-start; }
-      .layer-panel { right: 20px; top: 96px; width: 170px; }
-      .stats-row { grid-template-columns: 1fr; }
-      h1 { font-size: 25px; }
-    }
+    .topbar::after{content:"PUBLIC GAP MAP"; position:absolute; right:18px; bottom:-12px; color:rgba(15,23,42,.045); font-size:clamp(42px,6vw,96px); font-weight:1000; letter-spacing:-.07em; pointer-events:none; white-space:nowrap}
+    .title{position:relative; z-index:1}.eyebrow{display:flex; align-items:center; gap:8px; color:var(--teal); font-size:12px; font-weight:950; letter-spacing:.12em; text-transform:uppercase}.dot{width:9px;height:9px;border-radius:999px;background:var(--amber);box-shadow:0 0 0 7px rgba(245,158,11,.14)}
+    h1{margin:7px 0 5px; font-size:clamp(24px,3vw,38px); line-height:1.08; letter-spacing:-.045em}.subtitle{margin:0;color:var(--muted);font-size:14px;line-height:1.65;max-width:760px}
+    .actions{display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:10px; position:relative; z-index:1}.badge,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(15,23,42,.11);background:rgba(255,255,255,.82);border-radius:15px;min-height:42px;padding:10px 12px;box-shadow:0 8px 20px rgba(31,48,70,.07);font-size:13px;color:#344256;text-decoration:none}.btn{font-weight:850;cursor:pointer;transition:.16s}.btn:hover{transform:translateY(-1px);background:#fff7ed;border-color:rgba(245,158,11,.38)}.btn.primary{background:#153547;color:#fff;border-color:#153547}.btn.primary:hover{background:#0f2a39;color:#fff}
+    .kpis{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:12px;margin:14px 0}.kpi{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:15px;box-shadow:var(--soft);position:relative;overflow:hidden}.kpi::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:var(--accent,var(--teal))}.kpi small{display:block;color:var(--muted);font-weight:850;font-size:12px;letter-spacing:.06em;text-transform:uppercase}.kpi b{display:block;margin-top:7px;font-size:clamp(23px,2.4vw,34px);line-height:1;font-weight:1000;letter-spacing:-.04em}.kpi span{display:block;margin-top:8px;color:var(--sub);font-size:12px;line-height:1.35}
+    .grid{display:grid;grid-template-columns:minmax(0,1fr) 405px;gap:15px;align-items:start}.left-stack{display:grid;gap:15px}.card{background:rgba(255,255,255,.82);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px)}.map-card{padding:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-title{display:flex;align-items:center;gap:9px;margin:0;font-size:17px;letter-spacing:-.02em}.legend{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px}.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.76);border-radius:999px;padding:7px 9px;font-size:11px;color:#536174}.chip-dot{width:8px;height:8px;border-radius:999px;background:var(--c)}
+    .map-wrap{position:relative}#gapMap{height:min(72vh,760px);min-height:610px;width:100%;border-radius:20px;border:1px solid rgba(15,23,42,.14);overflow:hidden;background:#eef2f1;box-shadow:inset 0 0 0 1px rgba(255,255,255,.62),0 16px 45px rgba(31,48,70,.11)}
+    .map-tools{position:absolute;left:14px;top:14px;z-index:900;display:flex;gap:8px;flex-wrap:wrap;max-width:calc(100% - 230px)}.tool-btn{border:1px solid rgba(15,23,42,.11);background:rgba(255,255,255,.88);border-radius:999px;padding:8px 10px;font-size:12px;font-weight:850;box-shadow:0 10px 24px rgba(31,48,70,.10);cursor:pointer}.tool-btn:hover{background:#fff7ed}.layers{position:absolute;right:14px;top:14px;z-index:900;display:grid;gap:8px;width:188px;border:1px solid rgba(15,23,42,.12);background:rgba(255,255,255,.88);border-radius:18px;padding:12px;box-shadow:0 18px 42px rgba(31,48,70,.14);backdrop-filter:blur(14px)}.layers strong{font-size:11px;color:#475569;letter-spacing:.1em;text-transform:uppercase}.layers label{display:flex;align-items:center;gap:8px;font-size:13px;color:#475569;cursor:pointer}.layers input{accent-color:var(--amber)}
+    .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;background:rgba(255,255,255,.60);border-radius:20px;z-index:850;pointer-events:none}.overlay.show{display:flex}.empty{max-width:520px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:var(--shadow)}.empty h3{margin:0 0 8px;font-size:22px}.empty p{margin:0;color:var(--muted);line-height:1.6}
+    .reports{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.report{padding:16px}.report h3{margin:0 0 9px;font-size:15px}.report .big{font-size:25px;font-weight:1000;letter-spacing:-.04em}.report p{margin:7px 0 0;color:var(--muted);font-size:13px;line-height:1.55}.report-list{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}
+    .side{padding:14px;position:sticky;top:14px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;overflow:hidden}.side-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:4px 2px 12px}.priority{overflow:auto;display:grid;gap:10px;padding:12px 4px 2px 0;scrollbar-width:thin}.item{position:relative;overflow:hidden;background:rgba(255,255,255,.76);border:1px solid var(--line);border-radius:20px;padding:13px;cursor:pointer;box-shadow:0 8px 22px rgba(31,48,70,.06);transition:.16s}.item:hover,.item.active{transform:translateY(-1px);background:#fffaf0;border-color:rgba(245,158,11,.34);box-shadow:0 18px 36px rgba(245,158,11,.12)}.item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--sev,var(--amber))}.item-top{display:flex;gap:12px}.rank{width:42px;height:42px;flex:0 0 auto;border-radius:15px;display:grid;place-items:center;background:var(--sev,var(--amber));color:#fff;font-weight:1000;box-shadow:0 10px 24px color-mix(in srgb,var(--sev,var(--amber)),transparent 72%)}.item-title{font-weight:950;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.item-action{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.45}.level{display:inline-flex;align-items:center;gap:6px;margin-top:8px;border:1px solid rgba(15,23,42,.10);border-radius:999px;padding:5px 8px;background:#fff;font-size:11px}.mini-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}.mini{background:#f8fafb;border:1px solid rgba(15,23,42,.08);border-radius:13px;padding:8px}.mini b{display:block;font-size:17px}.mini span{display:block;margin-top:3px;color:var(--sub);font-size:11px}.item-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.mini-btn{border:1px solid rgba(15,23,42,.10);background:#fff;border-radius:13px;padding:9px 10px;text-align:center;text-decoration:none;font-weight:850;color:#123247;cursor:pointer}
+    .table-card{margin-top:15px;padding:17px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;margin-top:12px}table{width:100%;border-collapse:collapse;min-width:760px;background:rgba(255,255,255,.64)}th,td{text-align:left;padding:15px 16px;border-bottom:1px solid rgba(15,23,42,.08);font-size:14px}th{background:#eef5f4;color:#334155;font-size:12px;letter-spacing:.07em;text-transform:uppercase}tr:last-child td{border-bottom:0}.num{font-weight:950}.muted{color:var(--muted)}.footer{margin-top:14px;color:var(--muted);font-size:12px;text-align:center}.status{display:none;margin:14px 0;padding:13px 15px;border-radius:18px;border:1px solid rgba(239,68,68,.24);background:rgba(254,242,242,.92);color:#991b1b;justify-content:space-between;align-items:center;gap:10px}.status.show{display:flex}.loader{position:fixed;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--teal),var(--amber),var(--red));transform-origin:left;transform:scaleX(0);opacity:0;z-index:9999}.loader.on{opacity:1;animation:loading 1.2s ease-in-out infinite}@keyframes loading{0%{transform:scaleX(.08)}50%{transform:scaleX(.68)}100%{transform:scaleX(.08)}}.popup-title{font-weight:950;font-size:15px}.popup-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}.popup-stat{background:#f8fafb;border:1px solid rgba(15,23,42,.08);border-radius:12px;padding:8px}.popup-stat b{display:block;font-size:16px}.popup-stat span{font-size:11px;color:#64748b}.popup-link{display:block;margin-top:10px;color:#0f766e;font-weight:850;text-decoration:none}.rec-pin{width:34px;height:34px;border-radius:15px;display:grid;place-items:center;color:#fff;font-weight:1000;border:3px solid #fff;box-shadow:0 12px 32px rgba(15,23,42,.24)}
+    @media(max-width:1180px){.grid{grid-template-columns:1fr}.side{position:relative;top:auto;max-height:none}.priority{max-height:540px}.reports{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:720px){.page{width:min(100% - 18px,1640px)}.topbar{align-items:flex-start;flex-direction:column}.actions{justify-content:flex-start}.kpis{grid-template-columns:1fr 1fr}.reports{grid-template-columns:1fr}#gapMap{height:62vh;min-height:430px}.layers{position:relative;right:auto;top:auto;width:auto;margin-top:10px}.map-tools{position:relative;left:auto;top:auto;max-width:none;margin-bottom:8px}.section-head{align-items:flex-start;flex-direction:column}.item-links{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-  <div class="loading-shimmer" aria-hidden="true"></div>
-
-  <main class="dashboard">
+  <div class="loader" id="loader"></div>
+  <main class="page">
     <header class="topbar">
-      <div class="titleblock">
-        <div class="eyebrow"><span class="pulse-dot"></span> Demand Gap Intelligence</div>
-        <h1>公共設施需求缺口地圖儀表板</h1>
-        <p class="subtitle">以真實位置查詢、查無訊號、低覆蓋與慢查詢熱點，找出最值得優先檢查與補強的公共設施缺口區。</p>
+      <div class="title">
+        <div class="eyebrow"><span class="dot"></span> City Governance GIS</div>
+        <h1>公共設施需求缺口地圖</h1>
+        <p class="subtitle">改用系統累積的全部查詢資料，不再切天數；地圖直接標出需求熱區、缺口群與優先檢查點，讓你判斷哪裡最該補資料或新增設施。</p>
       </div>
-      <div class="controls">
+      <div class="actions">
         <span class="badge" id="cacheBadge">資料狀態：載入中</span>
-        <select id="rangeSelect" class="control" aria-label="選擇資料時間範圍">
-          <option value="1h">最近 1 小時</option>
-          <option value="1d">最近 1 天</option>
-          <option value="7d">最近 7 天</option>
-          <option value="30d" selected>最近 30 天</option>
-          <option value="1y">最近 1 年</option>
-        </select>
-        <button class="btn" id="refreshBtn" type="button">↻ 重新整理</button>
+        <span class="badge" id="rangeBadge">全部歷史資料</span>
+        <a class="btn" href="/dashboard">← 回主儀表板</a>
+        <button class="btn primary" id="refreshBtn" type="button">↻ 重新整理</button>
       </div>
     </header>
 
-    <div class="status-banner" id="errorBanner">
-      <span id="errorText">資料載入失敗</span>
-      <button class="btn" type="button" id="retryBtn">重試</button>
-    </div>
+    <div class="status" id="errorBanner"><span id="errorText">資料載入失敗</span><button class="btn" id="retryBtn" type="button">重試</button></div>
 
-    <section class="kpi-grid" id="kpiGrid" aria-label="缺口分析摘要">
-      <article class="kpi" style="--accent: rgba(34,211,238,.22)"><div class="kpi-label">有效需求</div><div class="kpi-value">—</div><div class="kpi-sub">等待資料載入</div></article>
-      <article class="kpi" style="--accent: rgba(168,85,247,.22)"><div class="kpi-label">獨立使用者</div><div class="kpi-value">—</div><div class="kpi-sub">等待資料載入</div></article>
-      <article class="kpi" style="--accent: rgba(239,68,68,.22)"><div class="kpi-label">查無搜尋</div><div class="kpi-value">—</div><div class="kpi-sub">等待資料載入</div></article>
-      <article class="kpi" style="--accent: rgba(245,158,11,.22)"><div class="kpi-label">缺口群數</div><div class="kpi-value">—</div><div class="kpi-sub">等待資料載入</div></article>
-      <article class="kpi" style="--accent: rgba(16,185,129,.20)"><div class="kpi-label">最高熱區</div><div class="kpi-value" style="font-size: clamp(20px, 2.1vw, 30px);">—</div><div class="kpi-sub">等待資料載入</div></article>
+    <section class="kpis" id="kpiGrid">
+      <article class="kpi"><small>有效需求</small><b>—</b><span>載入中</span></article>
+      <article class="kpi"><small>缺口群數</small><b>—</b><span>載入中</span></article>
+      <article class="kpi"><small>查無 / 低覆蓋</small><b>—</b><span>載入中</span></article>
+      <article class="kpi"><small>獨立使用者</small><b>—</b><span>載入中</span></article>
+      <article class="kpi"><small>最高熱區</small><b>—</b><span>載入中</span></article>
+      <article class="kpi"><small>建議檢查點</small><b>—</b><span>載入中</span></article>
     </section>
 
-    <section class="main-grid">
-      <div class="map-card">
-        <div class="map-toolbar">
-          <h2 class="section-title">🗺️ 缺口熱區地圖 <span class="badge" id="rangeBadge">30d</span></h2>
-          <div class="legend-row" aria-label="缺口嚴重程度圖例">
-            <span class="legend-chip"><span class="legend-dot" style="--c:#ef4444"></span>高可信</span>
-            <span class="legend-chip"><span class="legend-dot" style="--c:#f59e0b"></span>中可信</span>
-            <span class="legend-chip"><span class="legend-dot" style="--c:#3b82f6"></span>低可信</span>
-            <span class="legend-chip"><span class="legend-dot" style="--c:#94a3b8"></span>觀察中</span>
+    <section class="grid">
+      <div class="left-stack">
+        <section class="card map-card">
+          <div class="section-head">
+            <h2 class="section-title">🗺️ 缺口熱區地圖</h2>
+            <div class="legend">
+              <span class="chip"><span class="chip-dot" style="--c:#ef4444"></span>高可信缺口</span>
+              <span class="chip"><span class="chip-dot" style="--c:#f59e0b"></span>中可信缺口</span>
+              <span class="chip"><span class="chip-dot" style="--c:#3b82f6"></span>低可信缺口</span>
+              <span class="chip"><span class="chip-dot" style="--c:#94a3b8"></span>觀察中</span>
+            </div>
           </div>
-        </div>
-        <div id="gapMap" role="application" aria-label="公共設施需求缺口互動地圖"></div>
-        <div class="layer-panel" aria-label="地圖圖層控制">
-          <strong>Map Layers</strong>
-          <label class="layer-toggle"><input type="checkbox" data-layer="heat" checked /> 需求熱度</label>
-          <label class="layer-toggle"><input type="checkbox" data-layer="clusters" checked /> 缺口群範圍</label>
-          <label class="layer-toggle"><input type="checkbox" data-layer="recommended" checked /> 建議優先點</label>
-        </div>
-        <div class="map-overlay" id="emptyOverlay">
-          <div class="empty-box">
-            <h3>目前資料量還不足以形成清楚缺口地圖</h3>
-            <p>系統仍會顯示地圖框架。等更多使用者查詢位置後，這裡會自動產生需求熱度、缺口群與優先補強點位。</p>
+          <div class="map-wrap">
+            <div class="map-tools">
+              <button class="tool-btn" id="fitBtn" type="button">聚焦全部熱區</button>
+              <button class="tool-btn" id="topBtn" type="button">跳到第一優先</button>
+              <button class="tool-btn" id="taipeiBtn" type="button">回台北視角</button>
+            </div>
+            <div id="gapMap" role="application" aria-label="公共設施需求缺口地圖"></div>
+            <div class="layers">
+              <strong>Map Layers</strong>
+              <label><input type="checkbox" data-layer="heat" checked> 需求熱度</label>
+              <label><input type="checkbox" data-layer="clusters" checked> 缺口影響圈</label>
+              <label><input type="checkbox" data-layer="recommended" checked> 優先檢查點</label>
+            </div>
+            <div class="overlay" id="emptyOverlay"><div class="empty"><h3>資料還不夠形成熱區</h3><p>地圖仍可操作。等更多使用者查詢後，這裡會自動出現缺口熱區與優先補強點。</p></div></div>
           </div>
-        </div>
+        </section>
+
+        <section class="reports" id="reportsGrid">
+          <article class="card report"><h3>決策結論</h3><div class="big">—</div><p>載入中</p></article>
+          <article class="card report"><h3>主要缺口原因</h3><div class="big">—</div><p>載入中</p></article>
+          <article class="card report"><h3>現地檢查建議</h3><div class="big">—</div><p>載入中</p></article>
+        </section>
       </div>
 
-      <aside class="side-card">
-        <div class="side-head">
-          <h2 class="section-title">🔥 優先處理熱區</h2>
-          <span class="badge" id="siteCountBadge">0 sites</span>
-        </div>
-        <div class="priority-list" id="priorityList">
-          <div class="empty-box"><h3>載入中</h3><p>正在分析缺口熱區…</p></div>
-        </div>
+      <aside class="card side">
+        <div class="side-head"><h2 class="section-title">🔥 優先檢查點</h2><span class="badge" id="siteCountBadge">0 點</span></div>
+        <div class="priority" id="priorityList"><div class="empty"><h3>載入中</h3><p>正在分析優先熱區…</p></div></div>
       </aside>
     </section>
 
-    <section class="below-grid">
-      <div class="table-card">
-        <h2 class="section-title">📍 區域缺口排行榜</h2>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>區域</th><th>缺口等級</th><th>有效需求</th><th>查無率</th><th>缺口分數</th><th>視覺化</th></tr></thead>
-            <tbody id="areaTableBody"><tr><td colspan="6">載入中…</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="method-card">
-        <h2 class="section-title">🧭 判讀方式</h2>
-        <ul class="method-list" id="interpretationList">
-          <li>缺口分數綜合查無、低覆蓋、慢查詢、有效需求、獨立使用者與活躍天數。</li>
-          <li>地圖上的圓圈代表需求群範圍，數字釘代表系統建議優先檢查的位置。</li>
-        </ul>
+    <section class="card table-card">
+      <div class="section-head"><h2 class="section-title">📍 區域缺口報表</h2><span class="badge">已移除無意義視覺長條，改成可判讀欄位</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>區域</th><th>等級</th><th>有效需求</th><th>查無率</th><th>查無次數</th><th>低覆蓋</th><th>慢查詢</th><th>Gap Score</th></tr></thead>
+          <tbody id="areaTableBody"><tr><td colspan="8">載入中…</td></tr></tbody>
+        </table>
       </div>
     </section>
 
-    <div class="footer-meta" id="footerMeta">Eason Systems · Public Facility Demand Gap Intelligence</div>
+    <section class="card table-card">
+      <div class="section-head"><h2 class="section-title">📊 補強報表</h2><span class="badge">給簡報 / 決策用</span></div>
+      <div id="extraReports" class="reports" style="margin-top:12px"></div>
+    </section>
+
+    <div class="footer" id="footerMeta">Eason Systems · Public Facility Demand Gap Intelligence</div>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-
   <script>
-    (function () {
+    (function(){
       'use strict';
+      const TAIPEI = [25.0478, 121.5170];
+      const state = { map:null, lastData:null, layers:{}, markers:{}, selectedId:null, allPoints:[] };
+      const $ = id => document.getElementById(id);
+      const els = { loader:$('loader'), error:$('errorBanner'), errorText:$('errorText'), cache:$('cacheBadge'), kpi:$('kpiGrid'), map:$('gapMap'), empty:$('emptyOverlay'), siteCount:$('siteCountBadge'), priority:$('priorityList'), table:$('areaTableBody'), reports:$('reportsGrid'), extra:$('extraReports'), footer:$('footerMeta') };
+      const fmt = v => Number(v || 0).toLocaleString('zh-TW');
+      const num = (v,d=0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+      const pct = v => `${num(v,0).toFixed(num(v,0)%1?1:0)}%`;
+      const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+      function color(level){ if(String(level).includes('高'))return '#ef4444'; if(String(level).includes('中'))return '#f59e0b'; if(String(level).includes('低'))return '#3b82f6'; return '#94a3b8'; }
+      function levelLabel(level){ return String(level || '觀察中').replace('可信缺口','可信'); }
+      function ll(x){ const lat=num(x.lat,NaN), lon=num(x.lon,NaN); return Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:null; }
 
-      const TAIPEI_CENTER = [25.0478, 121.5170];
-      const state = {
-        map: null,
-        layers: { heat: null, clusters: null, recommended: null },
-        markersByClusterId: {},
-        selectedId: null,
-        lastData: null,
-        loading: false
-      };
-
-      const els = {
-        rangeSelect: document.getElementById('rangeSelect'),
-        refreshBtn: document.getElementById('refreshBtn'),
-        retryBtn: document.getElementById('retryBtn'),
-        kpiGrid: document.getElementById('kpiGrid'),
-        priorityList: document.getElementById('priorityList'),
-        siteCountBadge: document.getElementById('siteCountBadge'),
-        cacheBadge: document.getElementById('cacheBadge'),
-        rangeBadge: document.getElementById('rangeBadge'),
-        errorBanner: document.getElementById('errorBanner'),
-        errorText: document.getElementById('errorText'),
-        areaTableBody: document.getElementById('areaTableBody'),
-        interpretationList: document.getElementById('interpretationList'),
-        footerMeta: document.getElementById('footerMeta'),
-        emptyOverlay: document.getElementById('emptyOverlay')
-      };
-
-      function n(value, fallback = 0) {
-        const num = Number(value);
-        return Number.isFinite(num) ? num : fallback;
+      const AREA_RULES = [
+        ['台北車站',25.0400,25.0555,121.5100,121.5255],['西門町',25.0390,25.0508,121.4980,121.5115],['信義商圈',25.0280,25.0415,121.5580,121.5755],['公館',25.0090,25.0248,121.5250,121.5455],['板橋車站',25.0090,25.0208,121.4550,121.4705],
+        ['中正區',24.985,25.055,121.500,121.545],['萬華區',25.015,25.055,121.470,121.515],['大同區',25.045,25.075,121.500,121.525],['中山區',25.045,25.085,121.515,121.555],['松山區',25.035,25.070,121.545,121.585],['大安區',25.000,25.045,121.520,121.565],['信義區',25.015,25.050,121.555,121.595],['士林區',25.075,25.165,121.500,121.590],['北投區',25.105,25.215,121.455,121.570],['內湖區',25.045,25.100,121.565,121.650],['南港區',25.025,25.075,121.585,121.690],['文山區',24.955,25.015,121.530,121.610],
+        ['板橋區',24.990,25.040,121.430,121.500],['新莊區',25.015,25.065,121.420,121.470],['三重區',25.045,25.085,121.465,121.510],['蘆洲區',25.070,25.105,121.450,121.490],['中和區',24.985,25.020,121.480,121.535],['永和區',25.000,25.025,121.500,121.530],['新店區',24.930,25.000,121.500,121.585],['汐止區',25.045,25.095,121.620,121.710]
+      ];
+      function inferArea(item){
+        const old = String(item.area_name || '').trim();
+        if(old && old !== '其他區域') return old;
+        const p = ll(item); if(!p) return old || '其他區域';
+        for(const [name,a,b,c,d] of AREA_RULES){ if(p[0]>=a&&p[0]<=b&&p[1]>=c&&p[1]<=d) return name; }
+        return old || '其他區域';
       }
 
-      function fmt(value) {
-        return n(value).toLocaleString('zh-TW');
-      }
-
-      function pct(value) {
-        const num = n(value);
-        return `${num.toFixed(num % 1 === 0 ? 0 : 1)}%`;
-      }
-
-      function safeText(value, fallback = '—') {
-        if (value === null || value === undefined || value === '') return fallback;
-        return String(value);
-      }
-
-      function escapeHTML(value) {
-        return safeText(value, '').replace(/[&<>'"]/g, ch => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-        }[ch]));
-      }
-
-      function severityColor(level) {
-        const text = safeText(level, '');
-        if (text.includes('高可信')) return '#ef4444';
-        if (text.includes('中可信')) return '#f59e0b';
-        if (text.includes('低可信')) return '#3b82f6';
-        return '#94a3b8';
-      }
-
-      function severityClassLabel(level) {
-        return safeText(level, '觀察中');
-      }
-
-      function validLatLon(item) {
-        const lat = n(item && item.lat, NaN);
-        const lon = n(item && item.lon, NaN);
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-        if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
-        return [lat, lon];
-      }
-
-      function setLoading(isLoading) {
-        state.loading = isLoading;
-        document.body.classList.toggle('loading', isLoading);
-        els.refreshBtn.disabled = isLoading;
-        els.retryBtn.disabled = isLoading;
-      }
-
-      function showError(message) {
-        els.errorText.textContent = message || '資料載入失敗';
-        els.errorBanner.classList.add('show');
-      }
-
-      function clearError() {
-        els.errorBanner.classList.remove('show');
-      }
-
-      function initMap() {
-        if (state.map) return state.map;
-        if (typeof L === 'undefined') {
-          showError('Leaflet 載入失敗，請檢查 CDN 或 CSP 設定。');
-          return null;
-        }
-
-        state.map = L.map('gapMap', {
-          center: TAIPEI_CENTER,
-          zoom: 12,
-          minZoom: 9,
-          maxZoom: 19,
-          zoomControl: true,
-          preferCanvas: true
-        });
-
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; OpenStreetMap &copy; CARTO',
-          maxZoom: 20,
-          subdomains: 'abcd'
-        }).addTo(state.map);
-
+      function initMap(){
+        if(state.map) return state.map;
+        state.map = L.map('gapMap',{center:TAIPEI,zoom:12,scrollWheelZoom:true,zoomControl:true,preferCanvas:true});
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(state.map);
         state.layers.heat = L.layerGroup().addTo(state.map);
         state.layers.clusters = L.layerGroup().addTo(state.map);
         state.layers.recommended = L.layerGroup().addTo(state.map);
-
         return state.map;
       }
+      function setLoading(on){ els.loader.classList.toggle('on',!!on); }
+      function showError(msg){ els.errorText.textContent = msg || '資料載入失敗'; els.error.classList.add('show'); }
+      function clearError(){ els.error.classList.remove('show'); }
+      function clearLayers(){ Object.values(state.layers).forEach(l=>l&&l.clearLayers()); state.markers={}; state.allPoints=[]; }
+      function applyLayerVisibility(){ document.querySelectorAll('[data-layer]').forEach(input=>{ const layer=state.layers[input.dataset.layer]; if(!layer||!state.map)return; if(input.checked&&!state.map.hasLayer(layer)) layer.addTo(state.map); if(!input.checked&&state.map.hasLayer(layer)) state.map.removeLayer(layer); }); }
+      function popup(item, rank){ const c=color(item.gap_level); const name=inferArea(item); return `<div class="popup-title" style="color:${c}">${rank?`#${rank} `:''}${esc(name)}</div><div class="muted">${esc(item.action_label||item.suggestion||'建議優先檢查此區公共設施覆蓋')}</div><div class="popup-grid"><div class="popup-stat"><b>${fmt(item.gap_score)}</b><span>Gap Score</span></div><div class="popup-stat"><b>${fmt(item.effective_queries)}</b><span>有效需求</span></div><div class="popup-stat"><b>${fmt(item.unique_users)}</b><span>使用者</span></div><div class="popup-stat"><b>${pct(item.no_result_rate)}</b><span>查無率</span></div></div>${item.map_url?`<a class="popup-link" href="${esc(item.map_url)}" target="_blank" rel="noopener">Google Maps →</a>`:''}`; }
+      function heatWeight(h,max){ return Math.max(.18, Math.min(1, num(h.gap_score,num(h.effective_queries,1))/max)); }
+      function renderHeat(hotspots){ const pts=hotspots.map(h=>{const p=ll(h);return p?[p[0],p[1],h]:null}).filter(Boolean); if(!pts.length || !L.heatLayer)return; const max=Math.max(1,...pts.map(x=>num(x[2].gap_score,num(x[2].effective_queries,1)))); const heat=L.heatLayer(pts.map(x=>[x[0],x[1],heatWeight(x[2],max)]),{radius:30,blur:25,maxZoom:17,minOpacity:.22,gradient:{0.2:'#22c55e',0.45:'#f59e0b',0.75:'#ef4444',1:'#991b1b'}}); state.layers.heat.addLayer(heat); pts.forEach(x=>state.allPoints.push([x[0],x[1]])); }
+      function renderClusters(clusters){ clusters.forEach((cl,i)=>{ const p=ll(cl); if(!p)return; const c=color(cl.gap_level); const circle=L.circle(p,{radius:Math.max(180,num(cl.radius_m,300)),color:c,weight:2,fillColor:c,fillOpacity:.16,opacity:.92}).bindPopup(popup(cl)); circle.on('click',()=>highlight(cl.cluster_id)); state.layers.clusters.addLayer(circle); state.allPoints.push(p); }); }
+      function pinIcon(rank,c){ return L.divIcon({className:'',html:`<div class="rec-pin" style="background:${c}">${rank}</div>`,iconSize:[34,34],iconAnchor:[17,17],popupAnchor:[0,-18]}); }
+      function renderRecommended(sites){ sites.forEach((s,i)=>{ const p=ll(s); if(!p)return; const id=String(s.cluster_id||`rank-${i+1}`); const marker=L.marker(p,{icon:pinIcon(i+1,color(s.gap_level)),title:`#${i+1} ${inferArea(s)}`}).bindPopup(popup(s,i+1)); marker.on('click',()=>highlight(id)); state.markers[id]=marker; state.layers.recommended.addLayer(marker); state.allPoints.push(p); }); }
+      function fit(){ if(!state.map)return; if(!state.allPoints.length){state.map.setView(TAIPEI,12);return;} try{state.map.fitBounds(L.latLngBounds(state.allPoints),{padding:[42,42],maxZoom:15});}catch(e){state.map.setView(TAIPEI,12);} }
+      function top(){ const first=(state.lastData?.recommended_sites||[])[0]; const id=first&&(first.cluster_id||'rank-1'); if(id) fly(id); }
+      function fly(id){ const m=state.markers[String(id)]; if(!m||!state.map)return; state.map.flyTo(m.getLatLng(),Math.max(state.map.getZoom(),15),{duration:.8}); m.openPopup(); highlight(id); }
+      function highlight(id){ state.selectedId=String(id||''); document.querySelectorAll('.item').forEach(el=>{ const on=el.dataset.id===state.selectedId; el.classList.toggle('active',on); if(on) el.scrollIntoView({behavior:'smooth',block:'nearest'}); }); }
 
-      function clearLayers() {
-        Object.values(state.layers).forEach(layer => {
-          if (layer && layer.clearLayers) layer.clearLayers();
-        });
-        state.markersByClusterId = {};
+      function deriveAreaRows(areaGaps, hotspots){
+        const hasUseful = areaGaps.filter(a=>String(a.area_name||'')!=='其他區域').length >= Math.max(1, areaGaps.length/3);
+        if(hasUseful) return areaGaps;
+        const map=new Map();
+        (hotspots||[]).forEach(h=>{ const area=inferArea(h); const row=map.get(area)||{area_name:area,effective_queries:0,no_result_count:0,low_result_count:0,slow_query_count:0,gap_score:0,gap_level:'觀察中'}; row.effective_queries+=num(h.effective_queries); row.no_result_count+=num(h.no_result_count); row.low_result_count+=num(h.low_result_count); row.slow_query_count+=num(h.slow_query_count); row.gap_score+=num(h.gap_score); row.gap_level = row.gap_score>=300?'高可信缺口':row.gap_score>=80?'中可信缺口':row.gap_score>=20?'低可信缺口':'觀察中'; map.set(area,row); });
+        return Array.from(map.values()).map(r=>({...r,no_result_rate: r.effective_queries?Math.round(r.no_result_count/r.effective_queries*1000)/10:0})).sort((a,b)=>num(b.gap_score)-num(a.gap_score));
       }
-
-      function applyLayerVisibility() {
-        if (!state.map) return;
-        document.querySelectorAll('[data-layer]').forEach(input => {
-          const key = input.getAttribute('data-layer');
-          const layer = state.layers[key];
-          if (!layer) return;
-          if (input.checked && !state.map.hasLayer(layer)) layer.addTo(state.map);
-          if (!input.checked && state.map.hasLayer(layer)) state.map.removeLayer(layer);
-        });
-      }
-
-      function popupHTML(item, rank) {
-        const level = severityClassLabel(item.gap_level);
-        const color = severityColor(level);
-        const mapUrl = safeText(item.map_url, '');
-        return `
-          <div class="popup-title" style="color:${color}">${rank ? `#${rank} ` : ''}${escapeHTML(safeText(item.area_name, '缺口熱區'))}</div>
-          <div class="popup-note">${escapeHTML(safeText(item.action_label || item.suggestion, '建議優先檢查此區資料與設施覆蓋'))}</div>
-          <div class="popup-grid">
-            <div class="popup-metric"><b>${fmt(item.gap_score)}</b><span>缺口分數</span></div>
-            <div class="popup-metric"><b>${escapeHTML(level)}</b><span>可信等級</span></div>
-            <div class="popup-metric"><b>${fmt(item.effective_queries)}</b><span>有效需求</span></div>
-            <div class="popup-metric"><b>${fmt(item.unique_users)}</b><span>獨立使用者</span></div>
-            <div class="popup-metric"><b>${pct(item.no_result_rate)}</b><span>查無率</span></div>
-            <div class="popup-metric"><b>${fmt(item.active_days)}</b><span>活躍天數</span></div>
-          </div>
-          <div class="popup-note">${escapeHTML(safeText(item.confidence_note, ''))}</div>
-          ${mapUrl ? `<a class="popup-link" href="${escapeHTML(mapUrl)}" target="_blank" rel="noopener noreferrer">在 Google Maps 開啟 →</a>` : ''}
-        `;
-      }
-
-      function buildHeatmap(hotspots) {
-        const points = [];
-        const maxScore = Math.max(1, ...hotspots.map(h => n(h.gap_score, n(h.effective_queries, 1))));
-        hotspots.forEach(h => {
-          const ll = validLatLon(h);
-          if (!ll) return;
-          const rawWeight = n(h.gap_score, n(h.effective_queries, 1));
-          const weight = Math.max(0.18, Math.min(1, rawWeight / maxScore));
-          points.push([ll[0], ll[1], weight]);
-        });
-        if (!points.length || typeof L.heatLayer !== 'function') return;
-        L.heatLayer(points, {
-          radius: 26,
-          blur: 22,
-          maxZoom: 17,
-          minOpacity: 0.24,
-          gradient: { 0.18: '#0e7490', 0.42: '#16a34a', 0.68: '#d97706', 1.0: '#dc2626' }
-        }).addTo(state.layers.heat);
-      }
-
-      function buildClusters(clusters) {
-        clusters.forEach((c, idx) => {
-          const ll = validLatLon(c);
-          if (!ll) return;
-          const color = severityColor(c.gap_level);
-          const noResult = Math.max(0, Math.min(100, n(c.no_result_rate, 0)));
-          const radius = Math.max(150, n(c.radius_m, 0));
-          const circle = L.circle(ll, {
-            radius,
-            color,
-            weight: 2.2,
-            opacity: 0.88,
-            fillColor: color,
-            fillOpacity: Math.max(0.12, Math.min(0.34, 0.13 + noResult / 360)),
-            className: 'gap-cluster-circle'
-          }).bindPopup(popupHTML(c));
-          circle.on('click', () => highlightItem(c.cluster_id));
-          circle.addTo(state.layers.clusters);
-        });
-      }
-
-      function buildRecommended(recommended) {
-        recommended.forEach((site, idx) => {
-          const ll = validLatLon(site);
-          if (!ll) return;
-          const rank = idx + 1;
-          const color = severityColor(site.gap_level);
-          const icon = L.divIcon({
-            className: 'recommended-div-icon',
-            html: `<div class="pin-icon" style="--pin:${color}"><span>${rank}</span></div>`,
-            iconSize: [38, 38],
-            iconAnchor: [19, 38],
-            popupAnchor: [0, -34]
-          });
-          const marker = L.marker(ll, { icon, title: `#${rank} ${safeText(site.area_name)}` })
-            .bindPopup(popupHTML(site, rank));
-          marker.on('click', () => highlightItem(site.cluster_id));
-          marker.addTo(state.layers.recommended);
-          state.markersByClusterId[safeText(site.cluster_id, `rank-${rank}`)] = marker;
-        });
-      }
-
-      function fitMapToData(hotspots, clusters, recommended) {
-        const all = [];
-        [...recommended, ...clusters, ...hotspots].forEach(item => {
-          const ll = validLatLon(item);
-          if (ll) all.push(ll);
-        });
-        if (!state.map) return;
-        if (!all.length) {
-          state.map.setView(TAIPEI_CENTER, 12);
-          return;
-        }
-        try {
-          state.map.fitBounds(L.latLngBounds(all), { padding: [35, 35], maxZoom: 15 });
-        } catch (e) {
-          state.map.setView(all[0], 13);
-        }
-      }
-
-      function renderKPIs(summary) {
-        const cards = [
-          { label: '有效需求', value: fmt(summary.total_queries || summary.effective_queries), sub: `原始 ${fmt(summary.raw_total_queries)} 次｜去重 ${fmt(summary.duplicate_skipped)} 次`, accent: 'rgba(34,211,238,.23)' },
-          { label: '獨立使用者', value: fmt(summary.unique_users), sub: `${fmt(summary.active_days)} 個活躍日`, accent: 'rgba(168,85,247,.23)' },
-          { label: '查無搜尋', value: fmt(summary.no_result_count), sub: `查無率 ${pct(summary.no_result_rate)}｜低覆蓋 ${pct(summary.low_result_rate)}`, accent: 'rgba(239,68,68,.23)' },
-          { label: '缺口群數', value: fmt(summary.cluster_count), sub: `慢查詢 ${fmt(summary.slow_query_count)} 次｜平均 ${fmt(summary.avg_response_ms)} ms`, accent: 'rgba(245,158,11,.24)' },
-          { label: '最高熱區', value: safeText(summary.top_gap_area), sub: `中心 ${safeText(summary.top_gap_cluster)}`, accent: 'rgba(16,185,129,.2)', small: true }
-        ];
-        els.kpiGrid.innerHTML = cards.map(c => `
-          <article class="kpi" style="--accent:${c.accent}">
-            <div class="kpi-label">${escapeHTML(c.label)}</div>
-            <div class="kpi-value" ${c.small ? 'style="font-size: clamp(20px, 2.1vw, 30px);"' : ''}>${escapeHTML(c.value)}</div>
-            <div class="kpi-sub">${escapeHTML(c.sub)}</div>
-          </article>
-        `).join('');
-      }
-
-      function renderPriorityList(recommended) {
-        els.siteCountBadge.textContent = `${recommended.length} sites`;
-        if (!recommended.length) {
-          els.priorityList.innerHTML = `<div class="empty-box"><h3>尚無建議熱區</h3><p>目前沒有足夠的查無、低覆蓋或慢查詢資料形成建議點。</p></div>`;
-          return;
-        }
-        els.priorityList.innerHTML = recommended.map((site, idx) => {
-          const id = safeText(site.cluster_id, `rank-${idx + 1}`);
-          const color = severityColor(site.gap_level);
-          const mapUrl = safeText(site.map_url, '');
-          return `
-            <article class="priority-item" data-cluster-id="${escapeHTML(id)}" style="--severity:${color}">
-              <div class="priority-top">
-                <div class="rank">${idx + 1}</div>
-                <div class="priority-main">
-                  <div class="area-name">${escapeHTML(safeText(site.area_name, '缺口熱區'))}</div>
-                  <div class="action-label">${escapeHTML(safeText(site.action_label || site.suggestion, '建議優先檢查此區公共設施覆蓋'))}</div>
-                  <span class="level-badge"><span class="legend-dot" style="--c:${color}"></span>${escapeHTML(severityClassLabel(site.gap_level))}</span>
-                </div>
-              </div>
-              <div class="stats-row">
-                <div class="mini-stat"><b>${fmt(site.gap_score)}</b><span>Gap Score</span></div>
-                <div class="mini-stat"><b>${fmt(site.effective_queries)}</b><span>有效需求</span></div>
-                <div class="mini-stat"><b>${fmt(site.unique_users)}</b><span>使用者</span></div>
-              </div>
-              <div class="priority-links">
-                <button class="mini-btn" type="button" data-fly="${escapeHTML(id)}">定位到地圖</button>
-                ${mapUrl ? `<a class="mini-btn" href="${escapeHTML(mapUrl)}" target="_blank" rel="noopener noreferrer">Google Maps</a>` : ''}
-              </div>
-            </article>
-          `;
-        }).join('');
-      }
-
-      function highlightItem(clusterId) {
-        if (!clusterId) return;
-        state.selectedId = String(clusterId);
-        document.querySelectorAll('.priority-item').forEach(el => {
-          const active = el.getAttribute('data-cluster-id') === state.selectedId;
-          el.classList.toggle('active', active);
-          if (active) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-      }
-
-      function flyToCluster(clusterId) {
-        const marker = state.markersByClusterId[String(clusterId)];
-        if (!marker || !state.map) return;
-        const ll = marker.getLatLng();
-        state.map.flyTo(ll, Math.max(state.map.getZoom(), 15), { duration: 0.85 });
-        marker.openPopup();
-        highlightItem(clusterId);
-      }
-
-      function renderAreaTable(areaGaps) {
-        if (!areaGaps.length) {
-          els.areaTableBody.innerHTML = `<tr><td colspan="6">目前尚無區域缺口資料</td></tr>`;
-          return;
-        }
-        const maxScore = Math.max(1, ...areaGaps.map(a => n(a.gap_score, 0)));
-        els.areaTableBody.innerHTML = areaGaps.slice(0, 20).map(area => {
-          const color = severityColor(area.gap_level);
-          const width = Math.max(4, Math.min(100, (n(area.gap_score) / maxScore) * 100));
-          return `
-            <tr>
-              <td><strong>${escapeHTML(safeText(area.area_name, '其他區域'))}</strong></td>
-              <td><span class="level-badge"><span class="legend-dot" style="--c:${color}"></span>${escapeHTML(severityClassLabel(area.gap_level))}</span></td>
-              <td>${fmt(area.effective_queries)}</td>
-              <td>${pct(area.no_result_rate)}</td>
-              <td><strong>${fmt(area.gap_score)}</strong></td>
-              <td><div class="bar"><span style="width:${width}%; background:linear-gradient(90deg, ${color}, #22d3ee)"></span></div></td>
-            </tr>
-          `;
-        }).join('');
-      }
-
-      function renderInterpretation(lines) {
-        const arr = Array.isArray(lines) && lines.length ? lines : [
-          '缺口分數綜合查無、低覆蓋、慢查詢、有效需求、獨立使用者與活躍天數。',
-          '地圖上的圓圈代表需求群範圍，數字釘代表系統建議優先檢查的位置。'
-        ];
-        els.interpretationList.innerHTML = arr.slice(0, 6).map(line => `<li>${escapeHTML(line)}</li>`).join('');
-      }
-
-      function renderMeta(data) {
-        const generated = data.generated_at ? new Date(data.generated_at) : null;
-        const generatedText = generated && !Number.isNaN(generated.getTime())
-          ? generated.toLocaleString('zh-TW', { hour12: false })
-          : '—';
-        els.cacheBadge.textContent = data.cached ? '資料狀態：快取' : '資料狀態：即時產生';
-        els.rangeBadge.textContent = safeText(data.range, els.rangeSelect.value);
-        els.footerMeta.textContent = `Generated at ${generatedText} · Range ${safeText(data.range, els.rangeSelect.value)} · Eason Systems`;
-      }
-
-      function renderAll(data) {
-        const summary = data.summary || {};
-        const hotspots = Array.isArray(data.hotspots) ? data.hotspots : [];
-        const clusters = Array.isArray(data.demand_clusters) ? data.demand_clusters : [];
-        const recommended = Array.isArray(data.recommended_sites) ? data.recommended_sites : [];
-        const areaGaps = Array.isArray(data.area_gaps) ? data.area_gaps : [];
-
-        renderKPIs(summary);
-        renderPriorityList(recommended);
-        renderAreaTable(areaGaps);
-        renderInterpretation(data.interpretation || []);
-        renderMeta(data);
-
-        initMap();
-        clearLayers();
-        buildHeatmap(hotspots);
-        buildClusters(clusters);
-        buildRecommended(recommended);
-        applyLayerVisibility();
-        fitMapToData(hotspots, clusters, recommended);
-
-        const hasEnoughMapData = hotspots.length || clusters.length || recommended.length;
-        els.emptyOverlay.classList.toggle('show', !hasEnoughMapData);
-        setTimeout(() => { if (state.map) state.map.invalidateSize(); }, 80);
-      }
-
-      async function loadDashboard(opts = {}) {
-        const range = els.rangeSelect.value || '30d';
-        const force = opts.force ? '&force=1' : '';
-        setLoading(true);
-        clearError();
-        try {
-          const resp = await fetch(`/api/gap-summary?range=${encodeURIComponent(range)}${force}`, {
-            headers: { 'Accept': 'application/json' },
-            cache: 'no-store'
-          });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const data = await resp.json();
-          if (!data || data.ok === false) throw new Error((data && data.error) || 'API returned ok=false');
-          state.lastData = data;
-          renderAll(data);
-        } catch (err) {
-          console.error(err);
-          initMap();
-          els.emptyOverlay.classList.add('show');
-          showError(`無法載入 /api/gap-summary：${err.message || err}`);
-        } finally {
-          setLoading(false);
-        }
-      }
-
-      document.querySelectorAll('[data-layer]').forEach(input => {
-        input.addEventListener('change', applyLayerVisibility);
-      });
-
-      els.priorityList.addEventListener('click', event => {
-        const flyBtn = event.target.closest('[data-fly]');
-        if (flyBtn) {
-          event.preventDefault();
-          event.stopPropagation();
-          flyToCluster(flyBtn.getAttribute('data-fly'));
-          return;
-        }
-        const item = event.target.closest('.priority-item');
-        if (item) flyToCluster(item.getAttribute('data-cluster-id'));
-      });
-
-      els.rangeSelect.addEventListener('change', () => loadDashboard({ force: false }));
-      els.refreshBtn.addEventListener('click', () => loadDashboard({ force: true }));
-      els.retryBtn.addEventListener('click', () => loadDashboard({ force: true }));
-
-      window.addEventListener('resize', () => {
-        if (state.map) state.map.invalidateSize();
-      });
-
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => loadDashboard());
-      } else {
-        loadDashboard();
-      }
+      function renderKPIs(s, rec){ const top=rec[0]; const cards=[['有效需求',fmt(s.total_queries||s.effective_queries),`原始 ${fmt(s.raw_total_queries)}｜去重 ${fmt(s.duplicate_skipped)}`,'#0f766e'],['缺口群數',fmt(s.cluster_count),`${rec.length} 個優先檢查點`,'#f59e0b'],['查無 / 低覆蓋',`${fmt(s.no_result_count)} / ${fmt(s.low_result_count)}`,`查無率 ${pct(s.no_result_rate)}｜低覆蓋 ${pct(s.low_result_rate)}`,'#ef4444'],['獨立使用者',fmt(s.unique_users),`${fmt(s.active_days)} 個活躍日`,'#3b82f6'],['最高熱區',inferArea(top||{area_name:s.top_gap_area}),`中心 ${s.top_gap_cluster||'—'}`,'#10b981'],['平均反應',`${fmt(s.avg_response_ms)} ms`,`${fmt(s.slow_query_count)} 次慢查詢`,'#64748b']]; els.kpi.innerHTML=cards.map(c=>`<article class="kpi" style="--accent:${c[3]}"><small>${esc(c[0])}</small><b>${esc(c[1])}</b><span>${esc(c[2])}</span></article>`).join(''); }
+      function renderPriority(sites){ els.siteCount.textContent=`${sites.length} 點`; if(!sites.length){els.priority.innerHTML='<div class="empty"><h3>尚無優先點</h3><p>目前缺口訊號不足。</p></div>';return;} els.priority.innerHTML=sites.map((site,i)=>{ const id=String(site.cluster_id||`rank-${i+1}`), c=color(site.gap_level); return `<article class="item" data-id="${esc(id)}" style="--sev:${c}"><div class="item-top"><div class="rank">${i+1}</div><div style="min-width:0;flex:1"><div class="item-title">${esc(inferArea(site))}</div><div class="item-action">${esc(site.action_label||site.suggestion||'建議優先檢查附近場域、車站、公園或商場是否漏收')}</div><span class="level"><span class="chip-dot" style="--c:${c}"></span>${esc(levelLabel(site.gap_level))}</span></div></div><div class="mini-stats"><div class="mini"><b>${fmt(site.gap_score)}</b><span>Gap</span></div><div class="mini"><b>${fmt(site.effective_queries)}</b><span>需求</span></div><div class="mini"><b>${fmt(site.unique_users)}</b><span>使用者</span></div></div><div class="item-links"><button class="mini-btn" data-fly="${esc(id)}" type="button">定位</button>${site.map_url?`<a class="mini-btn" href="${esc(site.map_url)}" target="_blank" rel="noopener">Google Maps</a>`:'<span></span>'}</div></article>`; }).join(''); }
+      function renderArea(rows){ if(!rows.length){els.table.innerHTML='<tr><td colspan="8">目前尚無區域缺口資料</td></tr>';return;} els.table.innerHTML=rows.slice(0,18).map(r=>{ const c=color(r.gap_level); return `<tr><td><strong>${esc(inferArea(r))}</strong></td><td><span class="level"><span class="chip-dot" style="--c:${c}"></span>${esc(levelLabel(r.gap_level))}</span></td><td class="num">${fmt(r.effective_queries)}</td><td>${pct(r.no_result_rate)}</td><td>${fmt(r.no_result_count)}</td><td>${fmt(r.low_result_count)}</td><td>${fmt(r.slow_query_count)}</td><td class="num">${fmt(r.gap_score)}</td></tr>`; }).join(''); }
+      function renderReports(s, rec, areaRows){ const top=rec[0]||{}; const noRate=num(s.no_result_rate), lowRate=num(s.low_result_rate), slow=num(s.slow_query_count); let reason='資料覆蓋不足'; if(noRate>=10) reason='查無比例偏高'; else if(lowRate>=35) reason='低覆蓋訊號集中'; else if(slow>20) reason='外部查詢/資料源偏慢'; els.reports.innerHTML=`<article class="card report"><h3>決策結論</h3><div class="big">${rec.length?`先查 ${esc(inferArea(top))}`:'持續觀察'}</div><p>${rec.length?'第一優先點已在地圖與右側清單標出，適合先做資料補強或現地查核。':'目前還沒有足夠缺口形成建議點。'}</p></article><article class="card report"><h3>主要缺口原因</h3><div class="big">${esc(reason)}</div><p>查無率 ${pct(noRate)}、低覆蓋率 ${pct(lowRate)}、慢查詢 ${fmt(slow)} 次。</p></article><article class="card report"><h3>現地檢查建議</h3><div class="big">${fmt(rec.length)} 點</div><p>優先檢查車站、商場、公園、地下街或室內場域是否漏資料。</p></article>`; els.extra.innerHTML=`<article class="card report"><h3>Top 區域</h3><ol class="report-list">${areaRows.slice(0,5).map(a=>`<li>${esc(inferArea(a))}：${fmt(a.effective_queries)} 需求，Gap ${fmt(a.gap_score)}</li>`).join('')}</ol></article><article class="card report"><h3>資料品質</h3><p>目前已自動用座標重新推斷區域，避免全部落在「其他區域」。新版後端也會把推斷結果回寫 analytics_events。</p></article><article class="card report"><h3>下一步</h3><p>Phase 1B 建議加入現有廁所點位圖層，才能直接看「有需求但附近缺設施」的空白帶。</p></article>`; }
+      function renderMeta(data){ const d=data.generated_at?new Date(data.generated_at):null; const t=d&&!Number.isNaN(d.getTime())?d.toLocaleString('zh-TW',{hour12:false}):'—'; els.cache.textContent=data.cached?'資料狀態：快取':'資料狀態：即時產生'; $('rangeBadge').textContent=data.range==='all'?'全部歷史資料':'相容模式：最近一年'; els.footer.textContent=`Generated ${t} · ${data.range||'all'} · Eason Systems`; }
+      function render(data){ const s=data.summary||{}, hotspots=Array.isArray(data.hotspots)?data.hotspots:[], clusters=Array.isArray(data.demand_clusters)?data.demand_clusters:[], rec=Array.isArray(data.recommended_sites)?data.recommended_sites:[], areaRows=deriveAreaRows(Array.isArray(data.area_gaps)?data.area_gaps:[], hotspots); renderKPIs(s,rec); renderPriority(rec); renderArea(areaRows); renderReports(s,rec,areaRows); renderMeta(data); initMap(); clearLayers(); renderHeat(hotspots); renderClusters(clusters); renderRecommended(rec); applyLayerVisibility(); fit(); els.empty.classList.toggle('show',!(hotspots.length||clusters.length||rec.length)); setTimeout(()=>state.map&&state.map.invalidateSize(),80); }
+      async function load(force=false){ setLoading(true); clearError(); try{ let resp=await fetch(`/api/gap-summary?range=all${force?'&force=1':''}`,{headers:{Accept:'application/json'},cache:'no-store'}); let data=await resp.json(); if(!resp.ok||!data||data.ok===false){ resp=await fetch(`/api/gap-summary?range=1y${force?'&force=1':''}`,{headers:{Accept:'application/json'},cache:'no-store'}); data=await resp.json(); } if(!resp.ok||!data||data.ok===false) throw new Error(data&&data.error||`HTTP ${resp.status}`); state.lastData=data; render(data); }catch(e){ console.error(e); initMap(); els.empty.classList.add('show'); showError(e.message||'資料載入失敗'); }finally{ setLoading(false); } }
+      document.addEventListener('click',e=>{ const item=e.target.closest('.item'); if(item&&!e.target.closest('a,button')) fly(item.dataset.id); const flyBtn=e.target.closest('[data-fly]'); if(flyBtn) fly(flyBtn.dataset.fly); });
+      document.querySelectorAll('[data-layer]').forEach(i=>i.addEventListener('change',applyLayerVisibility));
+      $('refreshBtn').addEventListener('click',()=>load(true)); $('retryBtn').addEventListener('click',()=>load(true)); $('fitBtn').addEventListener('click',fit); $('topBtn').addEventListener('click',top); $('taipeiBtn').addEventListener('click',()=>state.map&&state.map.setView(TAIPEI,12));
+      window.addEventListener('resize',()=>state.map&&state.map.invalidateSize());
+      load(false);
     })();
   </script>
 </body>

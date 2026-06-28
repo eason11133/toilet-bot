@@ -2386,24 +2386,131 @@ def log_analytics_event(
     except Exception as e:
         logging.warning(f"log_analytics_event failed: {e}")
 
+# === 座標 → 區域名稱推斷 ===
+# Phase 1: use local bounding boxes only. This avoids repeated external geocoding,
+# works during dashboard rendering, and also gets written into analytics_events
+# for new location queries via log_analytics_event().
+_AREA_NAME_CACHE = {}
+_AREA_RULES = [
+    # High-signal landmarks / business districts first
+    ("台北車站", 25.0400, 25.0555, 121.5100, 121.5255),
+    ("西門町",   25.0390, 25.0508, 121.4980, 121.5115),
+    ("信義商圈", 25.0280, 25.0415, 121.5580, 121.5755),
+    ("公館",     25.0090, 25.0248, 121.5250, 121.5455),
+    ("板橋車站", 25.0090, 25.0208, 121.4550, 121.4705),
+
+    # Taipei districts, intentionally rough but much better than everything being 其他區域
+    ("中正區", 24.985, 25.055, 121.500, 121.545),
+    ("萬華區", 25.015, 25.055, 121.470, 121.515),
+    ("大同區", 25.045, 25.075, 121.500, 121.525),
+    ("中山區", 25.045, 25.085, 121.515, 121.555),
+    ("松山區", 25.035, 25.070, 121.545, 121.585),
+    ("大安區", 25.000, 25.045, 121.520, 121.565),
+    ("信義區", 25.015, 25.050, 121.555, 121.595),
+    ("士林區", 25.075, 25.165, 121.500, 121.590),
+    ("北投區", 25.105, 25.215, 121.455, 121.570),
+    ("內湖區", 25.045, 25.100, 121.565, 121.650),
+    ("南港區", 25.025, 25.075, 121.585, 121.690),
+    ("文山區", 24.955, 25.015, 121.530, 121.610),
+
+    # New Taipei / surrounding common areas
+    ("板橋區", 24.990, 25.040, 121.430, 121.500),
+    ("新莊區", 25.015, 25.065, 121.420, 121.470),
+    ("三重區", 25.045, 25.085, 121.465, 121.510),
+    ("蘆洲區", 25.070, 25.105, 121.450, 121.490),
+    ("中和區", 24.985, 25.020, 121.480, 121.535),
+    ("永和區", 25.000, 25.025, 121.500, 121.530),
+    ("新店區", 24.930, 25.000, 121.500, 121.585),
+    ("汐止區", 25.045, 25.095, 121.620, 121.710),
+    ("土城區", 24.950, 25.005, 121.410, 121.480),
+    ("樹林區", 24.940, 25.010, 121.360, 121.430),
+    ("林口區", 25.055, 25.105, 121.340, 121.405),
+    ("淡水區", 25.145, 25.235, 121.420, 121.520),
+    ("基隆市", 25.105, 25.170, 121.690, 121.805),
+    ("桃園區", 24.965, 25.035, 121.250, 121.345),
+]
+
 def get_area_name(lat, lon):
     try:
         lat = float(lat)
         lon = float(lon)
     except Exception:
-        return None
+        return "其他區域"
 
-    if 25.040 <= lat <= 25.055 and 121.510 <= lon <= 121.525:
-        return "台北車站"
-    if 25.040 <= lat <= 25.050 and 121.500 <= lon <= 121.510:
-        return "西門町"
-    if 25.028 <= lat <= 25.040 and 121.530 <= lon <= 121.570:
-        return "信義區"
-    if 25.010 <= lat <= 25.025 and 121.525 <= lon <= 121.545:
-        return "公館"
-    if 25.010 <= lat <= 25.020 and 121.455 <= lon <= 121.470:
-        return "板橋車站"
+    # Use a 3dp grid cache (~100m). This makes area inference cheap during gap
+    # summary rendering and keeps the result stable for nearby repeated queries.
+    key = f"{round(lat, 3):.3f},{round(lon, 3):.3f}"
+    cached = _AREA_NAME_CACHE.get(key)
+    if cached:
+        return cached
+
+    for name, min_lat, max_lat, min_lon, max_lon in _AREA_RULES:
+        if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
+            _AREA_NAME_CACHE[key] = name
+            return name
+
+    _AREA_NAME_CACHE[key] = "其他區域"
     return "其他區域"
+
+def _gap_area_name_from_event(e):
+    """Prefer stored area_name, but re-infer old/unknown rows from coordinates."""
+    old = (e.get("area_name") or "").strip()
+    lat = _safe_float(e.get("lat"))
+    lon = _safe_float(e.get("lon"))
+    inferred = get_area_name(lat, lon) if lat is not None and lon is not None else "其他區域"
+    if not old or old == "其他區域":
+        return inferred or "其他區域"
+    return old
+
+def _backfill_area_names_async(events, max_rows=500):
+    """Persist inferred area names for old analytics rows so we do not re-infer forever."""
+    if not POSTGRES_ENABLED:
+        return
+    updates = []
+    for e in events:
+        try:
+            old = (e.get("area_name") or "").strip()
+            if old and old != "其他區域":
+                continue
+            lat = _safe_float(e.get("lat")); lon = _safe_float(e.get("lon"))
+            if lat is None or lon is None:
+                continue
+            inferred = get_area_name(lat, lon)
+            if not inferred or inferred == "其他區域":
+                continue
+            eid = e.get("id")
+            if eid is None:
+                continue
+            updates.append((inferred, eid))
+            if len(updates) >= max_rows:
+                break
+        except Exception:
+            continue
+    if not updates:
+        return
+
+    def worker(batch):
+        try:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.executemany(
+                """
+                UPDATE analytics_events
+                SET area_name = %s
+                WHERE id = %s AND (area_name IS NULL OR area_name = '' OR area_name = '其他區域')
+                """,
+                batch
+            )
+            conn.commit()
+            conn.close()
+            logging.info(f"✅ gap area_name backfilled: {len(batch)} rows")
+        except Exception as e:
+            logging.warning(f"gap area_name backfill skipped: {e}")
+
+    try:
+        threading.Thread(target=worker, args=(updates,), name="gap-area-backfill", daemon=True).start()
+    except Exception:
+        pass
 
 # 查詢廁所資料
 # === OSM Overpass ===
@@ -5088,6 +5195,8 @@ _DASHBOARD_RANGE_SECONDS = {
     "7d": 7 * 86400,
     "30d": 30 * 86400,
     "1y": 365 * 86400,
+    # Gap dashboard can use all historical records instead of a time-window view.
+    "all": None,
 }
 
 def _dashboard_range_to_sqlite(range_key: str, anchor_date: str = None):
@@ -5101,7 +5210,15 @@ def _dashboard_range_to_sqlite(range_key: str, anchor_date: str = None):
 
     now = datetime.now(TW_TZ)
 
-    if range_key == "1h":
+    if range_key == "all":
+        # Use all known analytics data. Keep a finite lower bound so the existing
+        # SQL shape can stay simple across both Postgres and SQLite paths.
+        start = datetime(2000, 1, 1, tzinfo=TW_TZ)
+        end = now
+        bucket = "month"
+        labels = []
+
+    elif range_key == "1h":
         # 1h 維持即時最近一小時
         end = now
         start = end - timedelta(hours=1)
@@ -5785,9 +5902,9 @@ def _gap_cluster_rows(rows, radius_m=500):
     return clusters
 
 
-def _build_gap_summary(range_key="30d", anchor_date=None):
-    if range_key not in ("1h", "1d", "7d", "30d", "1y"):
-        range_key = "30d"
+def _build_gap_summary(range_key="all", anchor_date=None):
+    if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
+        range_key = "all"
 
     start, end, _, _ = _dashboard_range_to_sqlite(range_key, anchor_date)
 
@@ -5867,6 +5984,8 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
         events = [dict(r) for r in cur.fetchall()]
         conn.close()
 
+    _backfill_area_names_async(events)
+
     raw_total_queries = len(events)
     LOW_RESULT_THRESHOLD = int(os.getenv("GAP_LOW_RESULT_THRESHOLD", "2"))
     SLOW_QUERY_MS = int(os.getenv("GAP_SLOW_QUERY_MS", "5000"))
@@ -5916,7 +6035,7 @@ def _build_gap_summary(range_key="30d", anchor_date=None):
         rc = int(e.get("result_count") or 0)
         rt = int(e.get("response_time_ms") or 0)
         success = int(e.get("success") or 0) == 1
-        area = (e.get("area_name") or "其他區域").strip() or "其他區域"
+        area = _gap_area_name_from_event(e)
         all_users.add(e.get("user_key") or "anon")
         all_days.add(e.get("day_key") or "unknown")
 
@@ -6054,9 +6173,9 @@ def dashboard_gap_page():
 def api_gap_summary():
     """公共設施需求缺口分析 API：去重、群聚、建議設點。"""
     try:
-        range_key = (request.args.get("range") or "30d").strip()
-        if range_key not in ("1h", "1d", "7d", "30d", "1y"):
-            range_key = "30d"
+        range_key = (request.args.get("range") or "all").strip()
+        if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
+            range_key = "all"
         anchor_date = (request.args.get("anchor_date") or "").strip() or None
         force = (request.args.get("force") or "0").strip() == "1"
 
