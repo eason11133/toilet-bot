@@ -3,217 +3,424 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>公共設施需求缺口地圖｜Eason Systems</title>
+  <title>公共設施需求缺口研究分析</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    /* Minimal Leaflet CSS subset, kept inline for the current CSP. */
-    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img.leaflet-tile,.leaflet-container .leaflet-marker-pane img,.leaflet-container img.leaflet-image-layer{max-width:none!important;max-height:none!important}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:14px}.leaflet-bottom .leaflet-control{margin-bottom:14px}.leaflet-left .leaflet-control{margin-left:14px}.leaflet-right .leaflet-control{margin-right:14px}.leaflet-zoom-animated{transform-origin:0 0}.leaflet-interactive{cursor:pointer}.leaflet-grab{cursor:grab}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{padding:1px;text-align:left;border-radius:18px;background:#fff;color:#152033;box-shadow:0 22px 70px rgba(23,36,56,.22),0 0 0 1px rgba(17,24,39,.09)}.leaflet-popup-content{margin:15px 16px;line-height:1.5;font-size:13px;min-width:240px}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff}.leaflet-container a.leaflet-popup-close-button{position:absolute;top:0;right:0;border:none;text-align:center;width:30px;height:30px;font:22px/30px Tahoma,Verdana,sans-serif;color:#64748b;text-decoration:none;background:transparent}.leaflet-control-zoom a{display:block;text-align:center;text-decoration:none;width:38px;height:38px;line-height:38px;background:#fff;color:#172033;border-bottom:1px solid rgba(17,24,39,.12);font-size:22px;box-shadow:0 12px 28px rgba(23,36,56,.16)}.leaflet-control-zoom a:first-child{border-radius:12px 12px 0 0}.leaflet-control-zoom a:last-child{border-radius:0 0 12px 12px;border-bottom:0}.leaflet-control-attribution{padding:5px 9px;background:rgba(255,255,255,.82);color:#64748b;font-size:10px;border-radius:999px}.leaflet-control-attribution a{color:#475569}.leaflet-container{font-family:inherit;background:#eef2f1;outline:none}
-
     :root{
-      --ink:#152033; --muted:#64748b; --sub:#8a97a8; --line:rgba(15,23,42,.10);
-      --paper:rgba(255,255,255,.86); --white:#fff; --cream:#f4efe4; --teal:#0f766e;
-      --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6; --slate:#94a3b8; --green:#10b981;
-      --shadow:0 24px 70px rgba(31,48,70,.14); --soft:0 12px 32px rgba(31,48,70,.09);
-      --radius:24px;
+      --paper:#f7f3ea;
+      --paper-2:#fbfaf6;
+      --card:#ffffff;
+      --ink:#18243a;
+      --muted:#64748b;
+      --line:#e4ded1;
+      --soft:#f1eadc;
+      --red:#e24a3b;
+      --orange:#f59e0b;
+      --blue:#2f80ed;
+      --teal:#0ea5a3;
+      --green:#16a34a;
+      --gray:#94a3b8;
+      --shadow: 0 18px 50px rgba(51, 42, 24, .10);
+      --radius: 22px;
     }
-    *{box-sizing:border-box} html,body{min-height:100%}
+    *{box-sizing:border-box}
+    html,body{height:100%}
     body{
-      margin:0; color:var(--ink);
-      font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;
+      margin:0;
+      color:var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
       background:
-        radial-gradient(circle at 13% 6%, rgba(245,158,11,.12), transparent 28%),
-        radial-gradient(circle at 88% 10%, rgba(15,118,110,.10), transparent 32%),
-        linear-gradient(90deg, rgba(15,118,110,.045) 1px, transparent 1px),
-        linear-gradient(0deg, rgba(15,118,110,.045) 1px, transparent 1px),
-        linear-gradient(135deg,#f7f2e8 0%,#eef3f4 48%,#f8faf7 100%);
-      background-size:auto,auto,40px 40px,40px 40px,auto;
+        radial-gradient(circle at 8% -6%, rgba(245,158,11,.18), transparent 28%),
+        radial-gradient(circle at 95% 0%, rgba(14,165,163,.12), transparent 28%),
+        linear-gradient(135deg, rgba(255,255,255,.8) 0 18%, transparent 18% 100%),
+        repeating-linear-gradient(0deg, rgba(24,36,58,.035) 0 1px, transparent 1px 42px),
+        repeating-linear-gradient(90deg, rgba(24,36,58,.03) 0 1px, transparent 1px 42px),
+        var(--paper);
     }
-    a{color:inherit} button{font:inherit}
-    .page{width:min(1640px,calc(100% - 28px)); margin:0 auto; padding:18px 0 38px}
-    .topbar{
-      display:flex; justify-content:space-between; align-items:center; gap:18px;
-      background:linear-gradient(120deg,rgba(255,255,255,.95),rgba(255,255,255,.75));
-      border:1px solid rgba(15,23,42,.10); border-radius:26px; padding:18px 20px; box-shadow:var(--shadow); backdrop-filter:blur(18px);
-      position:relative; overflow:hidden;
-    }
-    .topbar::after{content:"PUBLIC GAP MAP"; position:absolute; right:18px; bottom:-12px; color:rgba(15,23,42,.045); font-size:clamp(42px,6vw,96px); font-weight:1000; letter-spacing:-.07em; pointer-events:none; white-space:nowrap}
-    .title{position:relative; z-index:1}.eyebrow{display:flex; align-items:center; gap:8px; color:var(--teal); font-size:12px; font-weight:950; letter-spacing:.12em; text-transform:uppercase}.dot{width:9px;height:9px;border-radius:999px;background:var(--amber);box-shadow:0 0 0 7px rgba(245,158,11,.14)}
-    h1{margin:7px 0 5px; font-size:clamp(24px,3vw,38px); line-height:1.08; letter-spacing:-.045em}.subtitle{margin:0;color:var(--muted);font-size:14px;line-height:1.65;max-width:760px}
-    .actions{display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:10px; position:relative; z-index:1}.badge,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(15,23,42,.11);background:rgba(255,255,255,.82);border-radius:15px;min-height:42px;padding:10px 12px;box-shadow:0 8px 20px rgba(31,48,70,.07);font-size:13px;color:#344256;text-decoration:none}.btn{font-weight:850;cursor:pointer;transition:.16s}.btn:hover{transform:translateY(-1px);background:#fff7ed;border-color:rgba(245,158,11,.38)}.btn.primary{background:#153547;color:#fff;border-color:#153547}.btn.primary:hover{background:#0f2a39;color:#fff}
-    .kpis{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:12px;margin:14px 0}.kpi{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:15px;box-shadow:var(--soft);position:relative;overflow:hidden}.kpi::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:var(--accent,var(--teal))}.kpi small{display:block;color:var(--muted);font-weight:850;font-size:12px;letter-spacing:.06em;text-transform:uppercase}.kpi b{display:block;margin-top:7px;font-size:clamp(23px,2.4vw,34px);line-height:1;font-weight:1000;letter-spacing:-.04em}.kpi span{display:block;margin-top:8px;color:var(--sub);font-size:12px;line-height:1.35}
-    .grid{display:grid;grid-template-columns:minmax(0,1fr) 405px;gap:15px;align-items:start}.left-stack{display:grid;gap:15px}.card{background:rgba(255,255,255,.82);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px)}.map-card{padding:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-title{display:flex;align-items:center;gap:9px;margin:0;font-size:17px;letter-spacing:-.02em}.legend{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px}.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(15,23,42,.10);background:rgba(255,255,255,.76);border-radius:999px;padding:7px 9px;font-size:11px;color:#536174}.chip-dot{width:8px;height:8px;border-radius:999px;background:var(--c)}
-    .map-wrap{position:relative}#gapMap{height:min(72vh,760px);min-height:610px;width:100%;border-radius:20px;border:1px solid rgba(15,23,42,.14);overflow:hidden;background:#eef2f1;box-shadow:inset 0 0 0 1px rgba(255,255,255,.62),0 16px 45px rgba(31,48,70,.11)}
-    .map-tools{position:absolute;left:14px;top:14px;z-index:900;display:flex;gap:8px;flex-wrap:wrap;max-width:calc(100% - 230px)}.tool-btn{border:1px solid rgba(15,23,42,.11);background:rgba(255,255,255,.88);border-radius:999px;padding:8px 10px;font-size:12px;font-weight:850;box-shadow:0 10px 24px rgba(31,48,70,.10);cursor:pointer}.tool-btn:hover{background:#fff7ed}.layers{position:absolute;right:14px;top:14px;z-index:900;display:grid;gap:8px;width:188px;border:1px solid rgba(15,23,42,.12);background:rgba(255,255,255,.88);border-radius:18px;padding:12px;box-shadow:0 18px 42px rgba(31,48,70,.14);backdrop-filter:blur(14px)}.layers strong{font-size:11px;color:#475569;letter-spacing:.1em;text-transform:uppercase}.layers label{display:flex;align-items:center;gap:8px;font-size:13px;color:#475569;cursor:pointer}.layers input{accent-color:var(--amber)}
-    .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;background:rgba(255,255,255,.60);border-radius:20px;z-index:850;pointer-events:none}.overlay.show{display:flex}.empty{max-width:520px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:var(--shadow)}.empty h3{margin:0 0 8px;font-size:22px}.empty p{margin:0;color:var(--muted);line-height:1.6}
-    .reports{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.report{padding:16px}.report h3{margin:0 0 9px;font-size:15px}.report .big{font-size:25px;font-weight:1000;letter-spacing:-.04em}.report p{margin:7px 0 0;color:var(--muted);font-size:13px;line-height:1.55}.report-list{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6}
-    .side{padding:14px;position:sticky;top:14px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;overflow:hidden}.side-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:4px 2px 12px}.priority{overflow:auto;display:grid;gap:10px;padding:12px 4px 2px 0;scrollbar-width:thin}.item{position:relative;overflow:hidden;background:rgba(255,255,255,.76);border:1px solid var(--line);border-radius:20px;padding:13px;cursor:pointer;box-shadow:0 8px 22px rgba(31,48,70,.06);transition:.16s}.item:hover,.item.active{transform:translateY(-1px);background:#fffaf0;border-color:rgba(245,158,11,.34);box-shadow:0 18px 36px rgba(245,158,11,.12)}.item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--sev,var(--amber))}.item-top{display:flex;gap:12px}.rank{width:42px;height:42px;flex:0 0 auto;border-radius:15px;display:grid;place-items:center;background:var(--sev,var(--amber));color:#fff;font-weight:1000;box-shadow:0 10px 24px color-mix(in srgb,var(--sev,var(--amber)),transparent 72%)}.item-title{font-weight:950;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.item-action{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.45}.level{display:inline-flex;align-items:center;gap:6px;margin-top:8px;border:1px solid rgba(15,23,42,.10);border-radius:999px;padding:5px 8px;background:#fff;font-size:11px}.mini-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}.mini{background:#f8fafb;border:1px solid rgba(15,23,42,.08);border-radius:13px;padding:8px}.mini b{display:block;font-size:17px}.mini span{display:block;margin-top:3px;color:var(--sub);font-size:11px}.item-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.mini-btn{border:1px solid rgba(15,23,42,.10);background:#fff;border-radius:13px;padding:9px 10px;text-align:center;text-decoration:none;font-weight:850;color:#123247;cursor:pointer}
-    .table-card{margin-top:15px;padding:17px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:18px;margin-top:12px}table{width:100%;border-collapse:collapse;min-width:760px;background:rgba(255,255,255,.64)}th,td{text-align:left;padding:15px 16px;border-bottom:1px solid rgba(15,23,42,.08);font-size:14px}th{background:#eef5f4;color:#334155;font-size:12px;letter-spacing:.07em;text-transform:uppercase}tr:last-child td{border-bottom:0}.num{font-weight:950}.muted{color:var(--muted)}.footer{margin-top:14px;color:var(--muted);font-size:12px;text-align:center}.status{display:none;margin:14px 0;padding:13px 15px;border-radius:18px;border:1px solid rgba(239,68,68,.24);background:rgba(254,242,242,.92);color:#991b1b;justify-content:space-between;align-items:center;gap:10px}.status.show{display:flex}.loader{position:fixed;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--teal),var(--amber),var(--red));transform-origin:left;transform:scaleX(0);opacity:0;z-index:9999}.loader.on{opacity:1;animation:loading 1.2s ease-in-out infinite}@keyframes loading{0%{transform:scaleX(.08)}50%{transform:scaleX(.68)}100%{transform:scaleX(.08)}}.popup-title{font-weight:950;font-size:15px}.popup-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}.popup-stat{background:#f8fafb;border:1px solid rgba(15,23,42,.08);border-radius:12px;padding:8px}.popup-stat b{display:block;font-size:16px}.popup-stat span{font-size:11px;color:#64748b}.popup-link{display:block;margin-top:10px;color:#0f766e;font-weight:850;text-decoration:none}.rec-pin{width:34px;height:34px;border-radius:15px;display:grid;place-items:center;color:#fff;font-weight:1000;border:3px solid #fff;box-shadow:0 12px 32px rgba(15,23,42,.24)}
-    @media(max-width:1180px){.grid{grid-template-columns:1fr}.side{position:relative;top:auto;max-height:none}.priority{max-height:540px}.reports{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(3,1fr)}}
-    @media(max-width:720px){.page{width:min(100% - 18px,1640px)}.topbar{align-items:flex-start;flex-direction:column}.actions{justify-content:flex-start}.kpis{grid-template-columns:1fr 1fr}.reports{grid-template-columns:1fr}#gapMap{height:62vh;min-height:430px}.layers{position:relative;right:auto;top:auto;width:auto;margin-top:10px}.map-tools{position:relative;left:auto;top:auto;max-width:none;margin-bottom:8px}.section-head{align-items:flex-start;flex-direction:column}.item-links{grid-template-columns:1fr}}
+    a{color:inherit;text-decoration:none}
+    .page{max-width:1440px;margin:0 auto;padding:28px 28px 44px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}
+    .brand{display:flex;gap:14px;align-items:center;min-width:0}
+    .seal{width:54px;height:54px;border-radius:18px;background:linear-gradient(135deg,var(--red),var(--orange));display:grid;place-items:center;color:white;font-weight:900;box-shadow:0 16px 35px rgba(226,74,59,.25)}
+    .brand h1{font-size:28px;line-height:1.15;margin:0;letter-spacing:-.02em}
+    .brand p{margin:6px 0 0;color:var(--muted);font-size:14px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    button,.btn{border:1px solid var(--line);background:rgba(255,255,255,.82);padding:10px 14px;border-radius:999px;font-weight:800;color:#203047;cursor:pointer;box-shadow:0 8px 18px rgba(51,42,24,.06);transition:.18s ease;display:inline-flex;align-items:center;gap:8px}
+    button:hover,.btn:hover{transform:translateY(-1px);box-shadow:0 14px 26px rgba(51,42,24,.10)}
+    .btn-primary{background:linear-gradient(135deg,#18324b,#0f766e);color:white;border-color:transparent}
+    .meta-strip{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 18px;color:var(--muted);font-size:13px}
+    .pill{border:1px solid var(--line);background:rgba(255,255,255,.7);padding:7px 10px;border-radius:999px}
+
+    .summary-card{background:linear-gradient(135deg,#ffffff 0%,#fffaf0 100%);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;margin-bottom:18px;display:grid;grid-template-columns:1.4fr .6fr;gap:22px;align-items:center}
+    .summary-card h2{margin:0 0 10px;font-size:22px;letter-spacing:-.01em}
+    .summary-card p{margin:0;color:#415269;line-height:1.75;font-size:15px}
+    .summary-badge{justify-self:end;background:#172033;color:white;border-radius:20px;padding:18px 20px;min-width:220px;box-shadow:0 18px 45px rgba(23,32,51,.22)}
+    .summary-badge .label{font-size:12px;color:#b8c5d6;margin-bottom:5px}
+    .summary-badge .value{font-size:32px;font-weight:950;letter-spacing:-.04em}
+
+    .kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:18px}
+    .kpi{background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:20px;padding:17px;box-shadow:0 10px 24px rgba(51,42,24,.06);position:relative;overflow:hidden;min-height:122px}
+    .kpi:before{content:"";position:absolute;inset:0 0 auto 0;height:5px;background:var(--accent,var(--teal))}
+    .kpi .label{font-size:13px;color:var(--muted);font-weight:800}
+    .kpi .num{font-size:31px;font-weight:950;margin-top:9px;letter-spacing:-.04em}
+    .kpi .sub{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.35}
+
+    .grid{display:grid;grid-template-columns:minmax(0,1.15fr) 430px;gap:18px;align-items:start}
+    .panel{background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+    .panel-head{padding:17px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(255,255,255,.65)}
+    .panel-head h3{margin:0;font-size:17px;display:flex;gap:8px;align-items:center}
+    .panel-sub{font-size:12px;color:var(--muted)}
+    .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    .chart-card{min-height:330px}
+    .chart-wrap{height:270px;padding:18px}
+    .chart-wide{grid-column:1/-1}.chart-wide .chart-wrap{height:330px}
+
+    .map-card{position:sticky;top:18px}
+    #gapMap{height:360px;width:100%;background:#e8ebe6;border-bottom:1px solid var(--line)}
+    .map-actions{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line);background:#fff}
+    .mini-btn{font-size:12px;padding:8px 10px}
+    .rank-list{max-height:600px;overflow:auto;padding:14px;background:linear-gradient(180deg,#fff,#fbfaf6)}
+    .rank-item{border:1px solid #eadfcb;background:white;border-radius:18px;margin-bottom:12px;padding:14px;display:grid;grid-template-columns:54px 1fr;gap:12px;box-shadow:0 10px 24px rgba(51,42,24,.06);cursor:pointer;transition:.15s ease}
+    .rank-item:hover,.rank-item.active{border-color:#f6b453;transform:translateY(-1px)}
+    .rank-num{width:48px;height:48px;border-radius:16px;display:grid;place-items:center;background:var(--orange);color:white;font-weight:950;font-size:20px;box-shadow:0 12px 26px rgba(245,158,11,.25)}
+    .rank-title{font-weight:950;margin-bottom:4px}.rank-desc{font-size:13px;color:#4b5e77;line-height:1.45}.rank-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.statbox{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:7px}.statbox b{display:block;font-size:15px}.statbox span{font-size:11px;color:var(--muted)}
+    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #e5e7eb;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:800;background:white;color:#334155}.dot{width:9px;height:9px;border-radius:999px;background:var(--gray)}
+
+    .table-panel{margin-top:18px}.data-table{width:100%;border-collapse:collapse}.data-table th,.data-table td{padding:14px 16px;border-bottom:1px solid #edf0f2;text-align:left;font-size:14px}.data-table th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#64748b;background:#f8fafc}.data-table tr:last-child td{border-bottom:none}.bar{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;min-width:100px}.bar>i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--orange),var(--red))}
+
+    .method{margin-top:18px;background:#17324a;color:#eaf5ff;border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:18px}.method h3{margin:0 0 8px}.method p,.method li{color:#cbd8e6;line-height:1.7;font-size:14px}.method ul{margin:8px 0 0;padding-left:18px}
+    .loading,.error,.empty{padding:20px;border:1px dashed #d8c9ad;border-radius:18px;background:#fffaf0;color:#715b35;margin:18px;line-height:1.6}.error{border-color:#fca5a5;background:#fff1f2;color:#991b1b}.hidden{display:none!important}
+
+    /* Minimal Leaflet CSS for CSP-safe inline use */
+    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img{max-width:none!important}.leaflet-container{font-family:inherit;touch-action:pan-x pan-y;background:#ddd}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{margin-right:10px}.leaflet-control-zoom a{background:#fff;border-bottom:1px solid #ccc;width:30px;height:30px;line-height:30px;display:block;text-align:center;text-decoration:none;color:#222;font-weight:bold}.leaflet-control-attribution{background:rgba(255,255,255,.75);font-size:11px;padding:3px 7px;border-radius:999px}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{background:#fff;border-radius:14px;box-shadow:0 14px 35px rgba(0,0,0,.18);padding:1px;text-align:left}.leaflet-popup-content{margin:14px;line-height:1.45}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.18)}
+    .pin{width:34px;height:34px;border-radius:50% 50% 50% 8px;transform:rotate(-45deg);display:grid;place-items:center;color:#fff;font-weight:950;border:3px solid #fff;box-shadow:0 10px 24px rgba(0,0,0,.25)}.pin span{transform:rotate(45deg)}
+
+    @media(max-width:1100px){.grid{grid-template-columns:1fr}.map-card{position:relative;top:auto}.kpis{grid-template-columns:repeat(2,1fr)}.summary-card{grid-template-columns:1fr}.summary-badge{justify-self:start}.chart-grid{grid-template-columns:1fr}}
+    @media(max-width:640px){.page{padding:18px 14px}.topbar{align-items:flex-start;flex-direction:column}.actions{justify-content:flex-start}.kpis{grid-template-columns:1fr}.brand h1{font-size:23px}.method{grid-template-columns:1fr}.rank-list{max-height:none}}
+    @media print{body{background:#fff}.actions,.map-actions,#gapMap{display:none!important}.page{max-width:none;padding:0}.panel,.summary-card,.kpi,.method{box-shadow:none;break-inside:avoid}.grid{display:block}.map-card{display:none}.chart-grid{display:grid;grid-template-columns:1fr 1fr}.method{background:#fff;color:#111;border:1px solid #ddd}.method p,.method li{color:#333}}
   </style>
 </head>
 <body>
-  <div class="loader" id="loader"></div>
   <main class="page">
     <header class="topbar">
-      <div class="title">
-        <div class="eyebrow"><span class="dot"></span> City Governance GIS</div>
-        <h1>公共設施需求缺口地圖</h1>
-        <p class="subtitle">改用系統累積的全部查詢資料，不再切天數；地圖直接標出需求熱區、缺口群與優先檢查點，讓你判斷哪裡最該補資料或新增設施。</p>
+      <div class="brand">
+        <div class="seal">Gap</div>
+        <div>
+          <h1>公共設施需求缺口研究分析</h1>
+          <p>真實查詢行為 × 地理熱區 × 查無／低覆蓋訊號，用於研究展示、客戶 Demo 與政府資料提供。</p>
+        </div>
       </div>
       <div class="actions">
-        <span class="badge" id="cacheBadge">資料狀態：載入中</span>
-        <span class="badge" id="rangeBadge">全部歷史資料</span>
         <a class="btn" href="/dashboard">← 回主儀表板</a>
-        <button class="btn primary" id="refreshBtn" type="button">↻ 重新整理</button>
+        <button id="copySummaryBtn">複製摘要</button>
+        <button id="downloadCsvBtn">下載熱區 CSV</button>
+        <button id="printBtn" class="btn-primary">匯出 PDF / 列印</button>
       </div>
     </header>
 
-    <div class="status" id="errorBanner"><span id="errorText">資料載入失敗</span><button class="btn" id="retryBtn" type="button">重試</button></div>
+    <div class="meta-strip">
+      <span class="pill">資料範圍：系統全資料</span>
+      <span class="pill" id="lastUpdated">尚未載入</span>
+      <span class="pill" id="cacheState">—</span>
+      <button id="refreshBtn" class="mini-btn">重新整理</button>
+    </div>
 
-    <section class="kpis" id="kpiGrid">
-      <article class="kpi"><small>有效需求</small><b>—</b><span>載入中</span></article>
-      <article class="kpi"><small>缺口群數</small><b>—</b><span>載入中</span></article>
-      <article class="kpi"><small>查無 / 低覆蓋</small><b>—</b><span>載入中</span></article>
-      <article class="kpi"><small>獨立使用者</small><b>—</b><span>載入中</span></article>
-      <article class="kpi"><small>最高熱區</small><b>—</b><span>載入中</span></article>
-      <article class="kpi"><small>建議檢查點</small><b>—</b><span>載入中</span></article>
+    <section class="summary-card">
+      <div>
+        <h2>研究摘要</h2>
+        <p id="researchSummary">資料載入中。系統將把位置查詢中的查無、低覆蓋與慢查詢轉換為公共設施需求缺口訊號，並產生可提供對外展示的熱區、圖表與候選補強清單。</p>
+      </div>
+      <div class="summary-badge">
+        <div class="label">最高優先缺口分數</div>
+        <div class="value" id="topScore">—</div>
+        <div class="label" id="topAreaLabel">等待資料</div>
+      </div>
     </section>
 
+    <section class="kpis">
+      <div class="kpi" style="--accent:var(--teal)"><div class="label">有效需求訊號</div><div class="num" id="kpiDemand">—</div><div class="sub">去重後的位置查詢需求</div></div>
+      <div class="kpi" style="--accent:var(--red)"><div class="label">查無 / 低覆蓋訊號</div><div class="num" id="kpiGapSignals">—</div><div class="sub">代表資料不足或推薦品質需補強</div></div>
+      <div class="kpi" style="--accent:var(--orange)"><div class="label">缺口熱區</div><div class="num" id="kpiClusters">—</div><div class="sub">約 500m 聚合後的需求群</div></div>
+      <div class="kpi" style="--accent:var(--blue)"><div class="label">可提供候選點</div><div class="num" id="kpiSites">—</div><div class="sub">可匯出給單位檢視的 Top 清單</div></div>
+      <div class="kpi" style="--accent:var(--green)"><div class="label">區域分類完成率</div><div class="num" id="kpiQuality">—</div><div class="sub">依座標推定區域並可回寫資料庫</div></div>
+    </section>
+
+    <div id="loadingBox" class="loading">正在整理全資料缺口訊號與研究圖表...</div>
+    <div id="errorBox" class="error hidden"></div>
+
     <section class="grid">
-      <div class="left-stack">
-        <section class="card map-card">
-          <div class="section-head">
-            <h2 class="section-title">🗺️ 缺口熱區地圖</h2>
-            <div class="legend">
-              <span class="chip"><span class="chip-dot" style="--c:#ef4444"></span>高可信缺口</span>
-              <span class="chip"><span class="chip-dot" style="--c:#f59e0b"></span>中可信缺口</span>
-              <span class="chip"><span class="chip-dot" style="--c:#3b82f6"></span>低可信缺口</span>
-              <span class="chip"><span class="chip-dot" style="--c:#94a3b8"></span>觀察中</span>
-            </div>
+      <div>
+        <section class="chart-grid">
+          <div class="panel chart-card chart-wide">
+            <div class="panel-head"><h3>📊 Top 區域缺口</h3><span class="panel-sub">用於對外說明哪些區域最值得優先檢視</span></div>
+            <div class="chart-wrap"><canvas id="areaChart"></canvas></div>
           </div>
-          <div class="map-wrap">
-            <div class="map-tools">
-              <button class="tool-btn" id="fitBtn" type="button">聚焦全部熱區</button>
-              <button class="tool-btn" id="topBtn" type="button">跳到第一優先</button>
-              <button class="tool-btn" id="taipeiBtn" type="button">回台北視角</button>
-            </div>
-            <div id="gapMap" role="application" aria-label="公共設施需求缺口地圖"></div>
-            <div class="layers">
-              <strong>Map Layers</strong>
-              <label><input type="checkbox" data-layer="heat" checked> 需求熱度</label>
-              <label><input type="checkbox" data-layer="clusters" checked> 缺口影響圈</label>
-              <label><input type="checkbox" data-layer="recommended" checked> 優先檢查點</label>
-            </div>
-            <div class="overlay" id="emptyOverlay"><div class="empty"><h3>資料還不夠形成熱區</h3><p>地圖仍可操作。等更多使用者查詢後，這裡會自動出現缺口熱區與優先補強點。</p></div></div>
+          <div class="panel chart-card">
+            <div class="panel-head"><h3>🧩 缺口原因組成</h3><span class="panel-sub">查無、低覆蓋、慢查詢</span></div>
+            <div class="chart-wrap"><canvas id="reasonChart"></canvas></div>
+          </div>
+          <div class="panel chart-card">
+            <div class="panel-head"><h3>🎯 缺口可信度分布</h3><span class="panel-sub">高 / 中 / 低 / 觀察中</span></div>
+            <div class="chart-wrap"><canvas id="levelChart"></canvas></div>
+          </div>
+          <div class="panel chart-card chart-wide">
+            <div class="panel-head"><h3>🔬 需求量 vs 缺口分數</h3><span class="panel-sub">越右上越適合作為研究展示與現地檢查對象</span></div>
+            <div class="chart-wrap"><canvas id="scatterChart"></canvas></div>
           </div>
         </section>
 
-        <section class="reports" id="reportsGrid">
-          <article class="card report"><h3>決策結論</h3><div class="big">—</div><p>載入中</p></article>
-          <article class="card report"><h3>主要缺口原因</h3><div class="big">—</div><p>載入中</p></article>
-          <article class="card report"><h3>現地檢查建議</h3><div class="big">—</div><p>載入中</p></article>
+        <section class="panel table-panel">
+          <div class="panel-head"><h3>📍 區域缺口清單</h3><span class="panel-sub">方便複製、截圖或匯出</span></div>
+          <div class="empty hidden" id="emptyBox">目前還沒有足夠的缺口資料可視覺化。</div>
+          <div style="overflow:auto">
+            <table class="data-table">
+              <thead><tr><th>區域</th><th>缺口等級</th><th>有效需求</th><th>查無率</th><th>缺口分數</th><th>視覺化</th></tr></thead>
+              <tbody id="areaTableBody"></tbody>
+            </table>
+          </div>
         </section>
       </div>
 
-      <aside class="card side">
-        <div class="side-head"><h2 class="section-title">🔥 優先檢查點</h2><span class="badge" id="siteCountBadge">0 點</span></div>
-        <div class="priority" id="priorityList"><div class="empty"><h3>載入中</h3><p>正在分析優先熱區…</p></div></div>
+      <aside class="panel map-card">
+        <div class="panel-head"><h3>🗺️ 缺口地理分布證據圖</h3><span class="panel-sub">輔助展示，不作為唯一結論</span></div>
+        <div id="gapMap"></div>
+        <div class="map-actions">
+          <button class="mini-btn" id="fitMapBtn">聚焦熱區</button>
+          <button class="mini-btn" id="topMapBtn">第一優先</button>
+          <button class="mini-btn" id="taipeiBtn">回台北視角</button>
+        </div>
+        <div class="rank-list" id="rankList"></div>
       </aside>
     </section>
 
-    <section class="card table-card">
-      <div class="section-head"><h2 class="section-title">📍 區域缺口報表</h2><span class="badge">已移除無意義視覺長條，改成可判讀欄位</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>區域</th><th>等級</th><th>有效需求</th><th>查無率</th><th>查無次數</th><th>低覆蓋</th><th>慢查詢</th><th>Gap Score</th></tr></thead>
-          <tbody id="areaTableBody"><tr><td colspan="8">載入中…</td></tr></tbody>
-        </table>
+    <section class="method">
+      <div>
+        <h3>方法說明</h3>
+        <p>本頁以使用者實際位置查詢作為匿名化需求訊號，並以「查無結果、低覆蓋結果、慢查詢」作為公共設施資料缺口的觀察指標。熱區分數不是直接宣稱必須新建設施，而是指出值得補資料、現地盤點或進一步規劃的區域。</p>
+      </div>
+      <div>
+        <h3>資料限制</h3>
+        <ul>
+          <li>區域名稱先以本地座標規則推定，後續可升級為行政區 GeoJSON 邊界。</li>
+          <li>「待分類格網」代表已保留地理訊號，但尚未被歸入正式行政區或熱點名稱。</li>
+          <li>缺口分數適合做研究展示與盤點優先序，不應單獨作為施工決策。</li>
+        </ul>
       </div>
     </section>
-
-    <section class="card table-card">
-      <div class="section-head"><h2 class="section-title">📊 補強報表</h2><span class="badge">給簡報 / 決策用</span></div>
-      <div id="extraReports" class="reports" style="margin-top:12px"></div>
-    </section>
-
-    <div class="footer" id="footerMeta">Eason Systems · Public Facility Demand Gap Intelligence</div>
   </main>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-  <script>
-    (function(){
-      'use strict';
-      const TAIPEI = [25.0478, 121.5170];
-      const state = { map:null, lastData:null, layers:{}, markers:{}, selectedId:null, allPoints:[] };
-      const $ = id => document.getElementById(id);
-      const els = { loader:$('loader'), error:$('errorBanner'), errorText:$('errorText'), cache:$('cacheBadge'), kpi:$('kpiGrid'), map:$('gapMap'), empty:$('emptyOverlay'), siteCount:$('siteCountBadge'), priority:$('priorityList'), table:$('areaTableBody'), reports:$('reportsGrid'), extra:$('extraReports'), footer:$('footerMeta') };
-      const fmt = v => Number(v || 0).toLocaleString('zh-TW');
-      const num = (v,d=0) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
-      const pct = v => `${num(v,0).toFixed(num(v,0)%1?1:0)}%`;
-      const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-      function color(level){ if(String(level).includes('高'))return '#ef4444'; if(String(level).includes('中'))return '#f59e0b'; if(String(level).includes('低'))return '#3b82f6'; return '#94a3b8'; }
-      function levelLabel(level){ return String(level || '觀察中').replace('可信缺口','可信'); }
-      function ll(x){ const lat=num(x.lat,NaN), lon=num(x.lon,NaN); return Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:null; }
+<script>
+(() => {
+  const API_URL = '/api/gap-summary?range=all';
+  const DEFAULT_CENTER = [25.0478, 121.5170];
+  let currentData = null;
+  let map, clusterLayer, pinLayer;
+  let charts = {};
+  const fmt = new Intl.NumberFormat('zh-TW');
 
-      const AREA_RULES = [
-        ['台北車站',25.0400,25.0555,121.5100,121.5255],['西門町',25.0390,25.0508,121.4980,121.5115],['信義商圈',25.0280,25.0415,121.5580,121.5755],['公館',25.0090,25.0248,121.5250,121.5455],['板橋車站',25.0090,25.0208,121.4550,121.4705],
-        ['中正區',24.985,25.055,121.500,121.545],['萬華區',25.015,25.055,121.470,121.515],['大同區',25.045,25.075,121.500,121.525],['中山區',25.045,25.085,121.515,121.555],['松山區',25.035,25.070,121.545,121.585],['大安區',25.000,25.045,121.520,121.565],['信義區',25.015,25.050,121.555,121.595],['士林區',25.075,25.165,121.500,121.590],['北投區',25.105,25.215,121.455,121.570],['內湖區',25.045,25.100,121.565,121.650],['南港區',25.025,25.075,121.585,121.690],['文山區',24.955,25.015,121.530,121.610],
-        ['板橋區',24.990,25.040,121.430,121.500],['新莊區',25.015,25.065,121.420,121.470],['三重區',25.045,25.085,121.465,121.510],['蘆洲區',25.070,25.105,121.450,121.490],['中和區',24.985,25.020,121.480,121.535],['永和區',25.000,25.025,121.500,121.530],['新店區',24.930,25.000,121.500,121.585],['汐止區',25.045,25.095,121.620,121.710]
-      ];
-      function inferArea(item){
-        const old = String(item.area_name || '').trim();
-        if(old && old !== '其他區域') return old;
-        const p = ll(item); if(!p) return old || '其他區域';
-        for(const [name,a,b,c,d] of AREA_RULES){ if(p[0]>=a&&p[0]<=b&&p[1]>=c&&p[1]<=d) return name; }
-        return old || '其他區域';
-      }
+  const levelColor = (level) => {
+    if (level === '高可信缺口') return '#e24a3b';
+    if (level === '中可信缺口') return '#f59e0b';
+    if (level === '低可信缺口') return '#2f80ed';
+    return '#94a3b8';
+  };
+  const displayArea = (name) => {
+    if (!name || name === '其他區域') return '待分類區域';
+    return name;
+  };
+  const n = (v, fallback=0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+  const pct = (v) => `${n(v).toFixed(1).replace('.0','')}%`;
 
-      function initMap(){
-        if(state.map) return state.map;
-        state.map = L.map('gapMap',{center:TAIPEI,zoom:12,scrollWheelZoom:true,zoomControl:true,preferCanvas:true});
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(state.map);
-        state.layers.heat = L.layerGroup().addTo(state.map);
-        state.layers.clusters = L.layerGroup().addTo(state.map);
-        state.layers.recommended = L.layerGroup().addTo(state.map);
-        return state.map;
-      }
-      function setLoading(on){ els.loader.classList.toggle('on',!!on); }
-      function showError(msg){ els.errorText.textContent = msg || '資料載入失敗'; els.error.classList.add('show'); }
-      function clearError(){ els.error.classList.remove('show'); }
-      function clearLayers(){ Object.values(state.layers).forEach(l=>l&&l.clearLayers()); state.markers={}; state.allPoints=[]; }
-      function applyLayerVisibility(){ document.querySelectorAll('[data-layer]').forEach(input=>{ const layer=state.layers[input.dataset.layer]; if(!layer||!state.map)return; if(input.checked&&!state.map.hasLayer(layer)) layer.addTo(state.map); if(!input.checked&&state.map.hasLayer(layer)) state.map.removeLayer(layer); }); }
-      function popup(item, rank){ const c=color(item.gap_level); const name=inferArea(item); return `<div class="popup-title" style="color:${c}">${rank?`#${rank} `:''}${esc(name)}</div><div class="muted">${esc(item.action_label||item.suggestion||'建議優先檢查此區公共設施覆蓋')}</div><div class="popup-grid"><div class="popup-stat"><b>${fmt(item.gap_score)}</b><span>Gap Score</span></div><div class="popup-stat"><b>${fmt(item.effective_queries)}</b><span>有效需求</span></div><div class="popup-stat"><b>${fmt(item.unique_users)}</b><span>使用者</span></div><div class="popup-stat"><b>${pct(item.no_result_rate)}</b><span>查無率</span></div></div>${item.map_url?`<a class="popup-link" href="${esc(item.map_url)}" target="_blank" rel="noopener">Google Maps →</a>`:''}`; }
-      function heatWeight(h,max){ return Math.max(.18, Math.min(1, num(h.gap_score,num(h.effective_queries,1))/max)); }
-      function renderHeat(hotspots){ const pts=hotspots.map(h=>{const p=ll(h);return p?[p[0],p[1],h]:null}).filter(Boolean); if(!pts.length || !L.heatLayer)return; const max=Math.max(1,...pts.map(x=>num(x[2].gap_score,num(x[2].effective_queries,1)))); const heat=L.heatLayer(pts.map(x=>[x[0],x[1],heatWeight(x[2],max)]),{radius:30,blur:25,maxZoom:17,minOpacity:.22,gradient:{0.2:'#22c55e',0.45:'#f59e0b',0.75:'#ef4444',1:'#991b1b'}}); state.layers.heat.addLayer(heat); pts.forEach(x=>state.allPoints.push([x[0],x[1]])); }
-      function renderClusters(clusters){ clusters.forEach((cl,i)=>{ const p=ll(cl); if(!p)return; const c=color(cl.gap_level); const circle=L.circle(p,{radius:Math.max(180,num(cl.radius_m,300)),color:c,weight:2,fillColor:c,fillOpacity:.16,opacity:.92}).bindPopup(popup(cl)); circle.on('click',()=>highlight(cl.cluster_id)); state.layers.clusters.addLayer(circle); state.allPoints.push(p); }); }
-      function pinIcon(rank,c){ return L.divIcon({className:'',html:`<div class="rec-pin" style="background:${c}">${rank}</div>`,iconSize:[34,34],iconAnchor:[17,17],popupAnchor:[0,-18]}); }
-      function renderRecommended(sites){ sites.forEach((s,i)=>{ const p=ll(s); if(!p)return; const id=String(s.cluster_id||`rank-${i+1}`); const marker=L.marker(p,{icon:pinIcon(i+1,color(s.gap_level)),title:`#${i+1} ${inferArea(s)}`}).bindPopup(popup(s,i+1)); marker.on('click',()=>highlight(id)); state.markers[id]=marker; state.layers.recommended.addLayer(marker); state.allPoints.push(p); }); }
-      function fit(){ if(!state.map)return; if(!state.allPoints.length){state.map.setView(TAIPEI,12);return;} try{state.map.fitBounds(L.latLngBounds(state.allPoints),{padding:[42,42],maxZoom:15});}catch(e){state.map.setView(TAIPEI,12);} }
-      function top(){ const first=(state.lastData?.recommended_sites||[])[0]; const id=first&&(first.cluster_id||'rank-1'); if(id) fly(id); }
-      function fly(id){ const m=state.markers[String(id)]; if(!m||!state.map)return; state.map.flyTo(m.getLatLng(),Math.max(state.map.getZoom(),15),{duration:.8}); m.openPopup(); highlight(id); }
-      function highlight(id){ state.selectedId=String(id||''); document.querySelectorAll('.item').forEach(el=>{ const on=el.dataset.id===state.selectedId; el.classList.toggle('active',on); if(on) el.scrollIntoView({behavior:'smooth',block:'nearest'}); }); }
+  function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
+  function setText(id, text){ const el=document.getElementById(id); if(el) el.textContent=text; }
 
-      function deriveAreaRows(areaGaps, hotspots){
-        const hasUseful = areaGaps.filter(a=>String(a.area_name||'')!=='其他區域').length >= Math.max(1, areaGaps.length/3);
-        if(hasUseful) return areaGaps;
-        const map=new Map();
-        (hotspots||[]).forEach(h=>{ const area=inferArea(h); const row=map.get(area)||{area_name:area,effective_queries:0,no_result_count:0,low_result_count:0,slow_query_count:0,gap_score:0,gap_level:'觀察中'}; row.effective_queries+=num(h.effective_queries); row.no_result_count+=num(h.no_result_count); row.low_result_count+=num(h.low_result_count); row.slow_query_count+=num(h.slow_query_count); row.gap_score+=num(h.gap_score); row.gap_level = row.gap_score>=300?'高可信缺口':row.gap_score>=80?'中可信缺口':row.gap_score>=20?'低可信缺口':'觀察中'; map.set(area,row); });
-        return Array.from(map.values()).map(r=>({...r,no_result_rate: r.effective_queries?Math.round(r.no_result_count/r.effective_queries*1000)/10:0})).sort((a,b)=>num(b.gap_score)-num(a.gap_score));
-      }
-      function renderKPIs(s, rec){ const top=rec[0]; const cards=[['有效需求',fmt(s.total_queries||s.effective_queries),`原始 ${fmt(s.raw_total_queries)}｜去重 ${fmt(s.duplicate_skipped)}`,'#0f766e'],['缺口群數',fmt(s.cluster_count),`${rec.length} 個優先檢查點`,'#f59e0b'],['查無 / 低覆蓋',`${fmt(s.no_result_count)} / ${fmt(s.low_result_count)}`,`查無率 ${pct(s.no_result_rate)}｜低覆蓋 ${pct(s.low_result_rate)}`,'#ef4444'],['獨立使用者',fmt(s.unique_users),`${fmt(s.active_days)} 個活躍日`,'#3b82f6'],['最高熱區',inferArea(top||{area_name:s.top_gap_area}),`中心 ${s.top_gap_cluster||'—'}`,'#10b981'],['平均反應',`${fmt(s.avg_response_ms)} ms`,`${fmt(s.slow_query_count)} 次慢查詢`,'#64748b']]; els.kpi.innerHTML=cards.map(c=>`<article class="kpi" style="--accent:${c[3]}"><small>${esc(c[0])}</small><b>${esc(c[1])}</b><span>${esc(c[2])}</span></article>`).join(''); }
-      function renderPriority(sites){ els.siteCount.textContent=`${sites.length} 點`; if(!sites.length){els.priority.innerHTML='<div class="empty"><h3>尚無優先點</h3><p>目前缺口訊號不足。</p></div>';return;} els.priority.innerHTML=sites.map((site,i)=>{ const id=String(site.cluster_id||`rank-${i+1}`), c=color(site.gap_level); return `<article class="item" data-id="${esc(id)}" style="--sev:${c}"><div class="item-top"><div class="rank">${i+1}</div><div style="min-width:0;flex:1"><div class="item-title">${esc(inferArea(site))}</div><div class="item-action">${esc(site.action_label||site.suggestion||'建議優先檢查附近場域、車站、公園或商場是否漏收')}</div><span class="level"><span class="chip-dot" style="--c:${c}"></span>${esc(levelLabel(site.gap_level))}</span></div></div><div class="mini-stats"><div class="mini"><b>${fmt(site.gap_score)}</b><span>Gap</span></div><div class="mini"><b>${fmt(site.effective_queries)}</b><span>需求</span></div><div class="mini"><b>${fmt(site.unique_users)}</b><span>使用者</span></div></div><div class="item-links"><button class="mini-btn" data-fly="${esc(id)}" type="button">定位</button>${site.map_url?`<a class="mini-btn" href="${esc(site.map_url)}" target="_blank" rel="noopener">Google Maps</a>`:'<span></span>'}</div></article>`; }).join(''); }
-      function renderArea(rows){ if(!rows.length){els.table.innerHTML='<tr><td colspan="8">目前尚無區域缺口資料</td></tr>';return;} els.table.innerHTML=rows.slice(0,18).map(r=>{ const c=color(r.gap_level); return `<tr><td><strong>${esc(inferArea(r))}</strong></td><td><span class="level"><span class="chip-dot" style="--c:${c}"></span>${esc(levelLabel(r.gap_level))}</span></td><td class="num">${fmt(r.effective_queries)}</td><td>${pct(r.no_result_rate)}</td><td>${fmt(r.no_result_count)}</td><td>${fmt(r.low_result_count)}</td><td>${fmt(r.slow_query_count)}</td><td class="num">${fmt(r.gap_score)}</td></tr>`; }).join(''); }
-      function renderReports(s, rec, areaRows){ const top=rec[0]||{}; const noRate=num(s.no_result_rate), lowRate=num(s.low_result_rate), slow=num(s.slow_query_count); let reason='資料覆蓋不足'; if(noRate>=10) reason='查無比例偏高'; else if(lowRate>=35) reason='低覆蓋訊號集中'; else if(slow>20) reason='外部查詢/資料源偏慢'; els.reports.innerHTML=`<article class="card report"><h3>決策結論</h3><div class="big">${rec.length?`先查 ${esc(inferArea(top))}`:'持續觀察'}</div><p>${rec.length?'第一優先點已在地圖與右側清單標出，適合先做資料補強或現地查核。':'目前還沒有足夠缺口形成建議點。'}</p></article><article class="card report"><h3>主要缺口原因</h3><div class="big">${esc(reason)}</div><p>查無率 ${pct(noRate)}、低覆蓋率 ${pct(lowRate)}、慢查詢 ${fmt(slow)} 次。</p></article><article class="card report"><h3>現地檢查建議</h3><div class="big">${fmt(rec.length)} 點</div><p>優先檢查車站、商場、公園、地下街或室內場域是否漏資料。</p></article>`; els.extra.innerHTML=`<article class="card report"><h3>Top 區域</h3><ol class="report-list">${areaRows.slice(0,5).map(a=>`<li>${esc(inferArea(a))}：${fmt(a.effective_queries)} 需求，Gap ${fmt(a.gap_score)}</li>`).join('')}</ol></article><article class="card report"><h3>資料品質</h3><p>目前已自動用座標重新推斷區域，避免全部落在「其他區域」。新版後端也會把推斷結果回寫 analytics_events。</p></article><article class="card report"><h3>下一步</h3><p>Phase 1B 建議加入現有廁所點位圖層，才能直接看「有需求但附近缺設施」的空白帶。</p></article>`; }
-      function renderMeta(data){ const d=data.generated_at?new Date(data.generated_at):null; const t=d&&!Number.isNaN(d.getTime())?d.toLocaleString('zh-TW',{hour12:false}):'—'; els.cache.textContent=data.cached?'資料狀態：快取':'資料狀態：即時產生'; $('rangeBadge').textContent=data.range==='all'?'全部歷史資料':'相容模式：最近一年'; els.footer.textContent=`Generated ${t} · ${data.range||'all'} · Eason Systems`; }
-      function render(data){ const s=data.summary||{}, hotspots=Array.isArray(data.hotspots)?data.hotspots:[], clusters=Array.isArray(data.demand_clusters)?data.demand_clusters:[], rec=Array.isArray(data.recommended_sites)?data.recommended_sites:[], areaRows=deriveAreaRows(Array.isArray(data.area_gaps)?data.area_gaps:[], hotspots); renderKPIs(s,rec); renderPriority(rec); renderArea(areaRows); renderReports(s,rec,areaRows); renderMeta(data); initMap(); clearLayers(); renderHeat(hotspots); renderClusters(clusters); renderRecommended(rec); applyLayerVisibility(); fit(); els.empty.classList.toggle('show',!(hotspots.length||clusters.length||rec.length)); setTimeout(()=>state.map&&state.map.invalidateSize(),80); }
-      async function load(force=false){ setLoading(true); clearError(); try{ let resp=await fetch(`/api/gap-summary?range=all${force?'&force=1':''}`,{headers:{Accept:'application/json'},cache:'no-store'}); let data=await resp.json(); if(!resp.ok||!data||data.ok===false){ resp=await fetch(`/api/gap-summary?range=1y${force?'&force=1':''}`,{headers:{Accept:'application/json'},cache:'no-store'}); data=await resp.json(); } if(!resp.ok||!data||data.ok===false) throw new Error(data&&data.error||`HTTP ${resp.status}`); state.lastData=data; render(data); }catch(e){ console.error(e); initMap(); els.empty.classList.add('show'); showError(e.message||'資料載入失敗'); }finally{ setLoading(false); } }
-      document.addEventListener('click',e=>{ const item=e.target.closest('.item'); if(item&&!e.target.closest('a,button')) fly(item.dataset.id); const flyBtn=e.target.closest('[data-fly]'); if(flyBtn) fly(flyBtn.dataset.fly); });
-      document.querySelectorAll('[data-layer]').forEach(i=>i.addEventListener('change',applyLayerVisibility));
-      $('refreshBtn').addEventListener('click',()=>load(true)); $('retryBtn').addEventListener('click',()=>load(true)); $('fitBtn').addEventListener('click',fit); $('topBtn').addEventListener('click',top); $('taipeiBtn').addEventListener('click',()=>state.map&&state.map.setView(TAIPEI,12));
-      window.addEventListener('resize',()=>state.map&&state.map.invalidateSize());
-      load(false);
-    })();
-  </script>
+  function buildSummary(data){
+    const s = data.summary || {};
+    const dq = data.data_quality || {};
+    const sites = data.recommended_sites || [];
+    const top = sites[0] || (data.demand_clusters || [])[0] || {};
+    const effective = n(s.effective_queries ?? s.total_queries);
+    const gapSignals = n(s.no_result_count) + Math.max(0, n(s.low_result_count) - n(s.no_result_count));
+    const topArea = displayArea(top.area_name || s.top_gap_area || '-');
+    const topScore = n(top.gap_score, 0);
+    const topReason = top.action_label || '建議優先檢查該熱區的設施資料完整度與現地可用性。';
+    const pendingRate = n(dq.pending_area_rate, NaN);
+    const qualityNote = Number.isFinite(pendingRate) ? `區域分類完成率 ${pct(dq.area_classification_rate)}，待分類 ${pct(pendingRate)}。` : '區域分類使用座標規則推定。';
+    return `本次研究分析納入 ${fmt.format(effective)} 筆去重後有效需求訊號，辨識出 ${fmt.format((data.demand_clusters || []).length)} 個公共設施需求缺口熱區，並整理出 ${(data.recommended_sites || []).length} 個可提供對外檢視的候選補強點。最高優先熱區位於「${topArea}」，缺口分數約 ${topScore.toFixed ? topScore.toFixed(2) : topScore}。主要解讀為：${topReason} ${qualityNote}`;
+  }
+
+  async function load(force=false){
+    document.getElementById('loadingBox').classList.remove('hidden');
+    document.getElementById('errorBox').classList.add('hidden');
+    try{
+      const url = API_URL + (force ? '&force=1' : '');
+      const res = await fetch(url, {cache:'no-store'});
+      if(!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      currentData = data;
+      render(data);
+    }catch(err){
+      document.getElementById('errorBox').textContent = `載入失敗：${err.message || err}`;
+      document.getElementById('errorBox').classList.remove('hidden');
+    }finally{
+      document.getElementById('loadingBox').classList.add('hidden');
+    }
+  }
+
+  function render(data){
+    const s = data.summary || {};
+    const dq = data.data_quality || {};
+    const clusters = data.demand_clusters || [];
+    const recommended = data.recommended_sites || [];
+    const areaGaps = data.area_gaps || [];
+    const hotspots = data.precise_hotspots || data.hotspots || [];
+    const gapSignals = n(s.no_result_count) + Math.max(0, n(s.low_result_count) - n(s.no_result_count));
+
+    setText('researchSummary', buildSummary(data));
+    setText('topScore', recommended[0] ? n(recommended[0].gap_score).toFixed(2) : '—');
+    setText('topAreaLabel', recommended[0] ? displayArea(recommended[0].area_name) : '尚無候選熱區');
+    setText('kpiDemand', fmt.format(n(s.effective_queries ?? s.total_queries)));
+    setText('kpiGapSignals', fmt.format(gapSignals));
+    setText('kpiClusters', fmt.format(clusters.length));
+    setText('kpiSites', fmt.format(recommended.length));
+    setText('kpiQuality', dq.area_classification_rate != null ? pct(dq.area_classification_rate) : '—');
+    setText('lastUpdated', data.generated_at ? `更新：${new Date(data.generated_at).toLocaleString('zh-TW')}` : '更新：—');
+    setText('cacheState', data.cached ? '快取資料' : '即時產生');
+
+    document.getElementById('emptyBox').classList.toggle('hidden', (n(s.effective_queries ?? s.total_queries) > 0));
+    renderCharts(data);
+    renderMap(clusters, recommended);
+    renderRankList(recommended);
+    renderAreaTable(areaGaps);
+  }
+
+  function renderCharts(data){
+    const s = data.summary || {};
+    const clusters = data.demand_clusters || [];
+    const areaGaps = data.area_gaps || [];
+    const hotspots = data.precise_hotspots || data.hotspots || [];
+
+    const topAreas = areaGaps.slice(0,8).map(r => ({area: displayArea(r.area_name), score:n(r.gap_score), queries:n(r.effective_queries)}));
+    destroyChart('areaChart');
+    charts.areaChart = new Chart(document.getElementById('areaChart'), {
+      type:'bar',
+      data:{ labels: topAreas.map(x=>x.area), datasets:[{ label:'缺口分數', data:topAreas.map(x=>x.score), borderWidth:1, borderRadius:10 }] },
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{afterLabel:(ctx)=>`有效需求：${fmt.format(topAreas[ctx.dataIndex]?.queries||0)}`}}}, scales:{x:{grid:{color:'#edf2f7'}}, y:{grid:{display:false}}} }
+    });
+
+    const noResult = n(s.no_result_count);
+    const lowOnly = Math.max(0, n(s.low_result_count) - noResult);
+    const slow = n(s.slow_query_count);
+    destroyChart('reasonChart');
+    charts.reasonChart = new Chart(document.getElementById('reasonChart'), {
+      type:'doughnut',
+      data:{ labels:['查無結果','低覆蓋','慢查詢'], datasets:[{ data:[noResult, lowOnly, slow], borderWidth:3 }] },
+      options:{ responsive:true, maintainAspectRatio:false, cutout:'62%', plugins:{legend:{position:'bottom'}} }
+    });
+
+    const levels = ['高可信缺口','中可信缺口','低可信缺口','觀察中'];
+    const counts = levels.map(l => clusters.filter(c => c.gap_level === l).length);
+    destroyChart('levelChart');
+    charts.levelChart = new Chart(document.getElementById('levelChart'), {
+      type:'bar',
+      data:{ labels:levels, datasets:[{ label:'熱區數', data:counts, borderRadius:10 }] },
+      options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{precision:0}}, x:{grid:{display:false}}} }
+    });
+
+    const points = hotspots.slice(0,35).map(h => ({x:n(h.effective_queries), y:n(h.gap_score), label:displayArea(h.area_name || h.grid)}));
+    destroyChart('scatterChart');
+    charts.scatterChart = new Chart(document.getElementById('scatterChart'), {
+      type:'scatter',
+      data:{ datasets:[{ label:'熱點', data:points, pointRadius:6, pointHoverRadius:8 }] },
+      options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label:(ctx)=>`${ctx.raw.label}：需求 ${ctx.raw.x}，缺口分數 ${ctx.raw.y}`}}}, scales:{x:{title:{display:true,text:'有效需求'}, grid:{color:'#edf2f7'}}, y:{title:{display:true,text:'缺口分數'}, grid:{color:'#edf2f7'}}} }
+    });
+  }
+
+  function initMap(){
+    if(map) return;
+    map = L.map('gapMap', {zoomControl:true, attributionControl:true}).setView(DEFAULT_CENTER, 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+    clusterLayer = L.layerGroup().addTo(map);
+    pinLayer = L.layerGroup().addTo(map);
+  }
+
+  function renderMap(clusters, recommended){
+    initMap();
+    clusterLayer.clearLayers(); pinLayer.clearLayers();
+    const bounds = [];
+    clusters.forEach(c => {
+      const lat=n(c.lat), lon=n(c.lon); if(!lat || !lon) return;
+      const color=levelColor(c.gap_level);
+      const circle = L.circle([lat,lon], {radius:Math.max(160,n(c.radius_m,220)), color, weight:2, fillColor:color, fillOpacity:.16});
+      circle.bindPopup(`<b>${displayArea(c.area_name)}</b><br>缺口分數：${n(c.gap_score).toFixed(2)}<br>有效需求：${fmt.format(n(c.effective_queries))}<br>查無率：${pct(c.no_result_rate)}<br>${c.action_label || ''}`);
+      circle.addTo(clusterLayer); bounds.push([lat,lon]);
+    });
+    recommended.forEach((r,idx)=>{
+      const lat=n(r.lat), lon=n(r.lon); if(!lat || !lon) return;
+      const color=levelColor(r.gap_level);
+      const icon=L.divIcon({className:'',html:`<div class="pin" style="background:${color}"><span>${idx+1}</span></div>`,iconSize:[34,34],iconAnchor:[17,34]});
+      const m=L.marker([lat,lon],{icon});
+      m.bindPopup(`<b>#${idx+1} ${displayArea(r.area_name)}</b><br>缺口分數：${n(r.gap_score).toFixed(2)}<br>有效需求：${fmt.format(n(r.effective_queries))}<br>${r.suggestion || r.action_label || ''}`);
+      m.addTo(pinLayer); bounds.push([lat,lon]);
+    });
+    if(bounds.length){ map.fitBounds(bounds, {padding:[28,28], maxZoom:14}); }
+    setTimeout(()=>map.invalidateSize(),100);
+  }
+
+  function flyToSite(site){
+    if(!site || !map) return;
+    const lat=n(site.lat), lon=n(site.lon); if(!lat || !lon) return;
+    map.flyTo([lat,lon],15,{duration:.8});
+  }
+
+  function renderRankList(items){
+    const root=document.getElementById('rankList'); root.innerHTML='';
+    if(!items.length){ root.innerHTML='<div class="empty">尚無可提供的候選補強點。</div>'; return; }
+    items.forEach((r,idx)=>{
+      const el=document.createElement('div'); el.className='rank-item';
+      el.innerHTML=`<div class="rank-num" style="background:${levelColor(r.gap_level)}">${idx+1}</div><div><div class="rank-title">${displayArea(r.area_name)}</div><div class="rank-desc">${r.suggestion || r.action_label || '建議優先檢查資料完整度與現地狀況。'}</div><div style="margin-top:8px"><span class="badge"><i class="dot" style="background:${levelColor(r.gap_level)}"></i>${r.gap_level || '觀察中'}</span></div><div class="rank-stats"><div class="statbox"><b>${n(r.gap_score).toFixed(2)}</b><span>Gap Score</span></div><div class="statbox"><b>${fmt.format(n(r.effective_queries))}</b><span>有效需求</span></div><div class="statbox"><b>${fmt.format(n(r.unique_users))}</b><span>使用者</span></div></div></div>`;
+      el.addEventListener('click',()=>{ document.querySelectorAll('.rank-item').forEach(x=>x.classList.remove('active')); el.classList.add('active'); flyToSite(r); });
+      root.appendChild(el);
+    });
+  }
+
+  function renderAreaTable(rows){
+    const body=document.getElementById('areaTableBody'); body.innerHTML='';
+    const max = Math.max(...rows.map(r=>n(r.gap_score)),1);
+    rows.slice(0,12).forEach(r=>{
+      const tr=document.createElement('tr');
+      const score=n(r.gap_score); const color=levelColor(r.gap_level);
+      tr.innerHTML=`<td><b>${displayArea(r.area_name)}</b></td><td><span class="badge"><i class="dot" style="background:${color}"></i>${r.gap_level || '觀察中'}</span></td><td>${fmt.format(n(r.effective_queries))}</td><td>${pct(r.no_result_rate)}</td><td><b>${score.toFixed(2)}</b></td><td><div class="bar"><i style="width:${Math.min(100,score/max*100)}%"></i></div></td>`;
+      body.appendChild(tr);
+    });
+  }
+
+  function downloadCSV(){
+    const data=currentData||{}; const rows=data.recommended_sites||[];
+    const header=['rank','area_name','lat','lon','gap_level','gap_score','effective_queries','unique_users','active_days','no_result_rate','action_label','map_url'];
+    const csv=[header.join(',')].concat(rows.map((r,i)=>header.map(k=>{
+      const v = k==='rank' ? i+1 : (k==='area_name' ? displayArea(r[k]) : (r[k] ?? ''));
+      return `"${String(v).replaceAll('"','""')}"`;
+    }).join(','))).join('\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='public_facility_gap_hotspots.csv'; a.click(); URL.revokeObjectURL(a.href);
+  }
+  async function copySummary(){
+    const text=document.getElementById('researchSummary').textContent.trim();
+    try{ await navigator.clipboard.writeText(text); alert('已複製研究摘要'); }catch(e){ prompt('複製研究摘要', text); }
+  }
+
+  document.getElementById('refreshBtn').addEventListener('click',()=>load(true));
+  document.getElementById('fitMapBtn').addEventListener('click',()=>renderMap(currentData?.demand_clusters||[], currentData?.recommended_sites||[]));
+  document.getElementById('topMapBtn').addEventListener('click',()=>flyToSite((currentData?.recommended_sites||[])[0]));
+  document.getElementById('taipeiBtn').addEventListener('click',()=>map && map.flyTo(DEFAULT_CENTER,12));
+  document.getElementById('downloadCsvBtn').addEventListener('click',downloadCSV);
+  document.getElementById('copySummaryBtn').addEventListener('click',copySummary);
+  document.getElementById('printBtn').addEventListener('click',()=>window.print());
+
+  load(false);
+})();
+</script>
 </body>
 </html>

@@ -2387,9 +2387,12 @@ def log_analytics_event(
         logging.warning(f"log_analytics_event failed: {e}")
 
 # === 座標 → 區域名稱推斷 ===
-# Phase 1: use local bounding boxes only. This avoids repeated external geocoding,
-# works during dashboard rendering, and also gets written into analytics_events
-# for new location queries via log_analytics_event().
+# Research dashboard V3:
+# 1) First use local bounding boxes for landmark / district / county-level naming.
+# 2) If nothing matches, do NOT collapse everything into "其他區域".
+#    Return a stable 0.02-degree grid label so unknown points remain separable in reports.
+# 3) _backfill_area_names_async() writes inferred names back to analytics_events, so old rows
+#    stop being re-inferred on every dashboard render.
 _AREA_NAME_CACHE = {}
 _AREA_RULES = [
     # High-signal landmarks / business districts first
@@ -2398,8 +2401,11 @@ _AREA_RULES = [
     ("信義商圈", 25.0280, 25.0415, 121.5580, 121.5755),
     ("公館",     25.0090, 25.0248, 121.5250, 121.5455),
     ("板橋車站", 25.0090, 25.0208, 121.4550, 121.4705),
+    ("台中車站", 24.1320, 24.1425, 120.6800, 120.6920),
+    ("台南車站", 22.9910, 23.0025, 120.2050, 120.2180),
+    ("高雄車站", 22.6330, 22.6440, 120.2960, 120.3120),
 
-    # Taipei districts, intentionally rough but much better than everything being 其他區域
+    # Taipei districts, intentionally rough but useful for research display
     ("中正區", 24.985, 25.055, 121.500, 121.545),
     ("萬華區", 25.015, 25.055, 121.470, 121.515),
     ("大同區", 25.045, 25.075, 121.500, 121.525),
@@ -2426,19 +2432,47 @@ _AREA_RULES = [
     ("樹林區", 24.940, 25.010, 121.360, 121.430),
     ("林口區", 25.055, 25.105, 121.340, 121.405),
     ("淡水區", 25.145, 25.235, 121.420, 121.520),
-    ("基隆市", 25.105, 25.170, 121.690, 121.805),
+    ("基隆市區", 25.105, 25.170, 121.690, 121.805),
     ("桃園區", 24.965, 25.035, 121.250, 121.345),
+
+    # County / city-level fallback rules for government-facing reports.
+    # These are coarse but far better than aggregating the whole country into 其他區域.
+    ("台北市", 24.955, 25.220, 121.450, 121.700),
+    ("新北市", 24.780, 25.320, 121.280, 122.030),
+    ("基隆市", 25.080, 25.180, 121.650, 121.820),
+    ("桃園市", 24.800, 25.130, 121.000, 121.500),
+    ("新竹縣市", 24.660, 24.950, 120.850, 121.250),
+    ("苗栗縣", 24.250, 24.750, 120.600, 121.050),
+    ("台中市", 24.000, 24.450, 120.450, 121.450),
+    ("彰化縣", 23.780, 24.180, 120.250, 120.650),
+    ("南投縣", 23.450, 24.250, 120.600, 121.350),
+    ("雲林縣", 23.450, 23.850, 120.050, 120.650),
+    ("嘉義縣市", 23.180, 23.650, 120.050, 120.850),
+    ("台南市", 22.880, 23.420, 120.000, 120.700),
+    ("高雄市", 22.450, 23.300, 120.000, 121.050),
+    ("屏東縣", 21.880, 22.880, 120.350, 121.050),
+    ("宜蘭縣", 24.300, 25.050, 121.550, 122.100),
+    ("花蓮縣", 23.000, 24.500, 121.100, 121.850),
+    ("台東縣", 21.900, 23.500, 120.700, 121.650),
+    ("澎湖縣", 23.150, 23.850, 119.250, 119.850),
+    ("金門縣", 24.300, 24.550, 118.150, 118.550),
+    ("連江縣", 25.900, 26.400, 119.850, 120.200),
 ]
+
+def _unknown_area_grid_label(lat, lon):
+    try:
+        # 0.02 degree is roughly 2km. It separates unknown clusters without leaking exact coordinates.
+        return f"待分類格網 {round(float(lat), 2):.2f},{round(float(lon), 2):.2f}"
+    except Exception:
+        return "待分類區域"
 
 def get_area_name(lat, lon):
     try:
         lat = float(lat)
         lon = float(lon)
     except Exception:
-        return "其他區域"
+        return "待分類區域"
 
-    # Use a 3dp grid cache (~100m). This makes area inference cheap during gap
-    # summary rendering and keeps the result stable for nearby repeated queries.
     key = f"{round(lat, 3):.3f},{round(lon, 3):.3f}"
     cached = _AREA_NAME_CACHE.get(key)
     if cached:
@@ -2449,20 +2483,21 @@ def get_area_name(lat, lon):
             _AREA_NAME_CACHE[key] = name
             return name
 
-    _AREA_NAME_CACHE[key] = "其他區域"
-    return "其他區域"
+    inferred = _unknown_area_grid_label(lat, lon)
+    _AREA_NAME_CACHE[key] = inferred
+    return inferred
 
 def _gap_area_name_from_event(e):
     """Prefer stored area_name, but re-infer old/unknown rows from coordinates."""
     old = (e.get("area_name") or "").strip()
     lat = _safe_float(e.get("lat"))
     lon = _safe_float(e.get("lon"))
-    inferred = get_area_name(lat, lon) if lat is not None and lon is not None else "其他區域"
-    if not old or old == "其他區域":
-        return inferred or "其他區域"
+    inferred = get_area_name(lat, lon) if lat is not None and lon is not None else "待分類區域"
+    if not old or old in ("其他區域", "待分類區域"):
+        return inferred or "待分類區域"
     return old
 
-def _backfill_area_names_async(events, max_rows=500):
+def _backfill_area_names_async(events, max_rows=1000):
     """Persist inferred area names for old analytics rows so we do not re-infer forever."""
     if not POSTGRES_ENABLED:
         return
@@ -2470,13 +2505,13 @@ def _backfill_area_names_async(events, max_rows=500):
     for e in events:
         try:
             old = (e.get("area_name") or "").strip()
-            if old and old != "其他區域":
+            if old and old not in ("其他區域", "待分類區域"):
                 continue
             lat = _safe_float(e.get("lat")); lon = _safe_float(e.get("lon"))
             if lat is None or lon is None:
                 continue
             inferred = get_area_name(lat, lon)
-            if not inferred or inferred == "其他區域":
+            if not inferred or inferred == old:
                 continue
             eid = e.get("id")
             if eid is None:
@@ -2497,7 +2532,7 @@ def _backfill_area_names_async(events, max_rows=500):
                 """
                 UPDATE analytics_events
                 SET area_name = %s
-                WHERE id = %s AND (area_name IS NULL OR area_name = '' OR area_name = '其他區域')
+                WHERE id = %s AND (area_name IS NULL OR area_name = '' OR area_name = '其他區域' OR area_name = '待分類區域')
                 """,
                 batch
             )
@@ -6114,6 +6149,9 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
     top_area = area_rows[0]["area_name"] if area_rows else "-"
     top_cluster = clusters[0]["center"] if clusters else "-"
+    classified_queries = sum(int(r.get("effective_queries") or 0) for r in area_rows if not str(r.get("area_name") or "").startswith("待分類") and r.get("area_name") != "其他區域")
+    pending_queries = max(total_queries - classified_queries, 0)
+    area_classification_rate = round((classified_queries / max(total_queries, 1)) * 100, 1)
 
     return {
         "ok": True,
@@ -6147,6 +6185,13 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "low_result_rate": round((low_result_count / max(total_queries, 1)) * 100, 1),
             "slow_query_rate": round((slow_query_count / max(total_queries, 1)) * 100, 1),
         },
+        "data_quality": {
+            "area_classification_rate": area_classification_rate,
+            "classified_queries": classified_queries,
+            "pending_area_queries": pending_queries,
+            "pending_area_rate": round((pending_queries / max(total_queries, 1)) * 100, 1),
+            "area_label_method": "local_bbox_with_grid_fallback",
+        },
         "demand_clusters": clusters[:30],
         "recommended_sites": clusters[:10],
         "area_gaps": area_rows[:30],
@@ -6179,7 +6224,7 @@ def api_gap_summary():
         anchor_date = (request.args.get("anchor_date") or "").strip() or None
         force = (request.args.get("force") or "0").strip() == "1"
 
-        cache_key = f"v165:{range_key}:{anchor_date or ''}"
+        cache_key = f"v180_research:{range_key}:{anchor_date or ''}"
         if not force:
             cached = _gap_cache_get(cache_key)
             if cached is not None:
