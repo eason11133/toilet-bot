@@ -6208,17 +6208,31 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     area_classification_rate = round((classified_queries / max(total_queries, 1)) * 100, 1)
 
     # Dashboard/export output limits.
-    # Important: these only control how many rows are returned to the dashboard;
-    # the internal summary still computes on the full dataset.
-    # Top 10 are still used as numbered candidate sites, while the map/export can show all returned demand circles.
-    GAP_CLUSTER_OUTPUT_LIMIT = int(os.getenv("GAP_CLUSTER_OUTPUT_LIMIT", "300"))
-    GAP_HOTSPOT_OUTPUT_LIMIT = int(os.getenv("GAP_HOTSPOT_OUTPUT_LIMIT", "500"))
-    GAP_PRECISE_HOTSPOT_LIMIT = int(os.getenv("GAP_PRECISE_HOTSPOT_LIMIT", "300"))
-    GAP_RECOMMENDED_LIMIT = int(os.getenv("GAP_RECOMMENDED_LIMIT", "10"))
+    # Default is now unlimited for demand circles and hotspots because this page is
+    # used for research/export. Top recommended sites remain limited to keep the
+    # numbered candidate pins readable.
+    # You can still cap rows by setting these env vars to a positive integer.
+    # Values: 0 / all / none / empty = unlimited.
+    def _gap_output_limit(name, default="0"):
+        raw = str(os.getenv(name, default) or "").strip().lower()
+        if raw in ("", "0", "all", "none", "unlimited"):
+            return 0
+        try:
+            return max(0, int(raw))
+        except Exception:
+            return 0
+
+    def _gap_take(rows, limit):
+        return rows if not limit else rows[:limit]
+
+    GAP_CLUSTER_OUTPUT_LIMIT = _gap_output_limit("GAP_CLUSTER_OUTPUT_LIMIT", "0")
+    GAP_HOTSPOT_OUTPUT_LIMIT = _gap_output_limit("GAP_HOTSPOT_OUTPUT_LIMIT", "0")
+    GAP_PRECISE_HOTSPOT_LIMIT = _gap_output_limit("GAP_PRECISE_HOTSPOT_LIMIT", "0")
+    GAP_RECOMMENDED_LIMIT = _gap_output_limit("GAP_RECOMMENDED_LIMIT", "10") or 10
 
     return {
         "ok": True,
-        "version": "demand_gap_v5_more_points",
+        "version": "demand_gap_v6_unlimited_points",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -6255,11 +6269,11 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "pending_area_rate": round((pending_queries / max(total_queries, 1)) * 100, 1),
             "area_label_method": "local_bbox_with_grid_fallback",
         },
-        "demand_clusters": clusters[:GAP_CLUSTER_OUTPUT_LIMIT],
+        "demand_clusters": _gap_take(clusters, GAP_CLUSTER_OUTPUT_LIMIT),
         "recommended_sites": clusters[:GAP_RECOMMENDED_LIMIT],
-        "area_gaps": area_rows[:30],
-        "hotspots": hotspot_rows[:GAP_HOTSPOT_OUTPUT_LIMIT],
-        "precise_hotspots": hotspot_rows[:GAP_PRECISE_HOTSPOT_LIMIT],
+        "area_gaps": area_rows,
+        "hotspots": _gap_take(hotspot_rows, GAP_HOTSPOT_OUTPUT_LIMIT),
+        "precise_hotspots": _gap_take(hotspot_rows, GAP_PRECISE_HOTSPOT_LIMIT),
         "osm_summary": osm_summary,
         "interpretation": [
             "v2 先去除同一使用者、同一地點、短時間內的重複查詢，避免單人連續查詢把缺口分數灌高。",
@@ -6290,7 +6304,8 @@ def api_gap_summary():
             or (request.args.get("refresh") or "0").strip() == "1"
         )
 
-        cache_key = f"v230_more_gap_points:{range_key}:{anchor_date or ''}:{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '300')}:{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '500')}"
+        # Cache key version bumped because demand_clusters/hotspots are now unlimited by default.
+        cache_key = f"v240_unlimited_gap_points:{range_key}:{anchor_date or ''}:{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '0')}:{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '0')}"
         if not force:
             cached = _gap_cache_get(cache_key)
             if cached is not None:
