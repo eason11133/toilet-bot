@@ -2395,17 +2395,28 @@ def log_analytics_event(
 #    stop being re-inferred on every dashboard render.
 _AREA_NAME_CACHE = {}
 _AREA_RULES = [
-    # High-signal landmarks / business districts first
-    ("台北車站", 25.0400, 25.0555, 121.5100, 121.5255),
+    # Micro-locations first: these are better for a demand-cluster report than broad districts.
+    # Order matters. Smaller, more human-readable places should come before larger areas.
+    ("中山雙連周邊", 25.0520, 25.0618, 121.5160, 121.5255),
+    ("中山站周邊",   25.0490, 25.0556, 121.5160, 121.5248),
+    ("雙連站周邊",   25.0550, 25.0625, 121.5160, 121.5258),
+    ("北門／台北車站西側", 25.0460, 25.0535, 121.5060, 121.5148),
+    ("台北車站核心", 25.0430, 25.0505, 121.5140, 121.5235),
+    ("京站／華陰街", 25.0485, 25.0552, 121.5128, 121.5208),
     ("西門町",   25.0390, 25.0508, 121.4980, 121.5115),
+    ("龍山寺／艋舺", 25.0320, 25.0408, 121.4950, 121.5065),
+    ("東門／永康街", 25.0290, 25.0378, 121.5260, 121.5355),
+    ("公館商圈",     25.0090, 25.0248, 121.5250, 121.5455),
     ("信義商圈", 25.0280, 25.0415, 121.5580, 121.5755),
-    ("公館",     25.0090, 25.0248, 121.5250, 121.5455),
+    ("松山車站／饒河", 25.0460, 25.0555, 121.5700, 121.5835),
+    ("南港車站", 25.0490, 25.0570, 121.6030, 121.6155),
     ("板橋車站", 25.0090, 25.0208, 121.4550, 121.4705),
+    ("府中／板橋舊站", 25.0065, 25.0148, 121.4555, 121.4645),
     ("台中車站", 24.1320, 24.1425, 120.6800, 120.6920),
     ("台南車站", 22.9910, 23.0025, 120.2050, 120.2180),
     ("高雄車站", 22.6330, 22.6440, 120.2960, 120.3120),
 
-    # Taipei districts, intentionally rough but useful for research display
+    # Taipei districts, intentionally rough but less important than micro-locations above.
     ("中正區", 24.985, 25.055, 121.500, 121.545),
     ("萬華區", 25.015, 25.055, 121.470, 121.515),
     ("大同區", 25.045, 25.075, 121.500, 121.525),
@@ -2436,7 +2447,6 @@ _AREA_RULES = [
     ("桃園區", 24.965, 25.035, 121.250, 121.345),
 
     # County / city-level fallback rules for government-facing reports.
-    # These are coarse but far better than aggregating the whole country into 其他區域.
     ("台北市", 24.955, 25.220, 121.450, 121.700),
     ("新北市", 24.780, 25.320, 121.280, 122.030),
     ("基隆市", 25.080, 25.180, 121.650, 121.820),
@@ -2488,14 +2498,21 @@ def get_area_name(lat, lon):
     return inferred
 
 def _gap_area_name_from_event(e):
-    """Prefer stored area_name, but re-infer old/unknown rows from coordinates."""
+    """Return a demand-location label from coordinates.
+
+    V4 intentionally prioritizes the actual demand location over old stored broad labels.
+    Example: a point between Zhongshan and Shuanglian should be shown as 中山雙連周邊,
+    not 台北車站 just because an earlier coarse bounding box wrote that label.
+    """
     old = (e.get("area_name") or "").strip()
     lat = _safe_float(e.get("lat"))
     lon = _safe_float(e.get("lon"))
-    inferred = get_area_name(lat, lon) if lat is not None and lon is not None else "待分類區域"
-    if not old or old in ("其他區域", "待分類區域"):
-        return inferred or "待分類區域"
-    return old
+    if lat is not None and lon is not None:
+        inferred = get_area_name(lat, lon) or "待分類區域"
+        # Use finer inferred names whenever possible. Keep old names only if inference fails.
+        if inferred and inferred != "待分類區域":
+            return inferred
+    return old or "待分類區域"
 
 def _backfill_area_names_async(events, max_rows=1000):
     """Persist inferred area names for old analytics rows so we do not re-infer forever."""
@@ -2505,13 +2522,15 @@ def _backfill_area_names_async(events, max_rows=1000):
     for e in events:
         try:
             old = (e.get("area_name") or "").strip()
-            if old and old not in ("其他區域", "待分類區域"):
-                continue
             lat = _safe_float(e.get("lat")); lon = _safe_float(e.get("lon"))
             if lat is None or lon is None:
                 continue
             inferred = get_area_name(lat, lon)
             if not inferred or inferred == old:
+                continue
+            # Update blank/unknown/coarse labels. This is intentionally broader than V3
+            # because micro-location labels are more useful for a demand-cluster research dashboard.
+            if old and not (old in ("其他區域", "待分類區域") or old.startswith("待分類") or inferred not in ("台北市", "新北市")):
                 continue
             eid = e.get("id")
             if eid is None:
@@ -2532,7 +2551,7 @@ def _backfill_area_names_async(events, max_rows=1000):
                 """
                 UPDATE analytics_events
                 SET area_name = %s
-                WHERE id = %s AND (area_name IS NULL OR area_name = '' OR area_name = '其他區域' OR area_name = '待分類區域')
+                WHERE id = %s
                 """,
                 batch
             )
@@ -5897,7 +5916,9 @@ def _gap_cluster_rows(rows, radius_m=500):
         for m in members:
             area = m.get("area_name") or "其他區域"
             area_counts[area] = area_counts.get(area, 0) + int(m.get("effective_queries") or 1)
-        area_name = sorted(area_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0] if area_counts else "其他區域"
+        area_name = get_area_name(center_lat, center_lon) or (sorted(area_counts.items(), key=lambda kv: kv[1], reverse=True)[0][0] if area_counts else "待分類區域")
+        display_radius = max(120, int(round(radius)))
+        demand_label = f"{area_name}附近約 {display_radius}m 需求圈"
 
         agg = {
             "cluster_id": f"C{len(clusters)+1}",
@@ -5905,8 +5926,10 @@ def _gap_cluster_rows(rows, radius_m=500):
             "lat": round(center_lat, 6),
             "lon": round(center_lon, 6),
             "area_name": area_name,
+            "demand_label": demand_label,
+            "radius_label": f"約 {display_radius} 公尺",
             "point_count": len(members),
-            "radius_m": round(radius),
+            "radius_m": display_radius,
             "effective_queries": sum(int(m.get("effective_queries") or 0) for m in members),
             "total_queries": sum(int(m.get("effective_queries") or 0) for m in members),
             "raw_queries": sum(int(m.get("raw_queries") or 0) for m in members),
@@ -5931,6 +5954,10 @@ def _gap_cluster_rows(rows, radius_m=500):
             agg["confidence_note"] = "可能受單人重複查詢影響，展示前建議人工確認"
         else:
             agg["confidence_note"] = "已合併附近點位，較適合做公共設施檢查"
+        agg["priority_reason"] = (
+            f"半徑{agg.get('radius_label','約數百公尺')}內累積 {agg.get('effective_queries',0)} 筆有效需求，"
+            f"其中查無 {agg.get('no_result_count',0)} 次、低覆蓋 {agg.get('low_result_count',0)} 次、慢查詢 {agg.get('slow_query_count',0)} 次。"
+        )
         clusters.append(agg)
 
     clusters.sort(key=lambda x: (float(x.get("gap_score") or 0), int(x.get("effective_queries") or 0)), reverse=True)
@@ -6155,7 +6182,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
 
     return {
         "ok": True,
-        "version": "demand_gap_v2_dedupe_cluster",
+        "version": "demand_gap_v4_cluster_map_research",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -6224,7 +6251,7 @@ def api_gap_summary():
         anchor_date = (request.args.get("anchor_date") or "").strip() or None
         force = (request.args.get("force") or "0").strip() == "1"
 
-        cache_key = f"v180_research:{range_key}:{anchor_date or ''}"
+        cache_key = f"v220_demand_map:{range_key}:{anchor_date or ''}"
         if not force:
             cached = _gap_cache_get(cache_key)
             if cached is not None:
