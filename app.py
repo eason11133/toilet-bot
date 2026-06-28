@@ -5680,6 +5680,26 @@ def _safe_float(v, default=None):
         return default
 
 
+# Gap dashboard should show all valid Taiwan demand signals, not global/outlier test coordinates.
+# Bounds include Taiwan proper plus Penghu / Kinmen / Matsu. They can be overridden by env.
+_GAP_VALID_LAT_MIN = float(os.getenv("GAP_VALID_LAT_MIN", "21.5"))
+_GAP_VALID_LAT_MAX = float(os.getenv("GAP_VALID_LAT_MAX", "26.6"))
+_GAP_VALID_LON_MIN = float(os.getenv("GAP_VALID_LON_MIN", "118.0"))
+_GAP_VALID_LON_MAX = float(os.getenv("GAP_VALID_LON_MAX", "123.5"))
+
+def _gap_coord_in_scope(lat, lon):
+    lat = _safe_float(lat)
+    lon = _safe_float(lon)
+    if lat is None or lon is None:
+        return False
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        return False
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return False
+    return (_GAP_VALID_LAT_MIN <= lat <= _GAP_VALID_LAT_MAX and
+            _GAP_VALID_LON_MIN <= lon <= _GAP_VALID_LON_MAX)
+
+
 def _gap_parse_dt(v):
     try:
         if isinstance(v, datetime):
@@ -5899,7 +5919,7 @@ def _gap_cluster_rows(rows, radius_m=500):
     for r in rows:
         lat = _safe_float(r.get("lat"))
         lon = _safe_float(r.get("lon"))
-        if lat is None or lon is None:
+        if lat is None or lon is None or not _gap_coord_in_scope(lat, lon):
             continue
         # 只把真的有缺口訊號的點拿去群聚
         if int(r.get("no_result_count") or 0) <= 0 and int(r.get("low_result_count") or 0) <= 0 and int(r.get("slow_query_count") or 0) <= 0:
@@ -6073,6 +6093,18 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         events = [dict(r) for r in cur.fetchall()]
         conn.close()
 
+    # Keep all valid demand points, but exclude out-of-scope/global/test coordinates so the map
+    # does not zoom out to the whole world. This dashboard is for Taiwan public facility research.
+    raw_total_queries_before_scope = len(events)
+    scoped_events = []
+    excluded_coord_count = 0
+    for e in events:
+        if _gap_coord_in_scope(e.get("lat"), e.get("lon")):
+            scoped_events.append(e)
+        else:
+            excluded_coord_count += 1
+    events = scoped_events
+
     _backfill_area_names_async(events)
 
     raw_total_queries = len(events)
@@ -6232,7 +6264,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
 
     return {
         "ok": True,
-        "version": "demand_gap_v6_unlimited_points",
+        "version": "demand_gap_v7_taiwan_valid_unlimited_points",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -6268,6 +6300,9 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "pending_area_queries": pending_queries,
             "pending_area_rate": round((pending_queries / max(total_queries, 1)) * 100, 1),
             "area_label_method": "local_bbox_with_grid_fallback",
+            "coordinate_scope": "Taiwan + offshore islands",
+            "raw_total_queries_before_scope_filter": raw_total_queries_before_scope,
+            "excluded_out_of_scope_queries": excluded_coord_count,
         },
         "demand_clusters": _gap_take(clusters, GAP_CLUSTER_OUTPUT_LIMIT),
         "recommended_sites": clusters[:GAP_RECOMMENDED_LIMIT],
@@ -6304,8 +6339,13 @@ def api_gap_summary():
             or (request.args.get("refresh") or "0").strip() == "1"
         )
 
-        # Cache key version bumped because demand_clusters/hotspots are now unlimited by default.
-        cache_key = f"v240_unlimited_gap_points:{range_key}:{anchor_date or ''}:{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '0')}:{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '0')}"
+        # Cache key version bumped because global/outlier coordinates are now excluded from the research map.
+        cache_key = (
+            f"v250_taiwan_valid_gap_points:{range_key}:{anchor_date or ''}:"
+            f"{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '0')}:"
+            f"{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '0')}:"
+            f"{_GAP_VALID_LAT_MIN},{_GAP_VALID_LAT_MAX},{_GAP_VALID_LON_MIN},{_GAP_VALID_LON_MAX}"
+        )
         if not force:
             cached = _gap_cache_get(cache_key)
             if cached is not None:
