@@ -5617,19 +5617,41 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
 # === Demand Gap Dashboard v165：去重、需求群聚與建議設點分析 ===
 _GAP_SUMMARY_CACHE = {}
-_GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "180"))
+# Gap summary is expensive because it scans and clusters analytics_events.
+# Default to 12 hours so the research/dashboard page opens fast.
+# Manual refresh still works via ?force=1 / ?refresh=1.
+_GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "43200"))
 
 
 def _gap_cache_get(key):
+    """Read gap-summary cache.
+
+    Uses two layers:
+    1) in-memory cache for same worker speed
+    2) SQLite request_cache so Gunicorn workers share the same cached result
+
+    Manual refresh bypasses this function via ?force=1 / ?refresh=1.
+    """
     try:
         item = _GAP_SUMMARY_CACHE.get(key)
-        if not item:
-            return None
-        ts, data = item
-        if time.time() - ts <= _GAP_SUMMARY_CACHE_TTL:
-            return data
+        if item:
+            ts, data = item
+            if time.time() - ts <= _GAP_SUMMARY_CACHE_TTL:
+                return data
     except Exception:
         pass
+
+    try:
+        data = get_cached_data(f"gap_summary:{key}", ttl_sec=_GAP_SUMMARY_CACHE_TTL)
+        if data is not None:
+            try:
+                _GAP_SUMMARY_CACHE[key] = (time.time(), data)
+            except Exception:
+                pass
+            return data
+    except Exception as e:
+        logging.debug(f"gap sqlite cache read skipped: {e}")
+
     return None
 
 
@@ -5642,6 +5664,11 @@ def _gap_cache_set(key, data):
                 _GAP_SUMMARY_CACHE.pop(k, None)
     except Exception:
         pass
+
+    try:
+        save_cache(f"gap_summary:{key}", data)
+    except Exception as e:
+        logging.debug(f"gap sqlite cache write skipped: {e}")
 
 
 def _safe_float(v, default=None):
@@ -6249,7 +6276,10 @@ def api_gap_summary():
         if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
             range_key = "all"
         anchor_date = (request.args.get("anchor_date") or "").strip() or None
-        force = (request.args.get("force") or "0").strip() == "1"
+        force = (
+            (request.args.get("force") or "0").strip() == "1"
+            or (request.args.get("refresh") or "0").strip() == "1"
+        )
 
         cache_key = f"v220_demand_map:{range_key}:{anchor_date or ''}"
         if not force:
@@ -7965,45 +7995,105 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
 @app.route("/api/events")
 def api_events():
-    if not _maintenance_auth_ok():
+    # Read-only dashboard data. IDs are masked before returning.
+    # Keep token protection by setting DASHBOARD_PUBLIC_READ=0.
+    public_read = os.getenv("DASHBOARD_PUBLIC_READ", "1") == "1"
+    if not public_read and not _maintenance_auth_ok():
         return jsonify({"ok": False, "message": "unauthorized"}), 401
 
-    conn = _get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT created_at, user_id, event_type,
-               result_count, response_time_ms, success
-        FROM analytics_events
-        WHERE response_time_ms > 0
-        ORDER BY created_at DESC
-        LIMIT 100
-    """)
-
-    rows = cur.fetchall()
-
     events = []
-    for r in rows:
-        events.append({
-            "time": str(r[0]),
-            "user": mask_user_id(r[1]),
-            "type": r[2],
-            "result": r[3],
-            "response_time": r[4],
-            "status": "success" if r[5] else "failed"
-        })
 
-    cur.close()
-    conn.close()
+    # Production analytics are written to Postgres when DATABASE_URL is enabled.
+    # The old dashboard queried SQLite only, so the main dashboard looked empty.
+    if POSTGRES_ENABLED:
+        conn = None
+        try:
+            conn = _pg_connect()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT created_at, user_id, event_type,
+                       result_count, response_time_ms, success
+                FROM analytics_events
+                WHERE response_time_ms > 0
+                ORDER BY created_at DESC
+                LIMIT 100
+            """)
+            rows = cur.fetchall()
+            for r in rows:
+                events.append({
+                    "time": str(r.get("created_at")),
+                    "user": mask_user_id(r.get("user_id")),
+                    "type": r.get("event_type"),
+                    "result": r.get("result_count"),
+                    "response_time": r.get("response_time_ms"),
+                    "status": "success" if r.get("success") else "failed"
+                })
+            cur.close()
+            conn.close()
+            return jsonify(events)
+        except Exception as e:
+            logging.warning(f"api_events Postgres read failed; falling back to SQLite: {e}")
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
-    return jsonify(events)
+    try:
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT created_at, user_id, event_type,
+                   result_count, response_time_ms, success
+            FROM analytics_events
+            WHERE response_time_ms > 0
+            ORDER BY created_at DESC
+            LIMIT 100
+        """)
+        rows = cur.fetchall()
+        for r in rows:
+            events.append({
+                "time": str(r[0]),
+                "user": mask_user_id(r[1]),
+                "type": r[2],
+                "result": r[3],
+                "response_time": r[4],
+                "status": "success" if r[5] else "failed"
+            })
+        cur.close()
+        conn.close()
+        return jsonify(events)
+    except Exception as e:
+        logging.exception("api_events failed")
+        return jsonify([]), 200
 
 @app.route("/api/line-insights")
 def api_line_insights():
-    if not _maintenance_auth_ok():
+    # Read-only dashboard data. Set DASHBOARD_PUBLIC_READ=0 to require ADMIN_TOKEN.
+    public_read = os.getenv("DASHBOARD_PUBLIC_READ", "1") == "1"
+    if not public_read and not _maintenance_auth_ok():
         return jsonify({"ok": False, "message": "unauthorized"}), 401
 
+    force = (
+        (request.args.get("force") or "0").strip() == "1"
+        or (request.args.get("refresh") or "0").strip() == "1"
+    )
+    ttl = int(os.getenv("LINE_INSIGHTS_CACHE_TTL_SECONDS", "21600"))  # 6 hours
+    cache_key = "line_insights:v1"
+
+    if not force:
+        try:
+            cached = get_cached_data(cache_key, ttl_sec=ttl)
+            if isinstance(cached, dict):
+                cached["cached"] = True
+                return jsonify(cached)
+        except Exception as e:
+            logging.debug(f"line insights cache read skipped: {e}")
+
     try:
+        if not CHANNEL_ACCESS_TOKEN:
+            raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN not set")
+
         headers = {
             "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
         }
@@ -8066,7 +8156,7 @@ def api_line_insights():
         else:
             logging.warning(f"demographic insight failed: {r2.status_code} {r2.text}")
 
-        return jsonify({
+        out = {
             "followers": followers,
             "targetedReaches": targeted,
             "blocks": blocks,
@@ -8075,10 +8165,27 @@ def api_line_insights():
             "age": age,
             "area": area,
             "appType": app_type,
-            "subscriptionPeriod": subscription_period
-        })
+            "subscriptionPeriod": subscription_period,
+            "queryDate": query_date,
+            "cached": False
+        }
+        try:
+            save_cache(cache_key, out)
+        except Exception as e:
+            logging.debug(f"line insights cache write skipped: {e}")
+        return jsonify(out)
     except Exception as e:
         logging.exception("api_line_insights failed")
+        # Fall back to stale cache if LINE API is temporarily unavailable.
+        try:
+            stale = get_cached_data(cache_key, ttl_sec=60*60*24*30)
+            if isinstance(stale, dict):
+                stale["cached"] = True
+                stale["stale"] = True
+                stale["error"] = str(e)
+                return jsonify(stale), 200
+        except Exception:
+            pass
         return jsonify({
             "followers": 0,
             "targetedReaches": 0,
@@ -8089,6 +8196,7 @@ def api_line_insights():
             "area": [],
             "appType": [],
             "subscriptionPeriod": [],
+            "cached": False,
             "error": str(e)
         }), 200
     

@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>公共設施需求缺口研究展示</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <style>
@@ -118,8 +117,11 @@
     .statbox{background:#f8fafc;border:1px solid #e2e8f0;border-radius:13px;padding:8px 7px}.statbox b{display:block;font-size:15px}.statbox span{font-size:11px;color:var(--muted)}
     .rank-actions{display:flex;gap:8px;margin-top:10px}.rank-actions button,.rank-actions a{flex:1;justify-content:center;font-size:12px;padding:8px 10px}
 
-    .charts{display:grid;grid-template-columns:1.05fr .95fr;gap:18px;margin-bottom:18px}
-    .chart-card{min-height:350px}.chart-wrap{height:310px;padding:14px 18px 18px}.wide{grid-column:1/-1}.wide .chart-wrap{height:330px}
+    .charts{display:grid;grid-template-columns:1fr;gap:18px;margin-bottom:18px}
+    .visual-card{min-height:260px}.wide{grid-column:1/-1}
+    .score-list{padding:16px 18px 20px;display:grid;gap:12px;background:linear-gradient(180deg,#fff,#fffdf8)}
+    .score-row{display:grid;grid-template-columns:minmax(230px,.9fr) minmax(220px,1.6fr) 88px;gap:14px;align-items:center;border:1px solid #edf0f2;border-radius:17px;padding:12px 14px;background:#fff;box-shadow:0 8px 20px rgba(59,48,29,.04)}
+    .score-name{font-weight:950;font-size:14px;line-height:1.35;color:#172033}.score-meta{font-size:12px;color:#637087;margin-top:4px}.score-track{height:18px;border-radius:999px;background:#eef2f7;overflow:hidden;position:relative}.score-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#12b5cb,#f59e0b,#e84c3d);min-width:3px}.score-value{text-align:right;font-size:20px;font-weight:950;letter-spacing:-.03em}.reason-stack-wrap{padding:18px 18px 2px;background:#fffdf8}.stack-title{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#637087;font-weight:850;margin-bottom:10px}.total-stack{height:24px;border-radius:999px;background:#edf2f7;overflow:hidden;display:flex;box-shadow:inset 0 0 0 1px rgba(0,0,0,.04)}.stack-seg{height:100%;min-width:2px}.stack-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;font-size:12px;color:#526177}.stack-legend span{display:inline-flex;align-items:center;gap:6px}.stack-legend i{width:10px;height:10px;border-radius:999px;display:inline-block}
     .insight-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:16px;background:#fffdf8;border-top:1px solid var(--line)}
     .meter-card{border:1px solid var(--line2);border-radius:17px;background:#fff;padding:14px;box-shadow:0 8px 22px rgba(59,48,29,.05)}
     .meter-title{font-weight:950;font-size:14px;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between}.meter-title span{font-size:22px;letter-spacing:-.04em}.meter-sub{font-size:12px;color:var(--muted);line-height:1.45}.meter{height:12px;background:#edf2f7;border-radius:999px;overflow:hidden;margin-top:10px}.meter i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--orange),var(--red))}
@@ -128,9 +130,11 @@
     .loading,.error,.empty{padding:17px 18px;border:1px dashed #d8c9ad;border-radius:18px;background:#fffaf0;color:#715b35;margin-bottom:16px;line-height:1.6}.error{border-color:#fca5a5;background:#fff1f2;color:#991b1b}.hidden{display:none!important}
 
     /* Minimal Leaflet CSS for CSP-safe inline use */
-    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img{max-width:none!important}.leaflet-container{font-family:inherit;touch-action:pan-x pan-y;background:#ddd}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{margin-right:10px}.leaflet-control-zoom a{background:#fff;border-bottom:1px solid #ccc;width:30px;height:30px;line-height:30px;display:block;text-align:center;text-decoration:none;color:#222;font-weight:bold}.leaflet-control-attribution{background:rgba(255,255,255,.78);font-size:11px;padding:3px 7px;border-radius:999px}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{background:#fff;border-radius:16px;box-shadow:0 14px 35px rgba(0,0,0,.20);padding:1px;text-align:left}.leaflet-popup-content{margin:14px;line-height:1.45}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.18)}
-    .demand-pin{width:38px;height:38px;border-radius:50% 50% 50% 10px;transform:rotate(-45deg);display:grid;place-items:center;color:#fff;font-weight:950;border:3px solid #fff;box-shadow:0 12px 28px rgba(0,0,0,.28)}.demand-pin span{transform:rotate(45deg)}
+    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-map-pane{z-index:400}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:650}.leaflet-tooltip-pane{z-index:700}.leaflet-popup-pane{z-index:750}.leaflet-zoom-animated{transform-origin:0 0}.leaflet-div-icon{background:transparent;border:0}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img{max-width:none!important}.leaflet-container{font-family:inherit;touch-action:pan-x pan-y;background:#ddd}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{margin-right:10px}.leaflet-control-zoom a{background:#fff;border-bottom:1px solid #ccc;width:30px;height:30px;line-height:30px;display:block;text-align:center;text-decoration:none;color:#222;font-weight:bold}.leaflet-control-attribution{background:rgba(255,255,255,.78);font-size:11px;padding:3px 7px;border-radius:999px}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{background:#fff;border-radius:16px;box-shadow:0 14px 35px rgba(0,0,0,.20);padding:1px;text-align:left}.leaflet-popup-content{margin:14px;line-height:1.45}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.18)}
+    .demand-pin{width:40px;height:40px;border-radius:50% 50% 50% 10px;transform:rotate(-45deg);display:grid;place-items:center;color:#fff;font-weight:950;border:3px solid #fff;box-shadow:0 12px 28px rgba(0,0,0,.30);will-change:transform}.demand-pin span{transform:rotate(45deg)}
     .raw-dot{width:12px;height:12px;border-radius:999px;background:#2f80ed;border:2px solid white;box-shadow:0 4px 12px rgba(47,128,237,.35)}
+    .demand-dot-marker{filter:drop-shadow(0 8px 16px rgba(23,32,51,.18))}
+    .map-legend{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:10px 14px;background:#fff;border-top:1px solid var(--line);font-size:12px;color:#526177}.map-legend span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:11px;height:11px;border-radius:999px;background:#2f80ed;border:2px solid #fff;box-shadow:0 0 0 1px #cbd5e1}.legend-pin{width:18px;height:18px;border-radius:50% 50% 50% 5px;transform:rotate(-45deg);background:#e84c3d;display:inline-block;border:2px solid #fff;box-shadow:0 0 0 1px #cbd5e1}
 
     @media(max-width:1200px){.hero-grid{grid-template-columns:1fr}.rank-panel{position:relative;top:auto;max-height:none}.rank-list{max-height:none}.kpis{grid-template-columns:repeat(2,1fr)}.summary{grid-template-columns:1fr}.charts{grid-template-columns:1fr}.insight-grid{grid-template-columns:1fr}}
     @media(max-width:700px){.page{padding:18px 14px}.topbar{flex-direction:column}.actions{justify-content:flex-start}.brand h1{font-size:24px}.brand{align-items:center}.kpis{grid-template-columns:1fr}#gapMap{height:520px}.method{grid-template-columns:1fr}.layer-switches{position:static;padding:10px 14px;background:#fff;border-top:1px solid var(--line)}}
@@ -196,10 +200,11 @@
         <div class="layer-switches">
           <label><input type="checkbox" id="toggleHeat" checked> 需求熱度</label>
           <label><input type="checkbox" id="toggleCircles" checked> 需求圈半徑</label>
-          <label><input type="checkbox" id="togglePins" checked> Top 候選點</label>
-          <label><input type="checkbox" id="toggleRaw"> 100m 格點</label>
+          <label><input type="checkbox" id="togglePins" checked> 需求點標記</label>
+          <label><input type="checkbox" id="toggleRaw"> 原始需求格點</label>
         </div>
         <div id="gapMap"></div>
+        <div class="map-legend"><span><i class="legend-pin"></i>Top 10 需求圈用數字標記</span><span><i class="legend-dot"></i>其他需求圈用圓點標記，一樣可點擊查看</span><span>圓圈半徑代表需求聚集範圍</span></div>
         <div class="map-toolbar">
           <button class="mini-btn" id="fitMapBtn">聚焦全部需求圈</button>
           <button class="mini-btn" id="topMapBtn">跳到第一優先</button>
@@ -217,18 +222,14 @@
     </section>
 
     <section class="charts">
-      <div class="panel chart-card wide">
-        <div class="panel-head"><h3>📊 Top 需求圈缺口分數</h3><span class="panel-sub">用位置與半徑呈現，不用行政區總表。</span></div>
-        <div class="chart-wrap"><canvas id="topDemandChart"></canvas></div>
+      <div class="panel visual-card wide">
+        <div class="panel-head"><h3>📊 Top 需求圈缺口分數</h3><span class="panel-sub">改用橫向分數條，避免看不懂散點圖。</span></div>
+        <div class="score-list" id="topDemandBars"></div>
       </div>
-      <div class="panel chart-card">
+      <div class="panel visual-card wide">
         <div class="panel-head"><h3>🧩 缺口原因拆解</h3><span class="panel-sub">查無、低覆蓋、慢查詢</span></div>
-        <div class="chart-wrap"><canvas id="reasonChart"></canvas></div>
+        <div id="reasonStack" class="reason-stack-wrap"></div>
         <div class="insight-grid" id="reasonMeters"></div>
-      </div>
-      <div class="panel chart-card">
-        <div class="panel-head"><h3>🔬 需求量 vs 缺口分數</h3><span class="panel-sub">右上角代表需求多且缺口強。</span></div>
-        <div class="chart-wrap"><canvas id="scatterChart"></canvas></div>
       </div>
     </section>
 
@@ -254,7 +255,6 @@
   const DEFAULT_CENTER = [25.0478, 121.5170];
   let currentData = null;
   let map, heatLayer, circleLayer, pinLayer, rawLayer;
-  let charts = {};
   const fmt = new Intl.NumberFormat('zh-TW');
 
   const n = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
@@ -268,11 +268,13 @@
   const pct = (v) => `${n(v).toFixed(1).replace('.0','')}%`;
   const shortCoord = (row) => `${n(row.lat).toFixed(5)}, ${n(row.lon).toFixed(5)}`;
   const demandTitle = (row, idx) => row.demand_label || `${row.area_name || '候選位置'}附近約 ${Math.max(120, Math.round(n(row.radius_m, 150)))}m 需求圈` || `需求圈 #${idx + 1}`;
-  const destroyChart = (id) => { if (charts[id]) { charts[id].destroy(); delete charts[id]; } };
+  const clusterKey = (row) => `${n(row.lat).toFixed(5)},${n(row.lon).toFixed(5)}`;
 
   function initMap(){
     if (map) return;
-    map = L.map('gapMap', { zoomControl:true, scrollWheelZoom:true }).setView(DEFAULT_CENTER, 12);
+    map = L.map('gapMap', { zoomControl:true, scrollWheelZoom:true, preferCanvas:true }).setView(DEFAULT_CENTER, 12);
+    if (!map.getPane('demandDotsPane')) { map.createPane('demandDotsPane'); map.getPane('demandDotsPane').style.zIndex = 660; }
+    if (!map.getPane('demandPinsPane')) { map.createPane('demandPinsPane'); map.getPane('demandPinsPane').style.zIndex = 720; }
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap &copy; CARTO'
@@ -336,16 +338,46 @@
       circleLayer.addLayer(circle);
     });
 
-    recommended.forEach((row, idx) => {
+    const topKeys = new Map();
+    recommended.slice(0, 10).forEach((row, idx) => {
+      if (!n(row.lat) || !n(row.lon)) return;
+      topKeys.set(clusterKey(row), idx);
+    });
+
+    clusters.forEach((row, idx) => {
       if (!n(row.lat) || !n(row.lon)) return;
       const color = levelColor(row.gap_level);
-      const icon = L.divIcon({
-        className: '',
-        html: `<div class="demand-pin" style="background:${color}"><span>${idx + 1}</span></div>`,
-        iconSize: [38,38], iconAnchor: [19,38], popupAnchor: [0,-36]
-      });
-      const marker = L.marker([n(row.lat), n(row.lon)], { icon }).bindPopup(popupHtml(row, idx));
+      const key = clusterKey(row);
+      const topIdx = topKeys.has(key) ? topKeys.get(key) : (idx < 10 ? idx : null);
+      const isTop = topIdx !== null && topIdx !== undefined && topIdx < 10;
+      let marker;
+      if (isTop) {
+        const icon = L.divIcon({
+          className: '',
+          html: `<div class="demand-pin" style="background:${color}"><span>${topIdx + 1}</span></div>`,
+          iconSize: [40,40], iconAnchor: [20,40], popupAnchor: [0,-38]
+        });
+        marker = L.marker([n(row.lat), n(row.lon)], {
+          icon,
+          pane: 'demandPinsPane',
+          zIndexOffset: 1000 + (10 - topIdx)
+        }).bindPopup(popupHtml(row, idx));
+        marker._rankIndex = topIdx;
+      } else {
+        marker = L.circleMarker([n(row.lat), n(row.lon)], {
+          pane: 'demandDotsPane',
+          radius: 7,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: color,
+          fillOpacity: .92,
+          opacity: 1,
+          className: 'demand-dot-marker'
+        }).bindPopup(popupHtml(row, idx));
+      }
+      marker._demandKey = key;
       marker._clusterIndex = idx;
+      marker._isTopCandidate = isTop;
       pinLayer.addLayer(marker);
     });
 
@@ -382,8 +414,11 @@
   function focusDemand(row, idx){
     if (!map || !row) return;
     map.flyTo([n(row.lat), n(row.lon)], 16, { duration:.65 });
+    const key = clusterKey(row);
     setTimeout(() => {
-      pinLayer.eachLayer(layer => { if (layer._clusterIndex === idx) layer.openPopup(); });
+      pinLayer.eachLayer(layer => {
+        if (layer._demandKey === key || layer._rankIndex === idx) layer.openPopup();
+      });
     }, 680);
     document.querySelectorAll('.rank-item').forEach(el => el.classList.remove('active'));
     const el = document.querySelector(`[data-rank="${idx}"]`);
@@ -447,6 +482,29 @@
     }));
   }
 
+  function renderTopDemandBars(data){
+    const rows = (data.demand_clusters || []).slice(0, 10);
+    const box = document.getElementById('topDemandBars');
+    if (!rows.length){ box.innerHTML = '<div class="empty">目前沒有足夠的需求圈分數可顯示。</div>'; return; }
+    const maxScore = Math.max(...rows.map(r => n(r.gap_score)), 1);
+    box.innerHTML = rows.map((r, idx) => {
+      const color = levelColor(r.gap_level);
+      const width = Math.max(4, n(r.gap_score) / maxScore * 100);
+      return `<div class="score-row" data-bar-rank="${idx}">
+        <div>
+          <div class="score-name">#${idx + 1} ${demandTitle(r, idx)}</div>
+          <div class="score-meta">中心 ${shortCoord(r)}｜半徑約 ${Math.max(120, Math.round(n(r.radius_m,150)))}m｜需求 ${fmt.format(n(r.effective_queries))}</div>
+        </div>
+        <div class="score-track"><div class="score-fill" style="width:${width}%;background:${color}"></div></div>
+        <div class="score-value">${n(r.gap_score).toFixed(1)}</div>
+      </div>`;
+    }).join('');
+    box.querySelectorAll('[data-bar-rank]').forEach(el => el.addEventListener('click', () => {
+      const idx = Number(el.getAttribute('data-bar-rank'));
+      focusDemand(rows[idx], idx);
+    }));
+  }
+
   function renderReasonMeters(data){
     const s = data.summary || {};
     const total = Math.max(n(s.no_result_count) + n(s.low_result_count) + n(s.slow_query_count), 1);
@@ -455,6 +513,10 @@
       ['低覆蓋', n(s.low_result_count), '代表找到的候選點太少，可能資料不足', '#f59e0b'],
       ['慢查詢', n(s.slow_query_count), '代表高度依賴外部資料或本地資料不足', '#2f80ed']
     ];
+    const stack = document.getElementById('reasonStack');
+    stack.innerHTML = `<div class="stack-title"><span>缺口訊號組成</span><b>${fmt.format(total)} 次</b></div>
+      <div class="total-stack">${rows.map(([label, value, desc, color]) => `<i class="stack-seg" title="${label} ${fmt.format(value)}" style="width:${Math.max(0, value / total * 100)}%;background:${color}"></i>`).join('')}</div>
+      <div class="stack-legend">${rows.map(([label, value, desc, color]) => `<span><i style="background:${color}"></i>${label} ${fmt.format(value)} 次</span>`).join('')}</div>`;
     document.getElementById('reasonMeters').innerHTML = rows.map(([label, value, desc, color]) => `
       <div class="meter-card">
         <div class="meter-title">${label}<span>${fmt.format(value)}</span></div>
@@ -464,32 +526,7 @@
   }
 
   function renderCharts(data){
-    const clusters = (data.demand_clusters || []).slice(0, 10);
-    const s = data.summary || {};
-    Chart.defaults.font.family = 'Noto Sans TC, system-ui, sans-serif';
-    Chart.defaults.color = '#64748b';
-
-    destroyChart('topDemandChart');
-    charts.topDemandChart = new Chart(document.getElementById('topDemandChart'), {
-      type:'bar',
-      data:{ labels: clusters.map((r,i) => `#${i+1} ${demandTitle(r,i).replace('附近約 ', '｜')}`), datasets:[{ label:'缺口分數', data:clusters.map(r => n(r.gap_score)), borderRadius:12, backgroundColor:clusters.map(r => levelColor(r.gap_level)), borderSkipped:false }] },
-      options:{ indexAxis:'y', maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ afterLabel:(ctx)=>{ const r=clusters[ctx.dataIndex]; return `需求 ${fmt.format(n(r.effective_queries))}｜半徑約 ${Math.max(120,Math.round(n(r.radius_m,150)))}m`; } } } }, scales:{ x:{ grid:{color:'#edf2f7'}, beginAtZero:true, title:{display:true,text:'缺口分數'} }, y:{ grid:{display:false}, ticks:{autoSkip:false,font:{weight:'700'}} } } }
-    });
-
-    destroyChart('reasonChart');
-    charts.reasonChart = new Chart(document.getElementById('reasonChart'), {
-      type:'bar',
-      data:{ labels:['查無結果','低覆蓋','慢查詢'], datasets:[{ label:'訊號次數', data:[n(s.no_result_count), n(s.low_result_count), n(s.slow_query_count)], backgroundColor:['#e84c3d','#f59e0b','#2f80ed'], borderRadius:14, borderSkipped:false }] },
-      options:{ maintainAspectRatio:false, plugins:{ legend:{display:false} }, scales:{ x:{grid:{display:false}}, y:{beginAtZero:true,grid:{color:'#edf2f7'}} } }
-    });
-
-    destroyChart('scatterChart');
-    charts.scatterChart = new Chart(document.getElementById('scatterChart'), {
-      type:'scatter',
-      data:{ datasets:[{ label:'需求圈', data:clusters.map((r,i)=>({x:n(r.effective_queries), y:n(r.gap_score), label:demandTitle(r,i), radius:Math.max(6, Math.min(18, n(r.radius_m,150)/50))})), pointRadius:(ctx)=>ctx.raw?.radius || 8, pointHoverRadius:(ctx)=>(ctx.raw?.radius || 8)+3, backgroundColor:'rgba(47,128,237,.52)', borderColor:'#2f80ed', borderWidth:2 }] },
-      options:{ maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(ctx)=>`${ctx.raw.label}: 需求 ${ctx.raw.x}, 分數 ${ctx.raw.y}` } } }, scales:{ x:{title:{display:true,text:'有效需求'}, beginAtZero:true, grid:{color:'#edf2f7'}}, y:{title:{display:true,text:'缺口分數'}, beginAtZero:true, grid:{color:'#edf2f7'}} } }
-    });
-
+    renderTopDemandBars(data);
     renderReasonMeters(data);
   }
 
