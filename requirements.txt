@@ -9,4 +9,5 @@ joblib==1.5.1
 pandas==2.2.2
 openai>=1.40.0
 gunicorn==22.0.0
-psycopg2-binary==2.9.9scikit-learn
+psycopg2-binary==2.9.9
+scikit-learn
