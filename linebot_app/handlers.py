@@ -988,11 +988,7 @@ def handle_text(event):
         reply_messages.append(TextSendMessage(text=summary))
 
     elif cmd == "help":
-        reply_messages.append(TextSendMessage(text=L(
-            uid,
-            "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
-            "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
-        )))
+        return 
 
     # =========================
     # ✅ 永遠不沉默
@@ -1385,11 +1381,6 @@ def handle_postback(event):
 
             # 使用說明
             if cmd == "help":
-                safe_reply(event, TextSendMessage(text=L(
-                    uid,
-                    "📌 使用說明：\n・點「附近廁所」或直接傳位置\n・可加入最愛、回饋、看 AI 摘要\n・也可切換 AI 推薦模式",
-                    "📌 Help:\n• Tap 'Nearby Toilets' or send location\n• Add favorites, leave feedback, view AI summary\n• You can also switch to AI recommendation mode"
-                )))
                 return
 
             # 新增廁所
