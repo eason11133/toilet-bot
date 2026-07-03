@@ -268,6 +268,7 @@ configure_feedback_routes(
     public_url=PUBLIC_URL,
     L_func=L,
     resolve_lang_func=resolve_lang,
+    get_liff_status_id_func=_get_liff_status_id,
 )
 configure_status_routes(
     build_nearby_toilets_func=build_nearby_toilets,

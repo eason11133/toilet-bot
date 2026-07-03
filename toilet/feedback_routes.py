@@ -25,6 +25,7 @@ _user_lang_q = None
 PUBLIC_URL = ""
 L = None
 resolve_lang = None
+_get_liff_status_id = lambda: ""
 
 
 def configure_feedback_routes(
@@ -45,10 +46,13 @@ def configure_feedback_routes(
     public_url,
     L_func,
     resolve_lang_func,
+    get_liff_status_id_func=None,
 ):
     global POSTGRES_ENABLED, _parse_lat_lon, norm_coord, _floor_from_name, expected_from_feats
     global _fetch_feedback_pg_by_coord, _insert_feedback_pg, get_feedback_summary_by_coord, get_feedbacks_by_coord
-    global compute_nowcast_ci, LAST_N_HISTORY, FEEDBACK_LOOKBACK_LIMIT, _append_uid_lang, _user_lang_q, PUBLIC_URL, L, resolve_lang
+    global compute_nowcast_ci, LAST_N_HISTORY, FEEDBACK_LOOKBACK_LIMIT
+    global _append_uid_lang, _user_lang_q, PUBLIC_URL, L, resolve_lang, _get_liff_status_id
+
     POSTGRES_ENABLED = postgres_enabled
     _parse_lat_lon = parse_lat_lon_func
     norm_coord = norm_coord_func
@@ -66,6 +70,7 @@ def configure_feedback_routes(
     PUBLIC_URL = public_url
     L = L_func
     resolve_lang = resolve_lang_func
+    _get_liff_status_id = get_liff_status_id_func or (lambda: "")
 
 def feedback_form(toilet_name, address):
     address = address or request.args.get("address", "")
