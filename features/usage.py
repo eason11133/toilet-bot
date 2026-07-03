@@ -9,6 +9,7 @@ from flask import request, redirect, render_template
 from openai import OpenAI
 
 from config import TW_TZ
+from core.i18n import resolve_lang
 
 _get_db = None
 _read_status_rows = None
