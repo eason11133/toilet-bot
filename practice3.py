@@ -1,5 +1,0 @@
-n = int(input())
-a = list(map(int,input().split()))
-a.append(0)
-a = sorted(a)
-print(a)
