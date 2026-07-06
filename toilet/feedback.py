@@ -173,5 +173,115 @@ _feedback_index_cache = {"ts": 0, "data": {}}
 # _FEEDBACK_INDEX_TTL is defined in global config section (see above)
 
 def build_feedback_index():
-    """Feedback feature is disabled; keep interface returning empty indicators."""
-    return {}
+    import time
+    import logging
+
+    global _feedback_index_cache
+
+    if not POSTGRES_ENABLED:
+        return {}
+
+    if "_feedback_index_cache" not in globals():
+        _feedback_index_cache = {"ts": 0, "data": {}}
+
+    now = time.time()
+    ttl = globals().get("_FEEDBACK_INDEX_TTL", 300)
+
+    try:
+        if (now - _feedback_index_cache.get("ts", 0) < ttl) and _feedback_index_cache.get("data"):
+            return _feedback_index_cache["data"]
+    except Exception:
+        pass
+
+    def _to_float(v):
+        try:
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s or s in ("未預測", "N/A", "None", "null", "-"):
+                return None
+            return float(s)
+        except Exception:
+            return None
+
+    def _norm_yn(v):
+        s = str(v or "").strip()
+        if s in ("有", "是", "yes", "Yes", "YES", "true", "True", "1"):
+            return "有"
+        if s in ("沒有", "無", "否", "no", "No", "NO", "false", "False", "0"):
+            return "沒有"
+        return "?"
+
+    def _majority(counter):
+        yes = counter.get("有", 0)
+        no = counter.get("沒有", 0)
+        if yes == 0 and no == 0:
+            return "?"
+        return "有" if yes >= no else "沒有"
+
+    out = {}
+
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT lat, lon, rating, toilet_paper, accessibility, cleanliness_score
+            FROM toilet_feedbacks
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY created_at DESC NULLS LAST, id DESC
+            LIMIT 5000
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        groups = {}
+
+        for lat, lon, rating, paper, access, cleanliness_score in rows:
+            try:
+                lat_s = norm_coord(lat)
+                lon_s = norm_coord(lon)
+            except Exception:
+                continue
+
+            key = (lat_s, lon_s)
+
+            if key not in groups:
+                groups[key] = {
+                    "scores": [],
+                    "paper": {"有": 0, "沒有": 0},
+                    "access": {"有": 0, "沒有": 0},
+                }
+
+            score = _to_float(cleanliness_score)
+            if score is None:
+                score = _to_float(rating)
+
+            if score is not None:
+                groups[key]["scores"].append(score)
+
+            p = _norm_yn(paper)
+            if p in ("有", "沒有"):
+                groups[key]["paper"][p] += 1
+
+            a = _norm_yn(access)
+            if a in ("有", "沒有"):
+                groups[key]["access"][a] += 1
+
+        for key, g in groups.items():
+            scores = g["scores"]
+            avg = round(sum(scores) / len(scores), 2) if scores else None
+
+            out[key] = {
+                "paper": _majority(g["paper"]),
+                "access": _majority(g["access"]),
+                "avg": avg,
+            }
+
+        _feedback_index_cache.update(ts=now, data=out)
+        return out
+
+    except Exception as e:
+        logging.warning(f"建立 Neon 回饋指示燈索引失敗：{e}", exc_info=True)
+        _feedback_index_cache.update(ts=now, data={})
+        return {}
