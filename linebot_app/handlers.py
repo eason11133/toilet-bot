@@ -413,6 +413,36 @@ def create_toilet_flex_messages(toilets, uid=None, query_id=None):
     indicators = build_feedback_index()
     status_map = build_status_index()
 
+    def _nearby_indicator(lat_s, lon_s, default=None):
+        default = default or {"paper": "?", "access": "?", "avg": None}
+
+        # 先 exact match
+        hit = indicators.get((lat_s, lon_s))
+        if hit:
+            return hit
+
+        # 再容許約 15 公尺內的回饋座標
+        try:
+            lat_f = float(lat_s)
+            lon_f = float(lon_s)
+            best = None
+            best_d = 999999
+
+            for (ilat, ilon), val in indicators.items():
+                try:
+                    d = haversine(lat_f, lon_f, float(ilat), float(ilon))
+                except Exception:
+                    continue
+
+                if d <= 15 and d < best_d:
+                    best = val
+                    best_d = d
+
+            return best or default
+
+        except Exception:
+            return default
+
     # === 資料來源顯示對照（中/英）===
     SOURCE_LABEL = {
         "public_csv": ("政府開放資料", "Government Open Data"),
@@ -502,7 +532,7 @@ def create_toilet_flex_messages(toilets, uid=None, query_id=None):
             })
 
         # 指示燈文字（paper/access/avg）
-        ind = indicators.get((lat_s, lon_s), {"paper": "?", "access": "?", "avg": None})
+                ind = _nearby_indicator(lat_s, lon_s, {"paper": "?", "access": "?", "avg": None})
 
         # ⭐ 評分顯示不分語言
         star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
