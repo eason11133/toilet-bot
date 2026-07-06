@@ -532,7 +532,7 @@ def create_toilet_flex_messages(toilets, uid=None, query_id=None):
             })
 
         # 指示燈文字（paper/access/avg）
-                ind = _nearby_indicator(lat_s, lon_s, {"paper": "?", "access": "?", "avg": None})
+        ind = _nearby_indicator(lat_s, lon_s, {"paper": "?", "access": "?", "avg": None})
 
         # ⭐ 評分顯示不分語言
         star_text = f"⭐{ind['avg']}" if ind.get("avg") is not None else "⭐—"
