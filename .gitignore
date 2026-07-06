@@ -31,3 +31,5 @@ toilet-bot-mirror.bfg-report/
 
 # Keep production model files if intentionally committed
 # Do not ignore models/*.pkl because the app loads models/clean_model.pkl and models/label_encoder.pkl
+
+google_service_account.json

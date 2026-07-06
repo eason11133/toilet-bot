@@ -173,13 +173,28 @@ _feedback_index_cache = {"ts": 0, "data": {}}
 # _FEEDBACK_INDEX_TTL is defined in global config section (see above)
 
 def build_feedback_index():
+    """
+    Build feedback indicators for LINE Flex cards from Neon toilet_feedbacks.
+
+    Output:
+    {
+        ("25.091930", "121.517171"): {
+            "paper": "有",
+            "access": "有",
+            "avg": 4.86
+        }
+    }
+    """
+    import os
     import time
     import logging
 
-    global _feedback_index_cache
+    try:
+        import psycopg2
+    except Exception:
+        psycopg2 = None
 
-    if not POSTGRES_ENABLED:
-        return {}
+    global _feedback_index_cache
 
     if "_feedback_index_cache" not in globals():
         _feedback_index_cache = {"ts": 0, "data": {}}
@@ -192,6 +207,12 @@ def build_feedback_index():
             return _feedback_index_cache["data"]
     except Exception:
         pass
+
+    def _coord_key(v):
+        try:
+            return f"{float(v):.6f}"
+        except Exception:
+            return ""
 
     def _to_float(v):
         try:
@@ -219,10 +240,25 @@ def build_feedback_index():
             return "?"
         return "有" if yes >= no else "沒有"
 
-    out = {}
+    conn = None
 
     try:
-        conn = _pg_connect()
+        # 優先用專案原本的 _pg_connect；失敗再直接用 DATABASE_URL。
+        pg_connect_func = globals().get("_pg_connect")
+        db_url = os.getenv("DATABASE_URL", "").strip()
+
+        try:
+            if callable(pg_connect_func):
+                conn = pg_connect_func()
+        except Exception:
+            conn = None
+
+        if conn is None:
+            if not db_url or psycopg2 is None:
+                logging.warning("build_feedback_index: DATABASE_URL missing or psycopg2 unavailable")
+                return {}
+            conn = psycopg2.connect(db_url)
+
         cur = conn.cursor()
         cur.execute("""
             SELECT lat, lon, rating, toilet_paper, accessibility, cleanliness_score
@@ -234,14 +270,15 @@ def build_feedback_index():
         rows = cur.fetchall()
         cur.close()
         conn.close()
+        conn = None
 
         groups = {}
 
         for lat, lon, rating, paper, access, cleanliness_score in rows:
-            try:
-                lat_s = norm_coord(lat)
-                lon_s = norm_coord(lon)
-            except Exception:
+            lat_s = _coord_key(lat)
+            lon_s = _coord_key(lon)
+
+            if not lat_s or not lon_s:
                 continue
 
             key = (lat_s, lon_s)
@@ -268,6 +305,8 @@ def build_feedback_index():
             if a in ("有", "沒有"):
                 groups[key]["access"][a] += 1
 
+        out = {}
+
         for key, g in groups.items():
             scores = g["scores"]
             avg = round(sum(scores) / len(scores), 2) if scores else None
@@ -278,6 +317,7 @@ def build_feedback_index():
                 "avg": avg,
             }
 
+        logging.info(f"build_feedback_index: loaded {len(out)} coordinate groups from {len(rows)} feedback rows")
         _feedback_index_cache.update(ts=now, data=out)
         return out
 
@@ -285,3 +325,10 @@ def build_feedback_index():
         logging.warning(f"建立 Neon 回饋指示燈索引失敗：{e}", exc_info=True)
         _feedback_index_cache.update(ts=now, data={})
         return {}
+
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
