@@ -1,147 +1,596 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公共設施需求缺口分析</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>公共設施需求缺口研究展示</title>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <style>
-    :root{--bg:#f5f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--shadow:0 4px 18px rgba(15,23,42,.07);--primary:#111827;--blue:#4f46e5;--soft:#eef2ff;--good:#047857;--warn:#b45309;--bad:#b91c1c;--radius:18px}
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif}.wrap{max-width:1480px;margin:0 auto;padding:24px 18px 56px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.title h1{margin:0;font-size:30px;letter-spacing:.02em}.title p{margin:8px 0 0;color:var(--muted);line-height:1.6}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--line);background:#fff;border-radius:13px;padding:10px 14px;text-decoration:none;color:var(--text);font-weight:800;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.04)}.btn:hover{border-color:#c7d2fe;color:#3730a3}.btn.active,.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.status{border-radius:999px;background:var(--soft);color:#3730a3;padding:10px 12px;font-size:13px;font-weight:700;white-space:nowrap}.cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin:16px 0}.card,.panel{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow)}.card{padding:18px;min-height:132px}.card h3{margin:0 0 12px;color:#4b5563;font-size:14px}.big{font-size:34px;font-weight:900;letter-spacing:.04em}.sub{margin-top:8px;color:var(--muted);font-size:13px;line-height:1.55}.panel{padding:20px;margin:16px 0}.panel h2{font-size:22px;margin:0 0 8px}.note{color:var(--muted);line-height:1.65;margin:0 0 14px}.summary-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.talk{background:#f8fafc;border-radius:15px;padding:16px;border:1px solid #edf2f7}.talk h3{margin:0 0 10px}.talk p{margin:0;line-height:1.75}.clusters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.cluster-card{border:1px solid #edf2f7;background:#fff;border-radius:18px;padding:16px;box-shadow:0 2px 10px rgba(15,23,42,.04)}.cluster-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.cluster-title{font-size:18px;margin:0}.cluster-sub{font-size:13px;color:var(--muted);margin:6px 0 0}.mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}.mini{background:#f8fafc;border-radius:13px;padding:10px}.mini span{display:block;color:var(--muted);font-size:12px}.mini b{display:block;margin-top:4px;font-size:18px}.pill{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:900;background:#eef2ff;color:#3730a3;white-space:nowrap}.pill.high{background:#fef2f2;color:#b91c1c}.pill.mid{background:#fffbeb;color:#b45309}.pill.good{background:#ecfdf5;color:#047857}.toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.chip{border:0;border-radius:999px;background:#f3f4f6;color:#374151;padding:9px 13px;font-weight:800;cursor:pointer}.chip.active{background:#111827;color:#fff}.input{border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:260px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f9fafb;color:#4b5563}.table-scroll{overflow:auto}.mono{font-variant-numeric:tabular-nums}.map-link{font-weight:900;color:#4f46e5;text-decoration:none}.map-link:hover{text-decoration:underline}.nowrap{white-space:nowrap}.sample-detail summary{cursor:pointer;font-weight:800;color:#4f46e5}.sample-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:130px;overflow:auto}.sample-item{background:#f8fafc;border-radius:8px;padding:7px 8px;color:#4b5563;font-size:12px}.focus .not-focus{display:none}.focus .clusters{grid-template-columns:repeat(3,minmax(0,1fr))}.help-overlay{position:fixed;inset:0;background:rgba(15,23,42,.48);display:none;align-items:center;justify-content:center;padding:18px;z-index:9999}.help-overlay.show{display:flex}.help{background:#fff;border-radius:22px;width:min(920px,100%);max-height:86vh;overflow:auto;box-shadow:0 24px 70px rgba(15,23,42,.28)}.help-head{display:flex;justify-content:space-between;gap:12px;padding:20px;border-bottom:1px solid var(--line)}.help-head h2{margin:0}.help-body{padding:20px}.help-section{margin:0 0 18px}.help-section h3{margin:0 0 8px}.help-section p,.help-section li{line-height:1.75;color:#374151}.formula{background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.7}.close{border:0;background:#f3f4f6;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.clusters{grid-template-columns:1fr}.summary-grid{grid-template-columns:1fr}}@media(max-width:700px){.top{display:block}.controls{margin-top:12px}.cards{grid-template-columns:1fr}.big{font-size:30px}.input{min-width:100%}th,td{padding:10px}}
+    :root{
+      --bg:#f4efe3;
+      --bg2:#fbf8f0;
+      --card:#ffffff;
+      --ink:#172033;
+      --muted:#637087;
+      --line:#e4dccd;
+      --line2:#edf0f2;
+      --red:#e84c3d;
+      --red2:#ff6b57;
+      --orange:#f59e0b;
+      --yellow:#facc15;
+      --blue:#2f80ed;
+      --cyan:#12b5cb;
+      --teal:#0f9f8f;
+      --green:#16a34a;
+      --slate:#94a3b8;
+      --purple:#7c3aed;
+      --shadow:0 20px 60px rgba(59, 48, 29, .12);
+      --soft-shadow:0 12px 32px rgba(59, 48, 29, .08);
+      --radius:24px;
+    }
+    *{box-sizing:border-box}
+    html,body{min-height:100%}
+    body{
+      margin:0;
+      color:var(--ink);
+      font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+      background:
+        radial-gradient(circle at 8% -10%, rgba(245,158,11,.18), transparent 30%),
+        radial-gradient(circle at 95% 2%, rgba(18,181,203,.14), transparent 28%),
+        linear-gradient(135deg, rgba(255,255,255,.7) 0 16%, transparent 16% 100%),
+        repeating-linear-gradient(0deg, rgba(23,32,51,.035) 0 1px, transparent 1px 44px),
+        repeating-linear-gradient(90deg, rgba(23,32,51,.03) 0 1px, transparent 1px 44px),
+        var(--bg);
+    }
+    a{color:inherit;text-decoration:none}
+    button,.btn{
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.86);
+      color:#213149;
+      border-radius:999px;
+      padding:10px 14px;
+      font-weight:850;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      box-shadow:0 8px 18px rgba(59,48,29,.06);
+      transition:.16s ease;
+      white-space:nowrap;
+    }
+    button:hover,.btn:hover{transform:translateY(-1px);box-shadow:0 14px 28px rgba(59,48,29,.10)}
+    .btn-dark{background:#162033;color:white;border-color:#162033}
+    .btn-accent{background:linear-gradient(135deg,#e84c3d,#f59e0b);color:white;border-color:transparent}
+    .page{max-width:1500px;margin:0 auto;padding:26px 28px 46px}
+
+    .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}
+    .brand{display:flex;gap:15px;align-items:flex-start;min-width:0}
+    .mark{width:58px;height:58px;border-radius:20px;background:linear-gradient(135deg,#18243a,#0f9f8f);color:#fff;display:grid;place-items:center;font-size:24px;font-weight:950;box-shadow:0 18px 40px rgba(15,159,143,.24)}
+    .brand h1{margin:0;font-size:29px;line-height:1.12;letter-spacing:-.03em}
+    .brand p{margin:7px 0 0;color:#526177;font-size:14px;line-height:1.55;max-width:780px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+    .meta-strip{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0 18px;color:var(--muted);font-size:13px}
+    .pill{border:1px solid var(--line);background:rgba(255,255,255,.76);padding:7px 11px;border-radius:999px;display:inline-flex;align-items:center;gap:7px}
+
+    .summary{display:grid;grid-template-columns:1.25fr .75fr;gap:16px;margin-bottom:16px}
+    .summary-card,.score-card,.kpi,.panel{background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+    .summary-card{padding:22px 23px;background:linear-gradient(135deg,#ffffff 0%,#fff8e8 100%)}
+    .eyebrow{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:#0f766e;background:#e6fffb;border:1px solid #bbf7d0;padding:6px 9px;border-radius:999px;margin-bottom:12px}
+    .summary-card h2{margin:0 0 10px;font-size:23px;letter-spacing:-.02em}
+    .summary-card p{margin:0;color:#415269;line-height:1.75;font-size:15px}
+    .score-card{padding:18px;background:#162033;color:white;display:grid;align-content:center;min-height:150px;position:relative;overflow:hidden}
+    .score-card:after{content:"";position:absolute;right:-44px;top:-50px;width:160px;height:160px;background:rgba(245,158,11,.18);border-radius:50%}
+    .score-label{font-size:12px;color:#c7d2e2;font-weight:800;position:relative;z-index:1}
+    .score-value{font-size:42px;line-height:1;font-weight:950;letter-spacing:-.05em;margin:8px 0;position:relative;z-index:1}
+    .score-sub{font-size:13px;color:#dbeafe;line-height:1.45;position:relative;z-index:1}
+
+    .kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:13px;margin-bottom:18px}
+    .kpi{padding:16px 16px 15px;min-height:118px;position:relative;background:#fff}
+    .kpi:before{content:"";position:absolute;inset:0 0 auto 0;height:5px;background:var(--accent,var(--teal))}
+    .kpi .label{font-size:13px;color:var(--muted);font-weight:850}
+    .kpi .num{font-size:31px;font-weight:950;letter-spacing:-.04em;margin-top:8px}
+    .kpi .sub{font-size:12px;color:#738199;line-height:1.35;margin-top:5px}
+
+    .hero-grid{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:18px;align-items:start;margin-bottom:18px}
+    .map-panel{min-height:720px;position:relative}
+    .panel-head{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(255,255,255,.72)}
+    .panel-head h3{margin:0;font-size:18px;display:flex;align-items:center;gap:9px;letter-spacing:-.01em}
+    .panel-sub{font-size:12px;color:var(--muted);line-height:1.35}
+    #gapMap{height:640px;width:100%;background:#dfe7e3;position:relative}
+    .map-toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px;background:#fff;border-top:1px solid var(--line)}
+    .mini-btn{font-size:12px;padding:8px 11px}
+    .layer-switches{position:absolute;z-index:700;top:78px;right:14px;display:grid;gap:8px;pointer-events:auto}
+    .layer-switches label{background:rgba(255,255,255,.94);border:1px solid rgba(226,220,205,.9);border-radius:999px;padding:8px 10px;font-size:12px;font-weight:850;color:#27364d;box-shadow:0 10px 22px rgba(0,0,0,.10);display:flex;gap:7px;align-items:center;backdrop-filter:blur(10px)}
+
+    .rank-panel{position:sticky;top:16px;max-height:calc(100vh - 32px);display:flex;flex-direction:column}
+    .rank-list{padding:13px;overflow:auto;max-height:640px;background:linear-gradient(180deg,#fff,#fbf8f0)}
+    .rank-item{border:1px solid #eadfcb;background:white;border-radius:20px;margin-bottom:12px;padding:14px;display:grid;grid-template-columns:52px 1fr;gap:12px;box-shadow:var(--soft-shadow);cursor:pointer;transition:.15s ease;position:relative;overflow:hidden}
+    .rank-item:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--rank-color,var(--orange))}
+    .rank-item:hover,.rank-item.active{transform:translateY(-1px);border-color:#f0b657;box-shadow:0 18px 36px rgba(59,48,29,.12)}
+    .rank-num{width:46px;height:46px;border-radius:16px;display:grid;place-items:center;background:var(--rank-color,var(--orange));color:white;font-weight:950;font-size:20px;box-shadow:0 12px 24px rgba(245,158,11,.22)}
+    .rank-title{font-size:15px;font-weight:950;margin-bottom:4px;line-height:1.3}
+    .rank-desc{font-size:12px;color:#526177;line-height:1.45;margin-bottom:9px}
+    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #e5e7eb;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:850;background:#fff;color:#334155}
+    .dot{width:9px;height:9px;border-radius:999px;background:var(--slate)}
+    .rank-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}
+    .statbox{background:#f8fafc;border:1px solid #e2e8f0;border-radius:13px;padding:8px 7px}.statbox b{display:block;font-size:15px}.statbox span{font-size:11px;color:var(--muted)}
+    .rank-actions{display:flex;gap:8px;margin-top:10px}.rank-actions button,.rank-actions a{flex:1;justify-content:center;font-size:12px;padding:8px 10px}
+
+    .charts{display:grid;grid-template-columns:1fr;gap:18px;margin-bottom:18px}
+    .visual-card{min-height:260px}.wide{grid-column:1/-1}
+    .score-list{padding:16px 18px 20px;display:grid;gap:12px;background:linear-gradient(180deg,#fff,#fffdf8)}
+    .score-row{display:grid;grid-template-columns:minmax(230px,.9fr) minmax(220px,1.6fr) 88px;gap:14px;align-items:center;border:1px solid #edf0f2;border-radius:17px;padding:12px 14px;background:#fff;box-shadow:0 8px 20px rgba(59,48,29,.04)}
+    .score-name{font-weight:950;font-size:14px;line-height:1.35;color:#172033}.score-meta{font-size:12px;color:#637087;margin-top:4px}.score-track{height:18px;border-radius:999px;background:#eef2f7;overflow:hidden;position:relative}.score-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#12b5cb,#f59e0b,#e84c3d);min-width:3px}.score-value{text-align:right;font-size:20px;font-weight:950;letter-spacing:-.03em}.reason-stack-wrap{padding:18px 18px 2px;background:#fffdf8}.stack-title{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#637087;font-weight:850;margin-bottom:10px}.total-stack{height:24px;border-radius:999px;background:#edf2f7;overflow:hidden;display:flex;box-shadow:inset 0 0 0 1px rgba(0,0,0,.04)}.stack-seg{height:100%;min-width:2px}.stack-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;font-size:12px;color:#526177}.stack-legend span{display:inline-flex;align-items:center;gap:6px}.stack-legend i{width:10px;height:10px;border-radius:999px;display:inline-block}
+    .insight-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:16px;background:#fffdf8;border-top:1px solid var(--line)}
+    .meter-card{border:1px solid var(--line2);border-radius:17px;background:#fff;padding:14px;box-shadow:0 8px 22px rgba(59,48,29,.05)}
+    .meter-title{font-weight:950;font-size:14px;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between}.meter-title span{font-size:22px;letter-spacing:-.04em}.meter-sub{font-size:12px;color:var(--muted);line-height:1.45}.meter{height:12px;background:#edf2f7;border-radius:999px;overflow:hidden;margin-top:10px}.meter i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--orange),var(--red))}
+
+    .method{background:#162033;color:#eaf5ff;border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:18px}.method h3{margin:0 0 8px}.method p,.method li{color:#cbd8e6;line-height:1.72;font-size:14px}.method ul{margin:8px 0 0;padding-left:18px}
+    .loading,.error,.empty{padding:17px 18px;border:1px dashed #d8c9ad;border-radius:18px;background:#fffaf0;color:#715b35;margin-bottom:16px;line-height:1.6}.error{border-color:#fca5a5;background:#fff1f2;color:#991b1b}.hidden{display:none!important}
+
+    /* Minimal Leaflet CSS for CSP-safe inline use */
+    .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas,.leaflet-zoom-box,.leaflet-image-layer,.leaflet-layer{position:absolute;left:0;top:0}.leaflet-container{overflow:hidden}.leaflet-map-pane{z-index:400}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:650}.leaflet-tooltip-pane{z-index:700}.leaflet-popup-pane{z-index:750}.leaflet-zoom-animated{transform-origin:0 0}.leaflet-div-icon{background:transparent;border:0}.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow{user-select:none;-webkit-user-drag:none}.leaflet-marker-icon,.leaflet-marker-shadow{display:block}.leaflet-container img{max-width:none!important}.leaflet-container{font-family:inherit;touch-action:pan-x pan-y;background:#ddd}.leaflet-control{position:relative;z-index:800;pointer-events:auto}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-control{float:left;clear:both}.leaflet-right .leaflet-control{float:right}.leaflet-top .leaflet-control{margin-top:10px}.leaflet-bottom .leaflet-control{margin-bottom:10px}.leaflet-left .leaflet-control{margin-left:10px}.leaflet-right .leaflet-control{margin-right:10px}.leaflet-control-zoom a{background:#fff;border-bottom:1px solid #ccc;width:30px;height:30px;line-height:30px;display:block;text-align:center;text-decoration:none;color:#222;font-weight:bold}.leaflet-control-attribution{background:rgba(255,255,255,.78);font-size:11px;padding:3px 7px;border-radius:999px}.leaflet-popup{position:absolute;text-align:center;margin-bottom:20px}.leaflet-popup-content-wrapper{background:#fff;border-radius:16px;box-shadow:0 14px 35px rgba(0,0,0,.20);padding:1px;text-align:left}.leaflet-popup-content{margin:14px;line-height:1.45}.leaflet-popup-tip-container{width:40px;height:20px;position:absolute;left:50%;margin-left:-20px;overflow:hidden;pointer-events:none}.leaflet-popup-tip{width:17px;height:17px;padding:1px;margin:-10px auto 0;transform:rotate(45deg);background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.18)}
+    .demand-pin{width:40px;height:40px;border-radius:50% 50% 50% 10px;transform:rotate(-45deg);display:grid;place-items:center;color:#fff;font-weight:950;border:3px solid #fff;box-shadow:0 12px 28px rgba(0,0,0,.30);will-change:transform}.demand-pin span{transform:rotate(45deg)}
+    .raw-dot{width:12px;height:12px;border-radius:999px;background:#2f80ed;border:2px solid white;box-shadow:0 4px 12px rgba(47,128,237,.35)}
+    .demand-dot-marker{filter:drop-shadow(0 8px 16px rgba(23,32,51,.18))}
+    .map-legend{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:10px 14px;background:#fff;border-top:1px solid var(--line);font-size:12px;color:#526177}.map-legend span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:11px;height:11px;border-radius:999px;background:#2f80ed;border:2px solid #fff;box-shadow:0 0 0 1px #cbd5e1}.legend-pin{width:18px;height:18px;border-radius:50% 50% 50% 5px;transform:rotate(-45deg);background:#e84c3d;display:inline-block;border:2px solid #fff;box-shadow:0 0 0 1px #cbd5e1}
+
+    @media(max-width:1200px){.hero-grid{grid-template-columns:1fr}.rank-panel{position:relative;top:auto;max-height:none}.rank-list{max-height:none}.kpis{grid-template-columns:repeat(2,1fr)}.summary{grid-template-columns:1fr}.charts{grid-template-columns:1fr}.insight-grid{grid-template-columns:1fr}}
+    @media(max-width:700px){.page{padding:18px 14px}.topbar{flex-direction:column}.actions{justify-content:flex-start}.brand h1{font-size:24px}.brand{align-items:center}.kpis{grid-template-columns:1fr}#gapMap{height:520px}.method{grid-template-columns:1fr}.layer-switches{position:static;padding:10px 14px;background:#fff;border-top:1px solid var(--line)}}
+    @media print{body{background:#fff}.actions,.map-toolbar,.layer-switches,#gapMap{display:none!important}.page{max-width:none;padding:0}.panel,.summary-card,.score-card,.kpi,.method{box-shadow:none;break-inside:avoid}.hero-grid,.charts{display:block}.rank-panel{display:none}.method{background:#fff;color:#111;border:1px solid #ddd}.method p,.method li{color:#333}}
   </style>
 </head>
 <body>
-<div class="wrap" id="pageWrap">
-  <div class="top">
-    <div class="title">
-      <h1>公共設施需求缺口分析</h1>
-      <p>Demand Gap v2：先去除同人同地短時間重複查詢，再把附近缺口點合併成「需求群」，產生更適合展示與現地檢查的建議中心點。</p>
-    </div>
-    <div class="controls">
-      <a class="btn" href="/dashboard">← 回總覽儀表板</a>
-      <button class="btn" id="helpBtn">版本 / 操作說明</button>
-      <button class="btn" id="focusBtn">展示模式</button>
-      <button class="btn" id="copyBtn">複製重點</button>
-      <span class="status" id="dataStatus">尚未載入</span>
-    </div>
-  </div>
-
-  <div class="controls" style="margin-bottom:12px">
-    <button class="btn" data-range="1d">1日</button>
-    <button class="btn" data-range="7d">7日</button>
-    <button class="btn active" data-range="30d">30日</button>
-    <button class="btn" data-range="1y">1年</button>
-    <button class="btn primary" id="refreshBtn">重新載入</button>
-  </div>
-
-  <div class="cards">
-    <div class="card"><h3>有效需求查詢</h3><div class="big" id="effectiveQueries">0</div><div class="sub" id="dedupeInfo">已去除短時間重複查詢</div></div>
-    <div class="card"><h3>獨立使用者</h3><div class="big" id="uniqueUsers">0</div><div class="sub">比查詢次數更能代表真實需求</div></div>
-    <div class="card"><h3>查無結果</h3><div class="big" id="noResultCount">0</div><div class="sub" id="noResultRate">0%</div></div>
-    <div class="card"><h3>低覆蓋查詢</h3><div class="big" id="lowResultCount">0</div><div class="sub" id="lowResultRate">候選數 ≤ 2</div></div>
-    <div class="card"><h3>需求群數</h3><div class="big" id="clusterCount">0</div><div class="sub">附近缺口點合併後的建議檢查區</div></div>
-  </div>
-
-  <div class="panel">
-    <h2>展示摘要</h2>
-    <p class="note">展示時先講這一區：這頁不是判定「一定要蓋廁所」，而是找出值得優先人工檢查、補資料或提供公部門參考的需求群。</p>
-    <div class="summary-grid">
-      <div class="talk"><h3>一句話結論</h3><p id="oneLineSummary">載入資料後會自動產生摘要。</p></div>
-      <div class="talk"><h3>v2 比上一版準在哪？</h3><p>同一個人、同一地點、短時間內重複查詢只算一次；附近多個缺口點會合併成一個需求群，並給出建議中心點，較接近「這附近如果要補資料或評估新增設施，應該先看哪裡」。</p></div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2>建議優先檢查 Top 3 需求群</h2>
-    <p class="note">這三張卡最適合展示。每張卡都是把附近查詢點合併後的中心點，按「開地圖檢查」確認附近是否有漏收廁所、商場、車站、公園或學校設施。</p>
-    <div class="clusters" id="topClusters"><div class="note">載入中...</div></div>
-  </div>
-
-  <div class="panel not-focus">
-    <h2>需求群完整清單</h2>
-    <p class="note">真正要整理給政府或人工補資料時看這裡。優先看高可信與中可信需求群。</p>
-    <div class="toolbar">
-      <div class="controls">
-        <button class="chip active" data-filter="priority">優先</button>
-        <button class="chip" data-filter="high">高可信</button>
-        <button class="chip" data-filter="no_result">查無為主</button>
-        <button class="chip" data-filter="low_cover">低覆蓋為主</button>
-        <button class="chip" data-filter="all">全部</button>
+  <main class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">◎</div>
+        <div>
+          <h1>公共設施需求缺口研究展示</h1>
+          <p>以「需求圈」為核心：當同一地點附近數百公尺內反覆出現查無、低覆蓋或慢查詢，就形成可展示、可匯出、可現地檢查的公共設施缺口訊號。</p>
+        </div>
       </div>
-      <input class="input" id="searchInput" placeholder="搜尋區域或座標，例如 信義、25.038" />
+      <div class="actions">
+        <a class="btn" href="/dashboard">← 回主儀表板</a>
+        <button id="copySummaryBtn">複製摘要</button>
+        <button id="downloadCsvBtn">下載全部需求圈 CSV</button>
+        <button id="printBtn" class="btn-accent">匯出 PDF / 列印</button>
+      </div>
+    </header>
+
+    <div class="meta-strip">
+      <span class="pill">資料範圍：系統全資料</span>
+      <span class="pill">分析尺度：約 500m 需求圈</span>
+      <span class="pill" id="lastUpdated">尚未載入</span>
+      <span class="pill" id="cacheState">—</span>
+      <button id="refreshBtn" class="mini-btn">重新整理</button>
     </div>
-    <div class="table-scroll"><table>
-      <thead><tr><th>優先</th><th>建議中心</th><th>地圖</th><th>區域</th><th>半徑</th><th>有效需求</th><th>獨立使用者</th><th>跨日期</th><th>查無</th><th>低覆蓋</th><th>缺口分數</th><th style="min-width:260px">建議</th><th>樣本</th></tr></thead>
-      <tbody id="clusterRows"><tr><td colspan="13" class="note">載入中...</td></tr></tbody>
-    </table></div>
-  </div>
 
-  <div class="panel not-focus">
-    <h2>精準格點清單</h2>
-    <p class="note">這是需求群的來源資料，適合除錯或人工細查；展示時通常不用看。</p>
-    <div class="table-scroll"><table>
-      <thead><tr><th>格點</th><th>地圖</th><th>區域</th><th>有效需求</th><th>獨立使用者</th><th>查無</th><th>低覆蓋</th><th>慢查詢</th><th>分數</th><th style="min-width:260px">建議</th></tr></thead>
-      <tbody id="pointRows"><tr><td colspan="10" class="note">載入中...</td></tr></tbody>
-    </table></div>
-  </div>
+    <section class="summary">
+      <div class="summary-card">
+        <div class="eyebrow">Research Evidence Dashboard</div>
+        <h2>研究摘要</h2>
+        <p id="researchSummary">資料載入中。系統將把使用者位置查詢中的查無、低覆蓋與慢查詢，轉換為可視覺化的公共設施需求圈，方便研究展示、客戶 Demo 與對外提供資料。</p>
+      </div>
+      <div class="score-card">
+        <div class="score-label">最高優先需求圈</div>
+        <div class="score-value" id="topScore">—</div>
+        <div class="score-sub" id="topAreaLabel">等待資料</div>
+      </div>
+    </section>
 
-  <div class="panel not-focus">
-    <h2>行政區 / 區域排名</h2>
-    <p class="note">這裡只看大方向；真要知道哪裡補資料，請看上方需求群。</p>
-    <div class="table-scroll"><table>
-      <thead><tr><th>區域</th><th>有效需求</th><th>獨立使用者</th><th>查無</th><th>低覆蓋</th><th>慢查詢</th><th>平均回應</th><th>分數</th><th>等級</th><th style="min-width:240px">建議</th></tr></thead>
-      <tbody id="areaRows"><tr><td colspan="10" class="note">載入中...</td></tr></tbody>
-    </table></div>
-  </div>
+    <section class="kpis">
+      <div class="kpi" style="--accent:var(--teal)"><div class="label">有效需求訊號</div><div class="num" id="kpiDemand">—</div><div class="sub">去重後的位置查詢需求</div></div>
+      <div class="kpi" style="--accent:var(--red)"><div class="label">查無 / 低覆蓋</div><div class="num" id="kpiGapSignals">—</div><div class="sub">可視為資料或設施服務缺口</div></div>
+      <div class="kpi" style="--accent:var(--orange)"><div class="label">需求圈數量</div><div class="num" id="kpiClusters">—</div><div class="sub">附近數百公尺內合併後的熱區</div></div>
+      <div class="kpi" style="--accent:var(--blue)"><div class="label">可提供候選點</div><div class="num" id="kpiSites">—</div><div class="sub">可匯出給單位檢視的 Top 清單</div></div>
+      <div class="kpi" style="--accent:var(--purple)"><div class="label">最高需求圈半徑</div><div class="num" id="kpiRadius">—</div><div class="sub">代表熱區涵蓋的空間範圍</div></div>
+    </section>
 
-  <div class="panel not-focus">
-    <h2>OSM fallback 效率與依賴</h2>
-    <div class="cards" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0">
-      <div class="card"><h3>資料來源查詢紀錄</h3><div class="big" id="sourceCalls">0</div><div class="sub">source_query_logs</div></div>
-      <div class="card"><h3>OSM 呼叫次數</h3><div class="big" id="osmCalls">0</div><div class="sub">fallback / osm source</div></div>
-      <div class="card"><h3>OSM 平均耗時</h3><div class="big" id="osmAvg">0ms</div><div class="sub">外部資料補強成本</div></div>
-      <div class="card"><h3>非 OSM 平均耗時</h3><div class="big" id="nonOsmAvg">0ms</div><div class="sub">本地 / Neon / CSV 查詢</div></div>
-    </div>
-  </div>
+    <div id="loadingBox" class="loading">正在整理全資料需求圈、地圖與研究圖表...</div>
+    <div id="errorBox" class="error hidden"></div>
 
-  <div class="panel"><h2>研究判讀</h2><div id="interpretation" class="note"></div></div>
-</div>
+    <section class="hero-grid">
+      <section class="panel map-panel">
+        <div class="panel-head">
+          <h3>🗺️ 需求圈地理分布圖</h3>
+          <span class="panel-sub">看「哪個位置附近幾百公尺內」反覆找不到或覆蓋不足，而不是只看行政區。</span>
+        </div>
+        <div class="layer-switches">
+          <label><input type="checkbox" id="toggleHeat" checked> 需求熱度</label>
+          <label><input type="checkbox" id="toggleCircles" checked> 需求圈半徑</label>
+          <label><input type="checkbox" id="togglePins" checked> 需求點標記</label>
+          <label><input type="checkbox" id="toggleRaw"> 原始需求格點</label>
+        </div>
+        <div id="gapMap"></div>
+        <div class="map-legend"><span><i class="legend-pin"></i>Top 10 需求圈用數字標記</span><span><i class="legend-dot"></i>其他需求圈用圓點標記，一樣可點擊查看</span><span>圓圈半徑代表需求聚集範圍</span></div>
+        <div class="map-toolbar">
+          <button class="mini-btn" id="fitMapBtn">聚焦全部需求圈</button>
+          <button class="mini-btn" id="topMapBtn">跳到第一優先</button>
+          <button class="mini-btn" id="taipeiBtn">回台北視角</button>
+        </div>
+      </section>
 
-<div class="help-overlay" id="helpOverlay">
-  <div class="help">
-    <div class="help-head"><div><h2>Demand Gap v2 說明</h2><p class="note" style="margin:6px 0 0">去重、需求群聚、建議中心點。</p></div><button class="close" id="helpClose">×</button></div>
-    <div class="help-body">
-      <div class="help-section"><h3>一、這頁在解決什麼？</h3><p>上一版會被同一個人同一分鐘連續查詢影響，分數可能被灌高。v2 先去除同人同地短時間重複查詢，再把附近缺口點合併成需求群，讓結果更接近「哪一小區域值得補資料或評估新增設施」。</p></div>
-      <div class="help-section"><h3>二、去重規則</h3><p>同一 user、同一約 100 公尺格點、10 分鐘內重複查詢只算 1 次有效需求。若沒有 user_id，則用較短時間窗避免誤合併不同人。</p></div>
-      <div class="help-section"><h3>三、需求群是什麼？</h3><p>系統會把約 500 公尺內的缺口格點合併，計算一個建議中心點。這比單一查詢點更適合拿來討論「這附近要不要補資料或新增公共設施」。</p></div>
-      <div class="help-section"><h3>四、分數怎麼算？</h3><div class="formula">Demand Gap Score v2 =<br>查無結果 × 5<br>+ 低覆蓋 × 2<br>+ 慢查詢 × 1<br>+ 有效需求 × 1<br>+ 獨立使用者 × 3<br>+ 跨日期天數 × 2</div><p>若幾乎只有單一使用者或單日訊號，分數會降權，避免誤判。</p></div>
-      <div class="help-section"><h3>五、展示時怎麼講？</h3><ol><li>先開展示模式。</li><li>講「有效需求」與「去重後資料」。</li><li>展示 Top 3 需求群，點開地圖檢查。</li><li>強調：這不是直接判定要蓋廁所，而是提供人工檢查與公部門參考的優先清單。</li></ol></div>
-    </div>
-  </div>
-</div>
+      <aside class="panel rank-panel">
+        <div class="panel-head">
+          <h3>📍 Top 需求圈</h3>
+          <span class="panel-sub">點卡片會跳到地圖；這份才是給政府/客戶看的候選清單。</span>
+        </div>
+        <div class="rank-list" id="rankList"></div>
+      </aside>
+    </section>
+
+    <section class="charts">
+      <div class="panel visual-card wide">
+        <div class="panel-head"><h3>📊 Top 需求圈缺口分數</h3><span class="panel-sub">改用橫向分數條，避免看不懂散點圖。</span></div>
+        <div class="score-list" id="topDemandBars"></div>
+      </div>
+      <div class="panel visual-card wide">
+        <div class="panel-head"><h3>🧩 缺口原因拆解</h3><span class="panel-sub">查無、低覆蓋、慢查詢</span></div>
+        <div id="reasonStack" class="reason-stack-wrap"></div>
+        <div class="insight-grid" id="reasonMeters"></div>
+      </div>
+    </section>
+
+    <section class="method">
+      <div>
+        <h3>方法說明</h3>
+        <p>本頁不以行政區作為主要判斷，而是以位置查詢形成的「需求圈」為單位。若某個地點附近約數百公尺內累積多次查無、低覆蓋或慢查詢，就被標記為候選缺口熱區，可作為資料補強、現地盤點或新增公共設施討論的研究依據。</p>
+      </div>
+      <div>
+        <h3>展示與提供限制</h3>
+        <ul>
+          <li>需求圈代表「值得檢查的位置範圍」，不是直接宣告必須施工。</li>
+          <li>若要提供政府，可匯出 CSV，內含中心座標、半徑、需求量、缺口原因與可信度。</li>
+          <li>地名只作輔助理解；實際研究結果以座標中心、半徑與需求指標為準。</li>
+        </ul>
+      </div>
+    </section>
+  </main>
 
 <script>
-let currentRange='30d', currentFilter='priority', latestData=null, focusMode=false;
-const fmt=n=>Number(n||0).toLocaleString(); const ms=n=>`${fmt(Math.round(Number(n||0)))}ms`;
-function setStatus(t){document.getElementById('dataStatus').textContent=t}
-function levelClass(level){ if(String(level).includes('高')) return 'pill high'; if(String(level).includes('中')) return 'pill mid'; if(String(level).includes('低')) return 'pill good'; return 'pill'; }
-function priorityPill(r,idx){ const lv=r.gap_level||''; if(lv.includes('高')) return `<span class="pill high">P1 高可信</span>`; if(lv.includes('中')) return `<span class="pill mid">P2 中可信</span>`; if(idx<3) return `<span class="pill mid">P2 展示</span>`; return `<span class="pill">P3 觀察</span>`; }
-function reason(r){const p=[]; if(Number(r.no_result_count)>0)p.push(`查無 ${fmt(r.no_result_count)} 次`); if(Number(r.low_result_count)>0)p.push(`低覆蓋 ${fmt(r.low_result_count)} 次`); if(Number(r.slow_query_count)>0)p.push(`慢查詢 ${fmt(r.slow_query_count)} 次`); return p.join('、')||'需求量可觀';}
-function sampleDetails(samples){ if(!samples||!samples.length)return '<span class="note">無</span>'; return `<details class="sample-detail"><summary>看樣本</summary><div class="sample-list">${samples.slice(0,6).map(x=>{const t=String(x.created_at||'').replace('T',' ').slice(0,16);return `<div class="sample-item">${t||'-'}｜結果 ${Number(x.result_count||0)}｜${ms(x.response_time_ms)}｜<a class="map-link" href="${x.map_url||'#'}" target="_blank">點位</a></div>`}).join('')}</div></details>`}
-function clusters(){return (latestData&&latestData.demand_clusters)||[]}
-function filteredClusters(){const q=(document.getElementById('searchInput')?.value||'').trim().toLowerCase();return clusters().filter((r,idx)=>{const hay=`${r.center||''} ${r.area_name||''} ${r.action_label||''} ${r.suggestion||''}`.toLowerCase(); if(q&&!hay.includes(q))return false; if(currentFilter==='all')return true; if(currentFilter==='priority')return idx<15||String(r.gap_level||'').includes('高')||String(r.gap_level||'').includes('中'); if(currentFilter==='high')return String(r.gap_level||'').includes('高'); if(currentFilter==='no_result')return Number(r.no_result_count||0)>0; if(currentFilter==='low_cover')return Number(r.low_result_count||0)>0; return true})}
-function renderTopClusters(rows){const el=document.getElementById('topClusters'); const top=(rows||[]).slice(0,3); if(!top.length){el.innerHTML='<div class="note">目前沒有足夠資料</div>';return} el.innerHTML=top.map((r,idx)=>`<div class="cluster-card"><div class="cluster-top"><div><h3 class="cluster-title">#${idx+1} ${r.area_name||'未分類區域'}</h3><p class="cluster-sub mono">建議中心：${r.center||'-'}｜半徑約 ${fmt(r.radius_m)}m</p></div>${priorityPill(r,idx)}</div><div class="mini-grid"><div class="mini"><span>有效需求</span><b>${fmt(r.effective_queries)}</b></div><div class="mini"><span>獨立使用者</span><b>${fmt(r.unique_users)}</b></div><div class="mini"><span>涵蓋格點</span><b>${fmt(r.point_count)}</b></div><div class="mini"><span>查無</span><b>${fmt(r.no_result_count)}</b></div><div class="mini"><span>低覆蓋</span><b>${fmt(r.low_result_count)}</b></div><div class="mini"><span>缺口分數</span><b>${r.gap_score||0}</b></div></div><p class="note" style="min-height:52px"><b>${r.confidence_note||''}</b><br>${r.action_label||r.suggestion||'建議人工檢查此需求群附近資料。'}</p><div class="controls"><a class="btn primary" href="${r.map_url||'#'}" target="_blank">開地圖檢查</a><button class="btn" onclick="copyPoint('${String(r.center||'').replace(/'/g,'')}','${String(r.area_name||'').replace(/'/g,'')}','${String(reason(r)).replace(/'/g,'')}')">複製點位</button></div></div>`).join('')}
-function renderClusterTable(){const el=document.getElementById('clusterRows'); const rows=filteredClusters(); if(!rows.length){el.innerHTML='<tr><td colspan="13" class="note">沒有符合篩選的需求群</td></tr>';return} el.innerHTML=rows.slice(0,80).map((r,idx)=>`<tr><td>${priorityPill(r,idx)}</td><td class="mono">${r.center||'-'}</td><td><a class="map-link nowrap" href="${r.map_url||'#'}" target="_blank">開地圖</a></td><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.radius_m)}m</td><td class="mono">${fmt(r.effective_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.active_days)}</td><td class="mono">${fmt(r.no_result_count)}</td><td class="mono">${fmt(r.low_result_count)}</td><td class="mono">${r.gap_score||0}</td><td title="${r.action_label||''}">${r.action_label||r.suggestion||'-'}<div class="sub">${r.confidence_note||''}</div></td><td>${sampleDetails(r.sample_queries||[])}</td></tr>`).join('')}
-function renderPointRows(rows){const el=document.getElementById('pointRows'); if(!rows||!rows.length){el.innerHTML='<tr><td colspan="10" class="note">沒有資料</td></tr>';return} el.innerHTML=rows.slice(0,80).map(r=>`<tr><td class="mono">${r.grid||'-'}</td><td><a class="map-link" href="${r.map_url||'#'}" target="_blank">開地圖</a></td><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.effective_queries||r.total_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.no_result_count)}</td><td class="mono">${fmt(r.low_result_count)}</td><td class="mono">${fmt(r.slow_query_count)}</td><td class="mono">${r.gap_score||0}</td><td>${r.action_label||r.suggestion||'-'}</td></tr>`).join('')}
-function renderAreaRows(rows){const el=document.getElementById('areaRows'); if(!rows||!rows.length){el.innerHTML='<tr><td colspan="10" class="note">沒有資料</td></tr>';return} el.innerHTML=rows.map(r=>`<tr><td>${r.area_name||'-'}</td><td class="mono">${fmt(r.effective_queries||r.total_queries)}</td><td class="mono">${fmt(r.unique_users)}</td><td class="mono">${fmt(r.no_result_count)} <span class="sub">(${r.no_result_rate||0}%)</span></td><td class="mono">${fmt(r.low_result_count)} <span class="sub">(${r.low_result_rate||0}%)</span></td><td class="mono">${fmt(r.slow_query_count)} <span class="sub">(${r.slow_query_rate||0}%)</span></td><td class="mono">${ms(r.avg_response_ms)}</td><td class="mono">${r.gap_score||0}</td><td><span class="${levelClass(r.gap_level)}">${r.gap_level||'觀察中'}</span></td><td>${r.suggestion||'-'}</td></tr>`).join('')}
-function oneLine(data){const s=data.summary||{}; const top=(data.demand_clusters||[])[0]||{}; const topText=top.center?`目前最高優先需求群中心約在 ${top.center}，半徑約 ${fmt(top.radius_m)}m，主要訊號為 ${reason(top)}。`:'目前尚無明確需求群。'; return `所選期間原始查詢 ${fmt(s.raw_total_queries)} 次，去重後有效需求 ${fmt(s.effective_queries||s.total_queries)} 次，獨立使用者 ${fmt(s.unique_users)} 人；其中查無 ${fmt(s.no_result_count)} 次、低覆蓋 ${fmt(s.low_result_count)} 次。${topText}`}
-function renderAll(data){latestData=data; const s=data.summary||{}, t=data.thresholds||{}; document.getElementById('effectiveQueries').textContent=fmt(s.effective_queries||s.total_queries); document.getElementById('dedupeInfo').textContent=`原始 ${fmt(s.raw_total_queries)}，去重 ${fmt(s.duplicate_skipped)}，時間窗 ${t.dedupe_minutes||10} 分鐘`; document.getElementById('uniqueUsers').textContent=fmt(s.unique_users); document.getElementById('noResultCount').textContent=fmt(s.no_result_count); document.getElementById('noResultRate').textContent=`${s.no_result_rate||0}% 查無結果`; document.getElementById('lowResultCount').textContent=fmt(s.low_result_count); document.getElementById('lowResultRate').textContent=`候選數 ≤ ${t.low_result_threshold??2}，${s.low_result_rate||0}%`; document.getElementById('clusterCount').textContent=fmt(s.cluster_count); document.getElementById('oneLineSummary').textContent=oneLine(data); renderTopClusters(data.demand_clusters||[]); renderClusterTable(); renderPointRows(data.precise_hotspots||data.hotspots||[]); renderAreaRows(data.area_gaps||[]); const osm=data.osm_summary||{}; document.getElementById('sourceCalls').textContent=fmt(osm.total_source_calls); document.getElementById('osmCalls').textContent=fmt(osm.osm_calls); document.getElementById('osmAvg').textContent=ms(osm.avg_osm_elapsed_ms); document.getElementById('nonOsmAvg').textContent=ms(osm.avg_non_osm_elapsed_ms); document.getElementById('interpretation').innerHTML=(data.interpretation||[]).map(x=>`• ${x}`).join('<br>')}
-async function loadData(force=false){try{setStatus('載入中...'); const res=await fetch(`/api/gap-summary?range=${encodeURIComponent(currentRange)}${force?'&force=1':''}`); const data=await res.json(); if(!data.ok)throw new Error(data.error||'載入失敗'); renderAll(data); setStatus(data.cached?'已載入（快取）':'已載入最新資料')}catch(e){console.error(e);setStatus(`載入失敗：${e.message||e}`)}}
-function copyPoint(center,area,rsn){const text=`建議檢查需求群：${center}\n區域：${area||'未分類'}\n原因：${rsn}\n建議：開地圖確認附近是否有漏收廁所/商場/車站/公園/學校；若真的無可用設施，可提供公部門作為補點參考。`; navigator.clipboard?.writeText(text); setStatus('已複製點位摘要')}
-function copySummary(){if(!latestData)return; const top=(latestData.demand_clusters||[]).slice(0,3).map((r,i)=>`${i+1}. ${r.center||'-'}（${r.area_name||'未分類'}，半徑約${fmt(r.radius_m)}m）：${reason(r)}，有效需求${fmt(r.effective_queries)}，獨立使用者${fmt(r.unique_users)}，分數${r.gap_score||0}`).join('\n'); const text=`${oneLine(latestData)}\n\n優先檢查需求群：\n${top}\n\n判讀：以上不代表一定要新建廁所，而是經去重與群聚後，值得優先人工檢查、補資料或提供公共單位參考的區域。`; navigator.clipboard?.writeText(text); setStatus('已複製展示重點')}
-document.querySelectorAll('.btn[data-range]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.btn[data-range]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentRange=btn.dataset.range;loadData(false)}));
-document.querySelectorAll('.chip[data-filter]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip[data-filter]').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentFilter=btn.dataset.filter;renderClusterTable()}));
-document.getElementById('searchInput').addEventListener('input',renderClusterTable); document.getElementById('refreshBtn').addEventListener('click',()=>loadData(true)); document.getElementById('copyBtn').addEventListener('click',copySummary); document.getElementById('focusBtn').addEventListener('click',()=>{focusMode=!focusMode;document.getElementById('pageWrap').classList.toggle('focus',focusMode);document.getElementById('focusBtn').textContent=focusMode?'完整模式':'展示模式'}); document.getElementById('helpBtn').addEventListener('click',()=>document.getElementById('helpOverlay').classList.add('show')); document.getElementById('helpClose').addEventListener('click',()=>document.getElementById('helpOverlay').classList.remove('show')); document.getElementById('helpOverlay').addEventListener('click',e=>{if(e.target.id==='helpOverlay')document.getElementById('helpOverlay').classList.remove('show')});
-loadData(false);
+(() => {
+  const API_URL = '/api/gap-summary?range=all';
+  const DEFAULT_CENTER = [25.0478, 121.5170];
+  let currentData = null;
+  let map, heatLayer, circleLayer, pinLayer, rawLayer;
+  const fmt = new Intl.NumberFormat('zh-TW');
+
+  const n = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+  const inTaiwanScope = (row) => {
+    const lat = n(row?.lat, NaN);
+    const lon = n(row?.lon, NaN);
+    // Taiwan public-facility research scope: Taiwan proper + Penghu / Kinmen / Matsu.
+    // This filters global test/outlier coordinates so the map does not zoom out to the world.
+    return Number.isFinite(lat) && Number.isFinite(lon) && lat >= 21.5 && lat <= 26.6 && lon >= 118.0 && lon <= 123.5;
+  };
+  const scopedRows = (rows) => (rows || []).filter(inTaiwanScope);
+  const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  const levelColor = (level) => {
+    if (level === '高可信缺口') return '#e84c3d';
+    if (level === '中可信缺口') return '#f59e0b';
+    if (level === '低可信缺口') return '#2f80ed';
+    return '#94a3b8';
+  };
+  const pct = (v) => `${n(v).toFixed(1).replace('.0','')}%`;
+  const shortCoord = (row) => `${n(row.lat).toFixed(5)}, ${n(row.lon).toFixed(5)}`;
+  const demandTitle = (row, idx) => row.demand_label || `${row.area_name || '候選位置'}附近約 ${Math.max(120, Math.round(n(row.radius_m, 150)))}m 需求圈` || `需求圈 #${idx + 1}`;
+  const clusterKey = (row) => `${n(row.lat).toFixed(5)},${n(row.lon).toFixed(5)}`;
+
+  function initMap(){
+    if (map) return;
+    map = L.map('gapMap', { zoomControl:true, scrollWheelZoom:true, preferCanvas:true }).setView(DEFAULT_CENTER, 12);
+    if (!map.getPane('demandDotsPane')) { map.createPane('demandDotsPane'); map.getPane('demandDotsPane').style.zIndex = 660; }
+    if (!map.getPane('demandPinsPane')) { map.createPane('demandPinsPane'); map.getPane('demandPinsPane').style.zIndex = 720; }
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap &copy; CARTO'
+    }).addTo(map);
+    heatLayer = L.layerGroup().addTo(map);
+    circleLayer = L.layerGroup().addTo(map);
+    pinLayer = L.layerGroup().addTo(map);
+    rawLayer = L.layerGroup();
+  }
+
+  function popupHtml(row, idx){
+    const color = levelColor(row.gap_level);
+    return `
+      <div style="min-width:245px">
+        <div style="font-weight:950;font-size:15px;margin-bottom:6px">#${idx + 1} ${demandTitle(row, idx)}</div>
+        <div style="color:#64748b;font-size:12px;margin-bottom:10px">中心：${shortCoord(row)}｜半徑：約 ${Math.max(120, Math.round(n(row.radius_m,150)))}m</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div><b>${n(row.gap_score).toFixed(1)}</b><br><span style="font-size:11px;color:#64748b">缺口分數</span></div>
+          <div><b>${fmt.format(n(row.effective_queries))}</b><br><span style="font-size:11px;color:#64748b">有效需求</span></div>
+          <div><b>${fmt.format(n(row.no_result_count))}</b><br><span style="font-size:11px;color:#64748b">查無</span></div>
+          <div><b>${fmt.format(n(row.low_result_count))}</b><br><span style="font-size:11px;color:#64748b">低覆蓋</span></div>
+        </div>
+        <div style="display:inline-flex;gap:6px;align-items:center;border:1px solid #e5e7eb;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:800"><i style="width:9px;height:9px;border-radius:999px;background:${color};display:inline-block"></i>${row.gap_level || '觀察中'}</div>
+        <p style="font-size:12px;line-height:1.5;color:#475569;margin:10px 0 0">${row.priority_reason || row.action_label || row.suggestion || ''}</p>
+        ${row.map_url ? `<a href="${row.map_url}" target="_blank" rel="noopener" style="display:inline-block;margin-top:9px;font-size:12px;font-weight:900;color:#0f766e">Google Maps →</a>` : ''}
+      </div>`;
+  }
+
+  function clearMap(){
+    heatLayer && heatLayer.clearLayers();
+    circleLayer && circleLayer.clearLayers();
+    pinLayer && pinLayer.clearLayers();
+    rawLayer && rawLayer.clearLayers();
+  }
+
+  function renderMap(data){
+    initMap();
+    clearMap();
+    const hotspots = scopedRows(data.hotspots || []);
+    const clusters = scopedRows(data.demand_clusters || []);
+    const recommended = scopedRows(data.recommended_sites || clusters.slice(0, 10));
+
+    if (window.L && L.heatLayer && hotspots.length){
+      const maxScore = Math.max(...hotspots.map(h => n(h.gap_score, n(h.effective_queries, 1))), 1);
+      const pts = hotspots.filter(h => n(h.lat) && n(h.lon)).map(h => [n(h.lat), n(h.lon), Math.min(1, n(h.gap_score, n(h.effective_queries, 1)) / maxScore)]);
+      heatLayer.addLayer(L.heatLayer(pts, { radius: 28, blur: 24, maxZoom: 16, minOpacity: .25, gradient: {0.25:'#22c55e',0.55:'#facc15',0.75:'#f97316',1:'#ef4444'} }));
+    }
+
+    clusters.forEach((row, idx) => {
+      if (!n(row.lat) || !n(row.lon)) return;
+      const color = levelColor(row.gap_level);
+      const radius = Math.max(120, Math.round(n(row.radius_m, 150)));
+      const circle = L.circle([n(row.lat), n(row.lon)], {
+        radius,
+        color,
+        weight: idx < 10 ? 3 : 2,
+        fillColor: color,
+        fillOpacity: idx < 10 ? .18 : .10,
+        opacity: .9
+      }).bindPopup(popupHtml(row, idx));
+      circleLayer.addLayer(circle);
+    });
+
+    const topKeys = new Map();
+    recommended.slice(0, 10).forEach((row, idx) => {
+      if (!n(row.lat) || !n(row.lon)) return;
+      topKeys.set(clusterKey(row), idx);
+    });
+
+    clusters.forEach((row, idx) => {
+      if (!n(row.lat) || !n(row.lon)) return;
+      const color = levelColor(row.gap_level);
+      const key = clusterKey(row);
+      const topIdx = topKeys.has(key) ? topKeys.get(key) : (idx < 10 ? idx : null);
+      const isTop = topIdx !== null && topIdx !== undefined && topIdx < 10;
+      let marker;
+      if (isTop) {
+        const icon = L.divIcon({
+          className: '',
+          html: `<div class="demand-pin" style="background:${color}"><span>${topIdx + 1}</span></div>`,
+          iconSize: [40,40], iconAnchor: [20,40], popupAnchor: [0,-38]
+        });
+        marker = L.marker([n(row.lat), n(row.lon)], {
+          icon,
+          pane: 'demandPinsPane',
+          zIndexOffset: 1000 + (10 - topIdx)
+        }).bindPopup(popupHtml(row, idx));
+        marker._rankIndex = topIdx;
+      } else {
+        marker = L.circleMarker([n(row.lat), n(row.lon)], {
+          pane: 'demandDotsPane',
+          radius: 7,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: color,
+          fillOpacity: .92,
+          opacity: 1,
+          className: 'demand-dot-marker'
+        }).bindPopup(popupHtml(row, idx));
+      }
+      marker._demandKey = key;
+      marker._clusterIndex = idx;
+      marker._isTopCandidate = isTop;
+      pinLayer.addLayer(marker);
+    });
+
+    hotspots.forEach((row) => {
+      if (!n(row.lat) || !n(row.lon)) return;
+      const icon = L.divIcon({ className:'', html:'<div class="raw-dot"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+      rawLayer.addLayer(L.marker([n(row.lat), n(row.lon)], { icon }).bindPopup(`100m 格點<br>${shortCoord(row)}<br>需求 ${fmt.format(n(row.effective_queries))}｜分數 ${n(row.gap_score).toFixed(1)}`));
+    });
+
+    applyLayerToggles();
+    fitToDemand();
+  }
+
+  function applyLayerToggles(){
+    if (!map) return;
+    const toggles = [
+      ['toggleHeat', heatLayer], ['toggleCircles', circleLayer], ['togglePins', pinLayer], ['toggleRaw', rawLayer]
+    ];
+    toggles.forEach(([id, layer]) => {
+      const checked = document.getElementById(id)?.checked;
+      if (checked && !map.hasLayer(layer)) layer.addTo(map);
+      if (!checked && map.hasLayer(layer)) map.removeLayer(layer);
+    });
+  }
+
+  function fitToDemand(){
+    if (!map || !currentData) return;
+    const rows = scopedRows(currentData.demand_clusters || currentData.recommended_sites || []);
+    const coords = rows.filter(r => n(r.lat) && n(r.lon)).map(r => [n(r.lat), n(r.lon)]);
+    if (!coords.length){ map.setView(DEFAULT_CENTER, 12); return; }
+    map.fitBounds(L.latLngBounds(coords), { padding:[45,45], maxZoom:15 });
+  }
+
+  function focusDemand(row, idx){
+    if (!map || !row) return;
+    map.flyTo([n(row.lat), n(row.lon)], 16, { duration:.65 });
+    const key = clusterKey(row);
+    setTimeout(() => {
+      pinLayer.eachLayer(layer => {
+        if (layer._demandKey === key || layer._rankIndex === idx) layer.openPopup();
+      });
+    }, 680);
+    document.querySelectorAll('.rank-item').forEach(el => el.classList.remove('active'));
+    const el = document.querySelector(`[data-rank="${idx}"]`);
+    if (el) el.classList.add('active');
+  }
+
+  function buildSummary(data){
+    const s = data.summary || {};
+    const clusters = scopedRows(data.demand_clusters || []);
+    const top = clusters[0] || {};
+    const gapSignals = n(s.no_result_count) + n(s.low_result_count);
+    const radius = Math.max(...clusters.map(c => n(c.radius_m, 0)), 0);
+    const title = top.demand_label || (top.lat ? `${top.area_name || '候選位置'}附近約 ${Math.max(120, Math.round(n(top.radius_m,150)))}m 需求圈` : '尚無需求圈');
+    const text = clusters.length
+      ? `本次分析納入 ${fmt.format(n(s.effective_queries || s.total_queries))} 筆去重後有效需求訊號，系統辨識出 ${fmt.format(clusters.length)} 個需求圈。最高優先需求圈位於「${title}」，半徑約 ${Math.max(120, Math.round(n(top.radius_m,150)))} 公尺，累積 ${fmt.format(n(top.effective_queries))} 筆有效需求，其中查無 ${fmt.format(n(top.no_result_count))} 次、低覆蓋 ${fmt.format(n(top.low_result_count))} 次，可作為研究展示、資料補強或現地盤點的優先候選位置。`
+      : '目前尚未累積足夠缺口訊號。系統會持續把位置查詢轉換為需求圈，供後續研究展示與對外提供。';
+
+    setText('researchSummary', text);
+    setText('topScore', top.gap_score != null ? n(top.gap_score).toFixed(1) : '—');
+    setText('topAreaLabel', title);
+    setText('kpiDemand', fmt.format(n(s.effective_queries || s.total_queries)));
+    setText('kpiGapSignals', fmt.format(gapSignals));
+    setText('kpiClusters', fmt.format(clusters.length));
+    setText('kpiSites', fmt.format((data.recommended_sites || []).length || Math.min(10, clusters.length)));
+    setText('kpiRadius', radius ? `${Math.round(radius)}m` : '—');
+    return text;
+  }
+
+  function renderRankList(data){
+    const list = document.getElementById('rankList');
+    const rows = scopedRows(data.recommended_sites || data.demand_clusters || []).slice(0, 10);
+    if (!rows.length){ list.innerHTML = '<div class="empty">目前還沒有足夠的需求圈可顯示。</div>'; return; }
+    list.innerHTML = rows.map((r, idx) => {
+      const color = levelColor(r.gap_level);
+      return `<article class="rank-item" data-rank="${idx}" style="--rank-color:${color}">
+        <div class="rank-num">${idx + 1}</div>
+        <div>
+          <div class="rank-title">${demandTitle(r, idx)}</div>
+          <div class="rank-desc">中心 ${shortCoord(r)}｜半徑約 ${Math.max(120, Math.round(n(r.radius_m,150)))}m</div>
+          <span class="badge"><i class="dot" style="background:${color}"></i>${r.gap_level || '觀察中'}</span>
+          <div class="rank-stats">
+            <div class="statbox"><b>${n(r.gap_score).toFixed(1)}</b><span>分數</span></div>
+            <div class="statbox"><b>${fmt.format(n(r.effective_queries))}</b><span>需求</span></div>
+            <div class="statbox"><b>${fmt.format(n(r.no_result_count)+n(r.low_result_count))}</b><span>查無/低覆蓋</span></div>
+          </div>
+          <div class="rank-actions">
+            <button data-focus="${idx}">定位</button>
+            ${r.map_url ? `<a class="btn" href="${r.map_url}" target="_blank" rel="noopener">Google Maps</a>` : ''}
+          </div>
+        </div>
+      </article>`;
+    }).join('');
+    list.querySelectorAll('[data-focus]').forEach(btn => btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const idx = Number(btn.getAttribute('data-focus'));
+      focusDemand(rows[idx], idx);
+    }));
+    list.querySelectorAll('.rank-item').forEach(el => el.addEventListener('click', () => {
+      const idx = Number(el.getAttribute('data-rank'));
+      focusDemand(rows[idx], idx);
+    }));
+  }
+
+  function renderTopDemandBars(data){
+    const rows = scopedRows(data.demand_clusters || []).slice(0, 10);
+    const box = document.getElementById('topDemandBars');
+    if (!rows.length){ box.innerHTML = '<div class="empty">目前沒有足夠的需求圈分數可顯示。</div>'; return; }
+    const maxScore = Math.max(...rows.map(r => n(r.gap_score)), 1);
+    box.innerHTML = rows.map((r, idx) => {
+      const color = levelColor(r.gap_level);
+      const width = Math.max(4, n(r.gap_score) / maxScore * 100);
+      return `<div class="score-row" data-bar-rank="${idx}">
+        <div>
+          <div class="score-name">#${idx + 1} ${demandTitle(r, idx)}</div>
+          <div class="score-meta">中心 ${shortCoord(r)}｜半徑約 ${Math.max(120, Math.round(n(r.radius_m,150)))}m｜需求 ${fmt.format(n(r.effective_queries))}</div>
+        </div>
+        <div class="score-track"><div class="score-fill" style="width:${width}%;background:${color}"></div></div>
+        <div class="score-value">${n(r.gap_score).toFixed(1)}</div>
+      </div>`;
+    }).join('');
+    box.querySelectorAll('[data-bar-rank]').forEach(el => el.addEventListener('click', () => {
+      const idx = Number(el.getAttribute('data-bar-rank'));
+      focusDemand(rows[idx], idx);
+    }));
+  }
+
+  function renderReasonMeters(data){
+    const s = data.summary || {};
+    const total = Math.max(n(s.no_result_count) + n(s.low_result_count) + n(s.slow_query_count), 1);
+    const rows = [
+      ['查無結果', n(s.no_result_count), '代表該位置附近沒有找到候選設施', '#e84c3d'],
+      ['低覆蓋', n(s.low_result_count), '代表找到的候選點太少，可能資料不足', '#f59e0b'],
+      ['慢查詢', n(s.slow_query_count), '代表高度依賴外部資料或本地資料不足', '#2f80ed']
+    ];
+    const stack = document.getElementById('reasonStack');
+    stack.innerHTML = `<div class="stack-title"><span>缺口訊號組成</span><b>${fmt.format(total)} 次</b></div>
+      <div class="total-stack">${rows.map(([label, value, desc, color]) => `<i class="stack-seg" title="${label} ${fmt.format(value)}" style="width:${Math.max(0, value / total * 100)}%;background:${color}"></i>`).join('')}</div>
+      <div class="stack-legend">${rows.map(([label, value, desc, color]) => `<span><i style="background:${color}"></i>${label} ${fmt.format(value)} 次</span>`).join('')}</div>`;
+    document.getElementById('reasonMeters').innerHTML = rows.map(([label, value, desc, color]) => `
+      <div class="meter-card">
+        <div class="meter-title">${label}<span>${fmt.format(value)}</span></div>
+        <div class="meter-sub">${desc}</div>
+        <div class="meter"><i style="width:${Math.max(3, value / total * 100)}%;background:${color}"></i></div>
+      </div>`).join('');
+  }
+
+  function renderCharts(data){
+    renderTopDemandBars(data);
+    renderReasonMeters(data);
+  }
+
+  function downloadCsv(){
+    const rows = scopedRows(currentData?.demand_clusters || []);
+    const header = ['rank','demand_label','lat','lon','radius_m','gap_score','gap_level','effective_queries','no_result_count','low_result_count','slow_query_count','confidence_note','priority_reason','map_url'];
+    const csv = [header.join(',')].concat(rows.map((r,i)=> header.map(k => {
+      const value = k === 'rank' ? i+1 : (k === 'demand_label' ? demandTitle(r,i) : (r[k] ?? ''));
+      return `"${String(value).replaceAll('"','""')}"`;
+    }).join(','))).join('\n');
+    const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'public_facility_demand_gap_clusters.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function loadDashboard(force=false){
+    document.getElementById('loadingBox').classList.remove('hidden');
+    document.getElementById('errorBox').classList.add('hidden');
+    try{
+      const res = await fetch(API_URL + (force ? '&force=1' : ''), {cache:'no-store'});
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'API 回傳失敗');
+      currentData = data;
+      const summaryText = buildSummary(data);
+      renderMap(data);
+      renderRankList(data);
+      renderCharts(data);
+      setText('lastUpdated', `更新：${new Date(data.generated_at || Date.now()).toLocaleString('zh-TW')}`);
+      setText('cacheState', data.cached ? '快取資料' : '即時整理');
+      document.getElementById('copySummaryBtn').onclick = async () => { await navigator.clipboard.writeText(summaryText); alert('已複製研究摘要'); };
+      document.getElementById('downloadCsvBtn').onclick = downloadCsv;
+      document.getElementById('printBtn').onclick = () => window.print();
+      document.getElementById('loadingBox').classList.add('hidden');
+    }catch(err){
+      document.getElementById('loadingBox').classList.add('hidden');
+      const box = document.getElementById('errorBox');
+      box.textContent = `載入失敗：${err.message || err}`;
+      box.classList.remove('hidden');
+    }
+  }
+
+  document.getElementById('refreshBtn').addEventListener('click', () => loadDashboard(true));
+  document.getElementById('fitMapBtn').addEventListener('click', fitToDemand);
+  document.getElementById('topMapBtn').addEventListener('click', () => {
+    const top = scopedRows(currentData?.recommended_sites || currentData?.demand_clusters || [])[0];
+    if (top) focusDemand(top, 0);
+  });
+  document.getElementById('taipeiBtn').addEventListener('click', () => map && map.setView(DEFAULT_CENTER, 12));
+  ['toggleHeat','toggleCircles','togglePins','toggleRaw'].forEach(id => document.getElementById(id).addEventListener('change', applyLayerToggles));
+  loadDashboard(false);
+})();
 </script>
 </body>
 </html>
