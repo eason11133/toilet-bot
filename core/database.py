@@ -290,6 +290,158 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_source_name ON source_query_logs(source_name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_source_query_logs_created_at ON source_query_logs(created_at)")
 
+        # Commit all existing toilet-bot tables before initializing CivicFix.
+        # CivicFix must be additive: if a CivicFix-only migration fails, the
+        # production LINE Bot persistent-store initialization should not be rolled back.
+        conn.commit()
+
+        try:
+            # === CivicFix：公共服務資料同步 / 急救單 / Gate ===
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS facilities (
+                id BIGSERIAL PRIMARY KEY,
+                facility_type TEXT NOT NULL,
+                source TEXT,
+                source_id TEXT,
+                name TEXT NOT NULL,
+                address TEXT,
+                lat DOUBLE PRECISION,
+                lon DOUBLE PRECISION,
+                opening_hours TEXT,
+                official_payload TEXT,
+                official_updated_at TIMESTAMPTZ,
+                official_status TEXT DEFAULT 'active',
+                last_seen_in_source TIMESTAMPTZ,
+                civicfix_status TEXT DEFAULT 'active',
+                photo_url TEXT,
+                placement_note TEXT,
+                access_note TEXT,
+                status_note TEXT,
+                field_info_level TEXT DEFAULT 'low',
+                last_field_verified_at TIMESTAMPTZ,
+                trust_level TEXT DEFAULT 'L3',
+                verification_status TEXT DEFAULT 'approved',
+                publish_status TEXT DEFAULT 'published',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """)
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_facilities_source_source_id ON facilities(source, source_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facilities_type_status ON facilities(facility_type, publish_status, civicfix_status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facilities_lat_lon ON facilities(lat, lon)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facilities_source ON facilities(source)")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS opening_hours TEXT")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS official_payload TEXT")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS official_updated_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS official_status TEXT DEFAULT 'active'")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS last_seen_in_source TIMESTAMPTZ")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS civicfix_status TEXT DEFAULT 'active'")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS field_info_level TEXT DEFAULT 'low'")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS last_field_verified_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE facilities ADD COLUMN IF NOT EXISTS publish_status TEXT DEFAULT 'published'")
+            
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS source_sync_logs (
+                id BIGSERIAL PRIMARY KEY,
+                source TEXT,
+                facility_type TEXT,
+                file_name TEXT,
+                total_rows INTEGER DEFAULT 0,
+                inserted_count INTEGER DEFAULT 0,
+                updated_count INTEGER DEFAULT 0,
+                skipped_count INTEGER DEFAULT 0,
+                error_count INTEGER DEFAULT 0,
+                error_sample TEXT,
+                started_at TIMESTAMPTZ DEFAULT NOW(),
+                finished_at TIMESTAMPTZ
+            )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_source_sync_logs_source ON source_sync_logs(source, facility_type)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_source_sync_logs_started ON source_sync_logs(started_at)")
+            
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS rescue_tickets (
+                id BIGSERIAL PRIMARY KEY,
+                ticket_code TEXT,
+                facility_type TEXT,
+                area_name TEXT,
+                lat DOUBLE PRECISION,
+                lon DOUBLE PRECISION,
+                problem_type TEXT,
+                evidence_json TEXT,
+                suspected_reason TEXT,
+                suggested_action TEXT,
+                priority_level TEXT DEFAULT 'medium',
+                status TEXT DEFAULT 'open',
+                related_facility_id BIGINT,
+                related_toilet_id BIGINT,
+                related_submission_id BIGINT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rescue_tickets_status ON rescue_tickets(status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rescue_tickets_type_problem ON rescue_tickets(facility_type, problem_type)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rescue_tickets_created ON rescue_tickets(created_at)")
+            
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS facility_submissions (
+                id BIGSERIAL PRIMARY KEY,
+                ticket_id BIGINT,
+                facility_type TEXT NOT NULL,
+                submission_type TEXT NOT NULL,
+                related_facility_id BIGINT,
+                name TEXT,
+                address TEXT,
+                lat DOUBLE PRECISION,
+                lon DOUBLE PRECISION,
+                opening_hours TEXT,
+                photo_url TEXT,
+                placement_note TEXT,
+                access_note TEXT,
+                status_note TEXT,
+                submitter_type TEXT DEFAULT 'admin',
+                verification_score INTEGER DEFAULT 0,
+                trust_level TEXT DEFAULT 'L1',
+                field_info_level TEXT DEFAULT 'low',
+                risk_flags TEXT,
+                verification_status TEXT DEFAULT 'pending',
+                verified_at TIMESTAMPTZ,
+                verified_by TEXT,
+                reject_reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facility_submissions_status ON facility_submissions(verification_status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facility_submissions_ticket ON facility_submissions(ticket_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facility_submissions_created ON facility_submissions(created_at)")
+            
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS verification_logs (
+                id BIGSERIAL PRIMARY KEY,
+                submission_id BIGINT,
+                facility_type TEXT,
+                score INTEGER,
+                trust_level TEXT,
+                field_info_level TEXT,
+                risk_flags TEXT,
+                suggested_action TEXT,
+                reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_verification_logs_submission ON verification_logs(submission_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_verification_logs_created ON verification_logs(created_at)")
+            conn.commit()
+            logging.info("✅ CivicFix tables ready")
+        except Exception as civicfix_error:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logging.error(f"❌ CivicFix table initialization failed; continuing without blocking existing bot tables: {civicfix_error}", exc_info=True)
+
         conn.commit()
         conn.close()
         logging.info("✅ Postgres persistent store ready")

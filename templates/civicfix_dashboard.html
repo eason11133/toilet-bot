@@ -1,0 +1,34 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+{% if not overview.postgres_enabled %}
+  <div class="card"><h2>Postgres 尚未啟用</h2><p>請設定 DATABASE_URL 後使用 CivicFix 正式資料層。</p></div>
+{% else %}
+  <div class="grid">
+    <div class="stat"><div class="muted">公廁 facilities 總數</div><div class="num">{{ overview.toilet_total or 0 }}</div></div>
+    <div class="stat"><div class="muted">官方 active</div><div class="num">{{ overview.toilet_active or 0 }}</div></div>
+    <div class="stat"><div class="muted">官方 inactive / 待查核</div><div class="num">{{ overview.toilet_inactive or 0 }}</div></div>
+    <div class="stat"><div class="muted">Open 急救單</div><div class="num">{{ overview.open_tickets or 0 }}</div></div>
+  </div>
+  <div class="card">
+    <h2>最近一次公廁資料同步</h2>
+    {% if overview.last_sync %}
+      <p>來源：<span class="tag">{{ overview.last_sync.source }}</span> 檔案：{{ overview.last_sync.file_name }}</p>
+      <p>總列數 {{ overview.last_sync.total_rows }}；新增 {{ overview.last_sync.inserted_count }}；更新 {{ overview.last_sync.updated_count }}；略過 {{ overview.last_sync.skipped_count }}；錯誤 {{ overview.last_sync.error_count }}</p>
+      <p class="muted">開始：{{ overview.last_sync.started_at }}；完成：{{ overview.last_sync.finished_at }}</p>
+    {% else %}
+      <p class="muted">尚無同步紀錄。請先到「資料同步」匯入環境部公廁 CSV。</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>近期同步紀錄</h2>
+    <table>
+      <thead><tr><th>時間</th><th>來源</th><th>檔案</th><th>總數</th><th>新增</th><th>更新</th><th>錯誤</th></tr></thead>
+      <tbody>
+      {% for log in logs %}
+        <tr><td>{{ log.started_at }}</td><td>{{ log.source }}</td><td>{{ log.file_name }}</td><td>{{ log.total_rows }}</td><td>{{ log.inserted_count }}</td><td>{{ log.updated_count }}</td><td>{{ log.error_count }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

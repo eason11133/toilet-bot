@@ -1,0 +1,32 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Gate 待審核資料</h2>
+  <table>
+    <thead><tr><th>ID</th><th>狀態</th><th>類型</th><th>名稱/設施</th><th>補充內容</th><th>分數</th><th>風險</th><th>動作</th></tr></thead>
+    <tbody>
+    {% for s in submissions %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td><span class="tag {% if s.verification_status == 'approve' %}ok{% elif s.verification_status == 'need_review' %}warn{% endif %}">{{ s.verification_status }}</span></td>
+        <td>{{ s.facility_type }}<br><span class="muted">{{ s.submission_type }}</span></td>
+        <td>{{ s.name or ('facility #' ~ s.related_facility_id) }}<br><span class="muted">{{ s.address }}</span></td>
+        <td>
+          {% if s.photo_url %}<div>照片：<a href="{{ s.photo_url }}" target="_blank">查看</a></div>{% endif %}
+          {% if s.placement_note %}<div>位置：{{ s.placement_note }}</div>{% endif %}
+          {% if s.access_note %}<div>到達：{{ s.access_note }}</div>{% endif %}
+          {% if s.status_note %}<div>狀態：{{ s.status_note }}</div>{% endif %}
+        </td>
+        <td>{{ s.verification_score }}<br>{{ s.trust_level }} / {{ s.field_info_level }}</td>
+        <td><pre style="max-width:220px;">{{ s.risk_flags }}</pre></td>
+        <td>
+          <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/approve" style="margin-bottom:6px;"><button class="accent" type="submit">通過發布</button></form>
+          <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/need-review" style="margin-bottom:6px;"><button type="submit">待查核</button></form>
+          <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/reject"><input name="reason" placeholder="拒絕原因" style="margin-bottom:6px;"><button class="danger" type="submit">拒絕</button></form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

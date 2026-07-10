@@ -91,6 +91,17 @@ from toilet.favorites import configure_favorites, get_user_favorites
 
 from admin.routes import configure_admin_routes, register_admin_routes, _maintenance_auth_ok
 
+# CivicFix is additive. Import it fail-soft so the production toilet bot can still
+# boot even if a CivicFix-only module has an environment-specific issue.
+try:
+    from civicfix.routes import configure_civicfix, register_civicfix_routes
+    CIVICFIX_AVAILABLE = True
+except Exception as _civicfix_import_error:
+    logging.exception("CivicFix import failed; continuing without CivicFix routes")
+    configure_civicfix = None
+    register_civicfix_routes = None
+    CIVICFIX_AVAILABLE = False
+
 
 # -----------------------------------------------------------------------------
 # 1) Cross-module dependency wiring
@@ -153,6 +164,7 @@ _start_consent_worker()
 # -----------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
+app.config.setdefault("MAX_CONTENT_LENGTH", int(os.getenv("CIVICFIX_MAX_UPLOAD_MB", "50")) * 1024 * 1024)
 CORS(app)
 
 configure_app_support(POSTGRES_ENABLED, log_user_action)
@@ -235,6 +247,19 @@ configure_admin_routes(
 )
 
 PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
+if CIVICFIX_AVAILABLE and configure_civicfix is not None:
+    try:
+        configure_civicfix(
+            postgres_enabled=POSTGRES_ENABLED,
+            pg_connect=_pg_connect,
+            psycopg2_module=psycopg2,
+            upload_dir=os.path.join(DATA_DIR, "civicfix_uploads"),
+            maintenance_auth_ok_func=_maintenance_auth_ok,
+        )
+    except Exception:
+        logging.exception("CivicFix configuration failed; continuing without CivicFix routes")
+        CIVICFIX_AVAILABLE = False
+
 configure_usage(
     get_db_func=_get_db,
     read_status_rows_func=_read_status_rows,
@@ -294,6 +319,11 @@ register_usage_routes(app)
 register_feedback_routes(app)
 register_status_routes(app)
 register_consent_routes(app)
+if CIVICFIX_AVAILABLE and register_civicfix_routes is not None:
+    try:
+        register_civicfix_routes(app)
+    except Exception:
+        logging.exception("CivicFix route registration failed; existing toilet bot routes remain available")
 
 
 # -----------------------------------------------------------------------------

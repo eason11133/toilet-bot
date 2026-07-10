@@ -176,9 +176,16 @@ def _maintenance_auth_ok():
     except Exception:
         json_token = ""
 
+    form_token = ""
+    try:
+        form_token = request.form.get("token") or ""
+    except Exception:
+        form_token = ""
+
     token = (
         request.headers.get("X-Admin-Token")
         or request.args.get("token")
+        or form_token
         or json_token
         or ""
     ).strip()

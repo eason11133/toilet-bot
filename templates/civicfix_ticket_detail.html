@@ -1,0 +1,14 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>{{ ticket.ticket_code }} / {{ ticket.problem_type }}</h2>
+  <p><span class="tag">{{ ticket.facility_type }}</span> <span class="tag warn">{{ ticket.status }}</span> <span class="tag">{{ ticket.priority_level }}</span></p>
+  <p><b>區域/設施：</b>{{ ticket.area_name }}</p>
+  <p><b>座標：</b>{{ ticket.lat }}, {{ ticket.lon }}</p>
+  <p><b>疑似原因：</b>{{ ticket.suspected_reason }}</p>
+  <p><b>建議處理：</b>{{ ticket.suggested_action }}</p>
+  <h3>證據</h3>
+  <pre>{{ ticket.evidence_json }}</pre>
+  <p><a class="btn primary" href="/civicfix/submit?ticket_id={{ ticket.id }}&facility_id={{ ticket.related_facility_id or '' }}">從這張急救單補資料</a></p>
+</div>
+{% endblock %}

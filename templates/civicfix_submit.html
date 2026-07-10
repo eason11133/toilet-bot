@@ -1,0 +1,47 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>補資料 / 補現場資訊</h2>
+  <form method="post" action="/civicfix/submit">
+    <div class="form-grid">
+      <div><label>ticket_id</label><input name="ticket_id" value="{{ ticket_id }}" /></div>
+      <div><label>related_facility_id</label><input name="related_facility_id" value="{{ related_facility_id }}" /></div>
+      <div><label>facility_type</label><select name="facility_type"><option value="toilet">toilet 公廁</option><option value="aed">aed</option></select></div>
+      <div><label>submission_type</label><select name="submission_type">
+        <option value="new_facility">new_facility 新增點位</option>
+        <option value="field_info_update">field_info_update 補現場資訊</option>
+        <option value="photo_update">photo_update 補照片</option>
+        <option value="status_update">status_update 補狀態</option>
+        <option value="location_fix">location_fix 修座標</option>
+        <option value="opening_hours_fix">opening_hours_fix 修開放時間</option>
+      </select></div>
+      <div><label>submitter_type</label><select name="submitter_type"><option value="admin">admin</option><option value="user">user</option><option value="official">official</option></select></div>
+      <div><label>名稱</label><input name="name" /></div>
+      <div><label>地址</label><input name="address" /></div>
+      <div><label>lat</label><input name="lat" /></div>
+      <div><label>lon</label><input name="lon" /></div>
+      <div><label>開放時間</label><input name="opening_hours" /></div>
+      <div><label>照片 URL</label><input name="photo_url" /></div>
+    </div>
+    <label>位置描述 / 入口提示</label><textarea name="placement_note"></textarea>
+    <label>到達方式 / 注意事項</label><textarea name="access_note"></textarea>
+    <label>狀態備註</label><textarea name="status_note"></textarea>
+    <p><button class="primary" type="submit">送出並跑 Gate</button></p>
+  </form>
+</div>
+{% if result %}
+<div class="card">
+  <h2>Gate 結果</h2>
+  <p>Submission #{{ result.submission.id }}</p>
+  <div class="grid">
+    <div class="stat"><div class="muted">分數</div><div class="num">{{ result.gate.score }}</div></div>
+    <div class="stat"><div class="muted">Trust</div><div class="num">{{ result.gate.trust_level }}</div></div>
+    <div class="stat"><div class="muted">Field info</div><div class="num">{{ result.gate.field_info_level }}</div></div>
+    <div class="stat"><div class="muted">建議</div><div class="num">{{ result.gate.suggested_action }}</div></div>
+  </div>
+  <p><b>風險：</b>{% for f in result.gate.risk_flags %}<span class="tag warn">{{ f }}</span>{% endfor %}</p>
+  <p><b>原因：</b>{{ result.gate.reason }}</p>
+  <p><a class="btn accent" href="/dashboard/civicfix/gate">去 Gate 後台審核</a></p>
+</div>
+{% endif %}
+{% endblock %}

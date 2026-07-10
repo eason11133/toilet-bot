@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CivicFix 公共服務資料急救站</title>
+  <style>
+    :root { --bg:#f5f7fb; --card:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --primary:#0f172a; --accent:#2563eb; --danger:#b91c1c; --ok:#047857; --warn:#b45309; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width:1280px; margin:0 auto; padding:28px; }
+    .top { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:20px; }
+    h1 { margin:0 0 8px; font-size:28px; }
+    h2 { margin:0 0 14px; font-size:20px; }
+    p { line-height:1.6; }
+    .muted { color:var(--muted); }
+    .nav { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0 20px; }
+    .btn, button { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:9px 14px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--text); text-decoration:none; cursor:pointer; font-size:14px; }
+    .btn.primary, button.primary { background:var(--primary); color:#fff; border-color:var(--primary); }
+    .btn.accent, button.accent { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .btn.danger, button.danger { background:#fff1f2; color:var(--danger); border-color:#fecdd3; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 4px 16px rgba(15,23,42,.04); margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+    .stat { padding:16px; border:1px solid var(--line); border-radius:16px; background:#fff; }
+    .stat .num { font-size:28px; font-weight:700; margin-top:6px; }
+    .tag { display:inline-block; padding:4px 8px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px; margin:2px; }
+    .tag.warn { background:#fff7ed; color:var(--warn); }
+    .tag.ok { background:#ecfdf5; color:var(--ok); }
+    .tag.danger { background:#fef2f2; color:var(--danger); }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden; }
+    th, td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:14px; }
+    th { background:#f8fafc; color:#374151; font-weight:700; }
+    input, select, textarea { width:100%; min-height:38px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; font:inherit; background:#fff; }
+    textarea { min-height:100px; resize:vertical; }
+    label { display:block; font-size:13px; color:#374151; margin:10px 0 6px; font-weight:600; }
+    .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px 16px; }
+    .message { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; padding:12px 14px; border-radius:12px; margin-bottom:16px; }
+    pre { white-space:pre-wrap; background:#0f172a; color:#e5e7eb; padding:14px; border-radius:12px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>CivicFix 公共服務資料急救站</h1>
+        <p class="muted">正式版核心：資料來源同步 → 急救單 → 補資料 → Gate → 查詢發布</p>
+      </div>
+      <div class="nav">
+        <a class="btn" href="/dashboard">原 Dashboard</a>
+        <a class="btn" href="/dashboard/gap">Gap</a>
+      </div>
+    </div>
+    <div class="nav">
+      <a class="btn primary" href="/dashboard/civicfix">總覽</a>
+      <a class="btn" href="/dashboard/civicfix/sync">資料同步</a>
+      <a class="btn" href="/dashboard/civicfix/tickets">資料急救單</a>
+      <a class="btn" href="/dashboard/civicfix/tickets/new">新增急救單</a>
+      <a class="btn" href="/civicfix/submit">補資料</a>
+      <a class="btn" href="/dashboard/civicfix/gate">Gate</a>
+    </div>
+    {% if message %}<div class="message">{{ message }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </div>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token');
+      if (!token) return;
+      document.querySelectorAll('a[href^="/dashboard/civicfix"], a[href^="/civicfix"]').forEach(function (a) {
+        try {
+          const url = new URL(a.getAttribute('href'), window.location.origin);
+          url.searchParams.set('token', token);
+          a.setAttribute('href', url.pathname + url.search + url.hash);
+        } catch (e) {}
+      });
+      document.querySelectorAll('form').forEach(function (form) {
+        if (!form.querySelector('input[name="token"]')) {
+          const hidden = document.createElement('input');
+          hidden.type = 'hidden';
+          hidden.name = 'token';
+          hidden.value = token;
+          form.appendChild(hidden);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

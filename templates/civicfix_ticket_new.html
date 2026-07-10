@@ -1,0 +1,28 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>新增資料急救單</h2>
+  <form method="post" action="/dashboard/civicfix/tickets/new">
+    <div class="form-grid">
+      <div><label>設施類型</label><select name="facility_type"><option value="toilet">toilet 公廁</option><option value="aed">aed</option></select></div>
+      <div><label>問題類型</label><select name="problem_type">
+        <option value="no_result">no_result 查無</option>
+        <option value="low_coverage">low_coverage 低覆蓋</option>
+        <option value="unavailable_reported">unavailable_reported 使用者回報不可用</option>
+        <option value="missing_point">missing_point 缺點位</option>
+        <option value="low_trust_point">low_trust_point 低可信</option>
+        <option value="outdated_official_data">outdated_official_data 官方資料過期</option>
+        <option value="biggis_hotspot">biggis_hotspot BigGIS 熱區</option>
+      </select></div>
+      <div><label>區域/設施名稱</label><input name="area_name" /></div>
+      <div><label>優先級</label><select name="priority_level"><option>medium</option><option>high</option><option>low</option></select></div>
+      <div><label>lat</label><input name="lat" /></div>
+      <div><label>lon</label><input name="lon" /></div>
+    </div>
+    <label>證據</label><textarea name="evidence"></textarea>
+    <label>疑似原因</label><textarea name="suspected_reason"></textarea>
+    <label>建議處理</label><textarea name="suggested_action"></textarea>
+    <p><button class="primary" type="submit">建立急救單</button></p>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>資料急救單</h2>
+  <form method="post" action="/dashboard/civicfix/tickets/from-feedback" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
+    <div style="width:180px;"><label>掃描最近回饋數</label><input name="limit" value="300" /></div>
+    <button class="accent" type="submit">把負面回饋轉急救單</button>
+  </form>
+</div>
+<div class="card">
+  <table>
+    <thead><tr><th>ID</th><th>狀態</th><th>類型</th><th>區域/設施</th><th>問題</th><th>優先</th><th>建議</th><th>建立</th></tr></thead>
+    <tbody>
+    {% for t in tickets %}
+      <tr>
+        <td><a href="/dashboard/civicfix/tickets/{{ t.id }}">{{ t.ticket_code or t.id }}</a></td>
+        <td><span class="tag {% if t.status == 'open' %}warn{% elif t.status == 'resolved' %}ok{% endif %}">{{ t.status }}</span></td>
+        <td>{{ t.facility_type }}</td>
+        <td>{{ t.area_name }}</td>
+        <td>{{ t.problem_type }}</td>
+        <td>{{ t.priority_level }}</td>
+        <td>{{ t.suggested_action }}</td>
+        <td>{{ t.created_at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

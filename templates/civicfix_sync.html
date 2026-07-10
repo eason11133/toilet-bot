@@ -1,0 +1,42 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>環境部公廁 FAC_P_07 同步</h2>
+  <p class="muted">上傳最新 public_toilets.csv，CivicFix 會 upsert 官方欄位，保留使用者回報、Gate、補強資料，不整表重建。</p>
+  <form method="post" action="/dashboard/civicfix/sync/toilets" enctype="multipart/form-data">
+    <label>上傳 CSV</label>
+    <input type="file" name="file" accept=".csv" />
+    <label>或使用伺服器本地路徑</label>
+    <input name="local_path" placeholder="預設 data/public_toilets.csv" />
+    <p><button class="primary" type="submit">開始同步</button></p>
+  </form>
+</div>
+{% if result %}
+<div class="card">
+  <h2>同步結果</h2>
+  {% if result.ok %}
+    <p><span class="tag ok">OK</span> {{ result.source }} / {{ result.facility_type }}</p>
+    <div class="grid">
+      <div class="stat"><div class="muted">總列數</div><div class="num">{{ result.total_rows }}</div></div>
+      <div class="stat"><div class="muted">新增</div><div class="num">{{ result.inserted_count }}</div></div>
+      <div class="stat"><div class="muted">更新</div><div class="num">{{ result.updated_count }}</div></div>
+      <div class="stat"><div class="muted">略過/錯誤</div><div class="num">{{ result.skipped_count }}/{{ result.error_count }}</div></div>
+    </div>
+    {% if result.error_sample %}<pre>{{ result.error_sample }}</pre>{% endif %}
+  {% else %}
+    <p><span class="tag danger">ERROR</span> {{ result.error }}</p>
+  {% endif %}
+</div>
+{% endif %}
+<div class="card">
+  <h2>同步紀錄</h2>
+  <table>
+    <thead><tr><th>時間</th><th>來源</th><th>檔案</th><th>總數</th><th>新增</th><th>更新</th><th>略過</th><th>錯誤</th></tr></thead>
+    <tbody>
+    {% for log in logs %}
+      <tr><td>{{ log.started_at }}</td><td>{{ log.source }}</td><td>{{ log.file_name }}</td><td>{{ log.total_rows }}</td><td>{{ log.inserted_count }}</td><td>{{ log.updated_count }}</td><td>{{ log.skipped_count }}</td><td>{{ log.error_count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
