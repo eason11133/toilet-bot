@@ -41,10 +41,46 @@ def configure_civicfix(postgres_enabled, pg_connect, psycopg2_module, upload_dir
     configure_publish(postgres_enabled, pg_connect, psycopg2_module)
 
 
+def _current_admin_token():
+    # Keep this aligned with admin.routes._maintenance_auth_ok input sources.
+    try:
+        form_token = request.form.get("token") or ""
+    except Exception:
+        form_token = ""
+    json_token = ""
+    try:
+        data = request.get_json(silent=True) if request.is_json else None
+        if isinstance(data, dict):
+            json_token = data.get("token") or ""
+    except Exception:
+        json_token = ""
+    return (
+        request.headers.get("X-Admin-Token")
+        or request.args.get("token")
+        or form_token
+        or json_token
+        or ""
+    ).strip()
+
+
+def _token_kwargs(extra=None):
+    token = _current_admin_token()
+    data = dict(extra or {})
+    if token:
+        data["token"] = token
+    return data
+
+
 def _require_auth():
     # CivicFix is an admin/development surface for now. Public citizen-facing
     # endpoints can be reopened later after a separate abuse-control design.
     if _maintenance_auth_ok and not _maintenance_auth_ok():
+        if request.method == "GET":
+            return render_template(
+                "civicfix_auth.html",
+                next_path=request.full_path if request.query_string else request.path,
+                message="請輸入 ADMIN_TOKEN 後再進入 CivicFix 後台。",
+            ), 401
         return "Unauthorized", 401
     return None
 
@@ -183,7 +219,7 @@ def civicfix_new_ticket():
         "suggested_action": data.get("suggested_action") or "",
         "priority_level": data.get("priority_level") or "medium",
     })
-    return redirect(url_for("civicfix_ticket_detail", ticket_id=ticket["id"]))
+    return redirect(url_for("civicfix_ticket_detail", **_token_kwargs({"ticket_id": ticket["id"]})))
 
 
 def civicfix_convert_feedback():
@@ -193,7 +229,7 @@ def civicfix_convert_feedback():
     if not POSTGRES_ENABLED:
         return _db_required_response()
     result = create_tickets_from_negative_feedback(limit=int(request.form.get("limit") or 300))
-    return redirect(url_for("civicfix_tickets_page", message=f"已掃描 {result['scanned']} 筆回饋，建立 {result['created']} 張急救單"))
+    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({"message": f"已掃描 {result['scanned']} 筆回饋，建立 {result['created']} 張急救單"})))
 
 
 def civicfix_submit_page():
@@ -303,7 +339,7 @@ def civicfix_gate_approve(submission_id):
     if auth_error:
         return auth_error
     result = approve_submission(int(submission_id))
-    return redirect(url_for("civicfix_gate_page", message=f"已通過 submission #{submission_id}"))
+    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已通過 submission #{submission_id}"})))
 
 
 def civicfix_gate_reject(submission_id):
@@ -312,7 +348,7 @@ def civicfix_gate_reject(submission_id):
         return auth_error
     reason = request.form.get("reason") or ""
     reject_submission(int(submission_id), reason=reason)
-    return redirect(url_for("civicfix_gate_page", message=f"已拒絕 submission #{submission_id}"))
+    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已拒絕 submission #{submission_id}"})))
 
 
 def civicfix_gate_need_review(submission_id):
@@ -320,7 +356,7 @@ def civicfix_gate_need_review(submission_id):
     if auth_error:
         return auth_error
     mark_need_review(int(submission_id))
-    return redirect(url_for("civicfix_gate_page", message=f"已標記待查核 submission #{submission_id}"))
+    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已標記待查核 submission #{submission_id}"})))
 
 
 def api_civicfix_overview():

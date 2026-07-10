@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CivicFix 管理驗證</title>
+  <style>
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif; background:#f5f7fb; color:#111827; }
+    .card { width:min(520px, calc(100vw - 32px)); background:#fff; border:1px solid #e5e7eb; border-radius:20px; padding:28px; box-shadow:0 8px 28px rgba(15,23,42,.08); }
+    h1 { margin:0 0 8px; font-size:28px; }
+    p { margin:0 0 20px; color:#6b7280; line-height:1.6; }
+    input { width:100%; min-height:44px; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; font:inherit; margin-bottom:12px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    button, a { min-height:42px; display:inline-flex; align-items:center; justify-content:center; padding:9px 16px; border-radius:12px; border:1px solid #e5e7eb; background:#fff; color:#111827; text-decoration:none; cursor:pointer; font:inherit; }
+    button.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
+    .warn { margin:0 0 14px; padding:10px 12px; border-radius:12px; background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; }
+  </style>
+</head>
+<body>
+  <div class="card" id="civicfixAuthCard" data-next-path="{{ next_path|e }}">
+    <h1>CivicFix 管理驗證</h1>
+    <p>請輸入 Render Environment 裡設定的 <strong>ADMIN_TOKEN</strong>。本頁只會記在目前分頁的 sessionStorage，方便你在 CivicFix 後台切換頁面。</p>
+    {% if message %}<div class="warn">{{ message }}</div>{% endif %}
+    <input id="tokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password" autofocus>
+    <div class="row">
+      <button class="primary" id="goBtn" type="button">進入 CivicFix</button>
+      <button id="clearBtn" type="button">清除密碼</button>
+      <a href="/dashboard">回原 Dashboard</a>
+    </div>
+  </div>
+  <script>
+    const authCard = document.getElementById('civicfixAuthCard');
+    const nextPath = (authCard && authCard.dataset.nextPath) ? authCard.dataset.nextPath : '/dashboard/civicfix';
+    const tokenInput = document.getElementById('tokenInput');
+    const stored = sessionStorage.getItem('civicfix_admin_token') || sessionStorage.getItem('maintenance_token') || '';
+    if (stored) tokenInput.value = stored;
+    function go(){
+      const token = (tokenInput.value || '').trim();
+      if(!token){ alert('請先輸入 ADMIN_TOKEN'); return; }
+      sessionStorage.setItem('civicfix_admin_token', token);
+      sessionStorage.setItem('maintenance_token', token);
+      const url = new URL(nextPath || '/dashboard/civicfix', window.location.origin);
+      url.searchParams.set('token', token);
+      window.location.href = url.pathname + url.search + url.hash;
+    }
+    document.getElementById('goBtn').onclick = go;
+    document.getElementById('clearBtn').onclick = () => {
+      sessionStorage.removeItem('civicfix_admin_token');
+      sessionStorage.removeItem('maintenance_token');
+      tokenInput.value='';
+    };
+    tokenInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') go(); });
+  </script>
+</body>
+</html>

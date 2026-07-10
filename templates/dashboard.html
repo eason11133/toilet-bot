@@ -97,7 +97,8 @@
 
     .nts-nav-btn,
     .maintenance-nav-btn,
-    .gap-nav-btn {
+    .gap-nav-btn,
+    .civicfix-nav-btn {
       text-decoration: none;
       display: inline-flex;
       align-items: center;
@@ -115,7 +116,8 @@
 
     .nts-nav-btn:hover,
     .maintenance-nav-btn:hover,
-    .gap-nav-btn:hover {
+    .gap-nav-btn:hover,
+    .civicfix-nav-btn:hover {
       transform: translateY(-1px);
       background: #f8fafc;
     }
@@ -675,6 +677,7 @@
         <a class="nts-nav-btn" href="/dashboard/nts">NTS 排序分析 →</a>
         <a class="maintenance-nav-btn" href="/dashboard/maintenance">資料維護 →</a>
         <a class="gap-nav-btn" href="/dashboard/gap">需求缺口分析 →</a>
+        <a class="civicfix-nav-btn" id="civicfixNavBtn" href="/dashboard/civicfix">CivicFix →</a>
       </div>
     </div>
 
@@ -1880,6 +1883,18 @@
     refreshLineInsights();
     setInterval(refreshDashboard, 30000);
     setInterval(refreshLineInsights, 86400000);
+
+    (function hydrateCivicFixLink(){
+      const btn = document.getElementById('civicfixNavBtn');
+      if (!btn) return;
+      const token = (sessionStorage.getItem('civicfix_admin_token') || sessionStorage.getItem('maintenance_token') || '').trim();
+      if (!token) return;
+      try {
+        const url = new URL(btn.getAttribute('href'), window.location.origin);
+        url.searchParams.set('token', token);
+        btn.setAttribute('href', url.pathname + url.search + url.hash);
+      } catch (e) {}
+    })();
   </script>
 </body>
 </html>

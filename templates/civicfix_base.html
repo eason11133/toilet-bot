@@ -35,6 +35,8 @@
     label { display:block; font-size:13px; color:#374151; margin:10px 0 6px; font-weight:600; }
     .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px 16px; }
     .message { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; padding:12px 14px; border-radius:12px; margin-bottom:16px; }
+    .authbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:flex-end; margin:0 0 12px; }
+    .authbar input { width:min(320px,100%); }
     pre { white-space:pre-wrap; background:#0f172a; color:#e5e7eb; padding:14px; border-radius:12px; overflow:auto; }
   </style>
 </head>
@@ -50,6 +52,12 @@
         <a class="btn" href="/dashboard/gap">Gap</a>
       </div>
     </div>
+    <div class="authbar">
+      <input id="civicfixTokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password">
+      <button id="civicfixApplyTokenBtn" type="button">套用密碼</button>
+      <button id="civicfixClearTokenBtn" type="button">清除密碼</button>
+    </div>
+
     <div class="nav">
       <a class="btn primary" href="/dashboard/civicfix">總覽</a>
       <a class="btn" href="/dashboard/civicfix/sync">資料同步</a>
@@ -65,24 +73,63 @@
   <script>
     (function () {
       const params = new URLSearchParams(window.location.search);
-      const token = params.get('token');
-      if (!token) return;
-      document.querySelectorAll('a[href^="/dashboard/civicfix"], a[href^="/civicfix"]').forEach(function (a) {
-        try {
-          const url = new URL(a.getAttribute('href'), window.location.origin);
-          url.searchParams.set('token', token);
-          a.setAttribute('href', url.pathname + url.search + url.hash);
-        } catch (e) {}
-      });
-      document.querySelectorAll('form').forEach(function (form) {
-        if (!form.querySelector('input[name="token"]')) {
-          const hidden = document.createElement('input');
-          hidden.type = 'hidden';
-          hidden.name = 'token';
-          hidden.value = token;
-          form.appendChild(hidden);
-        }
-      });
+      const queryToken = (params.get('token') || '').trim();
+      const storedToken = (sessionStorage.getItem('civicfix_admin_token') || sessionStorage.getItem('maintenance_token') || '').trim();
+      const token = queryToken || storedToken;
+      const tokenInput = document.getElementById('civicfixTokenInput');
+      const applyBtn = document.getElementById('civicfixApplyTokenBtn');
+      const clearBtn = document.getElementById('civicfixClearTokenBtn');
+
+      function saveToken(t) {
+        if (!t) return;
+        sessionStorage.setItem('civicfix_admin_token', t);
+        sessionStorage.setItem('maintenance_token', t);
+      }
+
+      function withTokenUrl(href, t) {
+        const url = new URL(href, window.location.origin);
+        url.searchParams.set('token', t);
+        return url.pathname + url.search + url.hash;
+      }
+
+      function applyTokenToPage(t) {
+        if (!t) return;
+        document.querySelectorAll('a[href^="/dashboard/civicfix"], a[href^="/civicfix"]').forEach(function (a) {
+          try { a.setAttribute('href', withTokenUrl(a.getAttribute('href'), t)); } catch (e) {}
+        });
+        document.querySelectorAll('form').forEach(function (form) {
+          let hidden = form.querySelector('input[name="token"]');
+          if (!hidden) {
+            hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'token';
+            form.appendChild(hidden);
+          }
+          hidden.value = t;
+        });
+      }
+
+      if (tokenInput && token) tokenInput.value = token;
+      if (queryToken) saveToken(queryToken);
+      applyTokenToPage(token);
+
+      if (applyBtn && tokenInput) {
+        applyBtn.addEventListener('click', function () {
+          const t = (tokenInput.value || '').trim();
+          if (!t) { alert('請先輸入 ADMIN_TOKEN'); return; }
+          saveToken(t);
+          window.location.href = withTokenUrl(window.location.pathname + window.location.search, t);
+        });
+      }
+
+      if (clearBtn && tokenInput) {
+        clearBtn.addEventListener('click', function () {
+          sessionStorage.removeItem('civicfix_admin_token');
+          sessionStorage.removeItem('maintenance_token');
+          tokenInput.value = '';
+          alert('已清除本分頁記住的密碼');
+        });
+      }
     })();
   </script>
 </body>
