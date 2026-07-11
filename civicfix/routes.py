@@ -12,6 +12,8 @@ from civicfix.publish import approve_submission, reject_submission, mark_need_re
 from civicfix.rescue import (
     configure_rescue,
     create_ticket,
+    create_tickets_from_gap_summary,
+    create_ticket_from_sync_status,
     create_tickets_from_negative_feedback,
     get_ticket,
     list_tickets,
@@ -170,14 +172,73 @@ def civicfix_sync_toilets():
         return render_template("civicfix_sync.html", logs=logs, result={"ok": False, "error": str(e)}), 500
 
 
+def _parse_ticket_evidence(ticket):
+    raw = ticket.get("evidence_json") if isinstance(ticket, dict) else None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw or "{}")
+    except Exception:
+        return {"raw": raw or ""}
+
+
+def _decorate_ticket(ticket):
+    t = dict(ticket or {})
+    evidence = _parse_ticket_evidence(t)
+    t["evidence"] = evidence
+    source = evidence.get("source") or "manual"
+    t["source"] = source
+    t["source_label"] = {
+        "gap_dashboard": "Gap 缺口",
+        "toilet_feedbacks": "使用者回報",
+        "source_sync_logs": "同步狀態",
+        "manual": "手動",
+    }.get(source, source)
+    t["problem_label"] = {
+        "no_result": "查無結果",
+        "low_coverage": "低覆蓋",
+        "unavailable_reported": "回報不存在/不可用",
+        "missing_point": "疑似缺點位",
+        "low_trust_point": "低可信點位",
+        "outdated_official_data": "官方資料過期",
+        "biggis_hotspot": "BigGIS 熱區",
+    }.get(t.get("problem_type"), t.get("problem_type") or "未知")
+    summary_bits = []
+    for key, label in (
+        ("effective_queries", "有效查詢"),
+        ("no_result_count", "查無"),
+        ("low_result_count", "低覆蓋"),
+        ("unique_users", "使用者"),
+        ("active_days", "天數"),
+        ("gap_score", "缺口分數"),
+    ):
+        val = evidence.get(key)
+        if val not in (None, ""):
+            summary_bits.append(f"{label} {val}")
+    if evidence.get("comment"):
+        summary_bits.append(str(evidence.get("comment"))[:60])
+    if evidence.get("days_old") is not None:
+        summary_bits.append(f"距上次同步 {evidence.get('days_old')} 天")
+    t["evidence_summary"] = " / ".join(summary_bits) or "—"
+    return t
+
+
 def civicfix_tickets_page():
     auth_error = _require_auth()
     if auth_error:
         return auth_error
     if not POSTGRES_ENABLED:
         return _db_required_response()
-    tickets = list_tickets(limit=200)
-    return render_template("civicfix_tickets.html", tickets=tickets, message=request.args.get("message", ""))
+    tickets = [_decorate_ticket(t) for t in list_tickets(limit=200)]
+    counts = {"gap_dashboard": 0, "toilet_feedbacks": 0, "source_sync_logs": 0, "manual": 0}
+    for t in tickets:
+        counts[t.get("source") or "manual"] = counts.get(t.get("source") or "manual", 0) + 1
+    return render_template(
+        "civicfix_tickets.html",
+        tickets=tickets,
+        counts=counts,
+        message=request.args.get("message", ""),
+    )
 
 
 def civicfix_ticket_detail(ticket_id):
@@ -189,7 +250,7 @@ def civicfix_ticket_detail(ticket_id):
     ticket = get_ticket(ticket_id)
     if not ticket:
         return "Ticket not found", 404
-    return render_template("civicfix_ticket_detail.html", ticket=ticket)
+    return render_template("civicfix_ticket_detail.html", ticket=_decorate_ticket(ticket))
 
 
 def civicfix_new_ticket_page():
@@ -230,6 +291,33 @@ def civicfix_convert_feedback():
         return _db_required_response()
     result = create_tickets_from_negative_feedback(limit=int(request.form.get("limit") or 300))
     return redirect(url_for("civicfix_tickets_page", **_token_kwargs({"message": f"已掃描 {result['scanned']} 筆回饋，建立 {result['created']} 張急救單"})))
+
+
+def civicfix_convert_gap():
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+    if not POSTGRES_ENABLED:
+        return _db_required_response()
+    result = create_tickets_from_gap_summary(
+        range_key=request.form.get("range") or "30d",
+        limit=int(request.form.get("limit") or 10),
+    )
+    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({
+        "message": f"已從 Gap Dashboard 掃描 {result['scanned']} 個缺口群，建立 {result['created']} 張急救單，略過重複 {result.get('skipped_duplicate', 0)} 張"
+    })))
+
+
+def civicfix_convert_sync_issues():
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+    if not POSTGRES_ENABLED:
+        return _db_required_response()
+    result = create_ticket_from_sync_status(stale_days=int(request.form.get("stale_days") or 30))
+    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({
+        "message": f"同步狀態檢查完成：建立 {result.get('created', 0)} 張急救單（{result.get('reason', '')}）"
+    })))
 
 
 def civicfix_submit_page():
@@ -375,6 +463,8 @@ def register_civicfix_routes(app):
     app.add_url_rule("/dashboard/civicfix/tickets/new", endpoint="civicfix_new_ticket_page", view_func=civicfix_new_ticket_page, methods=["GET"])
     app.add_url_rule("/dashboard/civicfix/tickets/new", endpoint="civicfix_new_ticket", view_func=civicfix_new_ticket, methods=["POST"])
     app.add_url_rule("/dashboard/civicfix/tickets/from-feedback", endpoint="civicfix_convert_feedback", view_func=civicfix_convert_feedback, methods=["POST"])
+    app.add_url_rule("/dashboard/civicfix/tickets/from-gap", endpoint="civicfix_convert_gap", view_func=civicfix_convert_gap, methods=["POST"])
+    app.add_url_rule("/dashboard/civicfix/tickets/from-sync", endpoint="civicfix_convert_sync_issues", view_func=civicfix_convert_sync_issues, methods=["POST"])
     app.add_url_rule("/civicfix/submit", endpoint="civicfix_submit_page", view_func=civicfix_submit_page, methods=["GET"])
     app.add_url_rule("/civicfix/submit", endpoint="civicfix_submit", view_func=civicfix_submit, methods=["POST"])
     app.add_url_rule("/dashboard/civicfix/gate", endpoint="civicfix_gate_page", view_func=civicfix_gate_page, methods=["GET"])

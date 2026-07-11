@@ -1,26 +1,102 @@
 {% extends "civicfix_base.html" %}
 {% block content %}
 <div class="card">
-  <h2>資料急救單</h2>
-  <form method="post" action="/dashboard/civicfix/tickets/from-feedback" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
-    <div style="width:180px;"><label>掃描最近回饋數</label><input name="limit" value="300" /></div>
-    <button class="accent" type="submit">把負面回饋轉急救單</button>
-  </form>
+  <h2>資料急救單：系統偵測到的資料問題</h2>
+  <p class="muted" style="margin-top:-6px;">
+    這裡不是讓使用者手填問題，而是把 Gap Dashboard、使用者回報、官方資料同步狀態轉成可處理的資料維修任務。
+  </p>
+  <div class="grid">
+    <div class="stat">
+      <div class="muted">來自 Gap 缺口</div>
+      <div class="num">{{ counts.get('gap_dashboard', 0) }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">來自使用者回報</div>
+      <div class="num">{{ counts.get('toilet_feedbacks', 0) }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">來自同步狀態</div>
+      <div class="num">{{ counts.get('source_sync_logs', 0) }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">手動/其他</div>
+      <div class="num">{{ counts.get('manual', 0) }}</div>
+    </div>
+  </div>
 </div>
+
 <div class="card">
+  <h2>從後端資料產生急救單</h2>
+  <div class="grid">
+    <form method="post" action="/dashboard/civicfix/tickets/from-gap" class="stat">
+      <h3 style="margin:0 0 8px;">Gap Dashboard → 急救單</h3>
+      <p class="muted">把查無、低覆蓋、慢查詢的需求群轉成資料急救單。</p>
+      <label>分析範圍</label>
+      <select name="range">
+        <option value="30d" selected>近 30 天</option>
+        <option value="7d">近 7 天</option>
+        <option value="1y">近 1 年</option>
+        <option value="all">全部</option>
+      </select>
+      <label>最多產生幾張</label>
+      <input name="limit" value="10" />
+      <button class="accent" type="submit" style="margin-top:12px;">從 Gap 產生急救單</button>
+    </form>
+
+    <form method="post" action="/dashboard/civicfix/tickets/from-feedback" class="stat">
+      <h3 style="margin:0 0 8px;">使用者回報 → 急救單</h3>
+      <p class="muted">把「不存在、找不到、關閉、不可用」等回饋轉成待查核任務。</p>
+      <label>掃描最近回饋數</label>
+      <input name="limit" value="300" />
+      <button class="accent" type="submit" style="margin-top:12px;">從回饋產生急救單</button>
+    </form>
+
+    <form method="post" action="/dashboard/civicfix/tickets/from-sync" class="stat">
+      <h3 style="margin:0 0 8px;">同步狀態 → 急救單</h3>
+      <p class="muted">如果官方公廁資料太久沒同步，建立資料來源維護任務。</p>
+      <label>幾天未同步算過期</label>
+      <input name="stale_days" value="30" />
+      <button class="accent" type="submit" style="margin-top:12px;">檢查同步狀態</button>
+    </form>
+  </div>
+
+  <p class="muted" style="margin-top:14px;">
+    手動建立只保留給特殊狀況：<a href="/dashboard/civicfix/tickets/new">進階 / 手動建立急救單</a>
+  </p>
+</div>
+
+<div class="card">
+  <h2>待處理資料急救單</h2>
   <table>
-    <thead><tr><th>ID</th><th>狀態</th><th>類型</th><th>區域/設施</th><th>問題</th><th>優先</th><th>建議</th><th>建立</th></tr></thead>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>來源</th>
+        <th>狀態</th>
+        <th>問題</th>
+        <th>區域/設施</th>
+        <th>後端證據摘要</th>
+        <th>優先</th>
+        <th>建議處理</th>
+        <th>建立</th>
+      </tr>
+    </thead>
     <tbody>
     {% for t in tickets %}
       <tr>
         <td><a href="/dashboard/civicfix/tickets/{{ t.id }}">{{ t.ticket_code or t.id }}</a></td>
+        <td><span class="tag">{{ t.source_label }}</span></td>
         <td><span class="tag {% if t.status == 'open' %}warn{% elif t.status == 'resolved' %}ok{% endif %}">{{ t.status }}</span></td>
-        <td>{{ t.facility_type }}</td>
+        <td>{{ t.problem_label }}</td>
         <td>{{ t.area_name }}</td>
-        <td>{{ t.problem_type }}</td>
+        <td>{{ t.evidence_summary }}</td>
         <td>{{ t.priority_level }}</td>
         <td>{{ t.suggested_action }}</td>
         <td>{{ t.created_at }}</td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="9" class="muted">目前沒有急救單。先按上面的「從 Gap 產生急救單」或「從回饋產生急救單」。</td>
       </tr>
     {% endfor %}
     </tbody>

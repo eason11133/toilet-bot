@@ -1,14 +1,61 @@
 {% extends "civicfix_base.html" %}
 {% block content %}
 <div class="card">
-  <h2>{{ ticket.ticket_code }} / {{ ticket.problem_type }}</h2>
-  <p><span class="tag">{{ ticket.facility_type }}</span> <span class="tag warn">{{ ticket.status }}</span> <span class="tag">{{ ticket.priority_level }}</span></p>
+  <h2>{{ ticket.ticket_code }} / {{ ticket.problem_label }}</h2>
+  <p>
+    <span class="tag">{{ ticket.facility_type }}</span>
+    <span class="tag">來源：{{ ticket.source_label }}</span>
+    <span class="tag warn">{{ ticket.status }}</span>
+    <span class="tag">{{ ticket.priority_level }}</span>
+  </p>
   <p><b>區域/設施：</b>{{ ticket.area_name }}</p>
   <p><b>座標：</b>{{ ticket.lat }}, {{ ticket.lon }}</p>
-  <p><b>疑似原因：</b>{{ ticket.suspected_reason }}</p>
-  <p><b>建議處理：</b>{{ ticket.suggested_action }}</p>
-  <h3>證據</h3>
-  <pre>{{ ticket.evidence_json }}</pre>
-  <p><a class="btn primary" href="/civicfix/submit?ticket_id={{ ticket.id }}&facility_id={{ ticket.related_facility_id or '' }}">從這張急救單補資料</a></p>
+  {% if ticket.evidence.get('map_url') %}
+    <p><a class="btn" href="{{ ticket.evidence.get('map_url') }}" target="_blank" rel="noopener">開 Google Maps</a></p>
+  {% endif %}
 </div>
+
+<div class="grid">
+  <div class="card">
+    <h2>後端證據</h2>
+    <table>
+      <tbody>
+        {% for key, value in ticket.evidence.items() %}
+          {% if key not in ['sample_queries'] %}
+          <tr><th style="width:180px;">{{ key }}</th><td>{{ value }}</td></tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>系統判斷</h2>
+    <p><b>疑似原因：</b>{{ ticket.suspected_reason }}</p>
+    <p><b>建議處理：</b>{{ ticket.suggested_action }}</p>
+    <p class="muted">這張單是由後端資料產生；人要做的是處理它，不是手動編一張單。</p>
+    <p>
+      <a class="btn primary" href="/civicfix/submit?ticket_id={{ ticket.id }}&facility_id={{ ticket.related_facility_id or '' }}">處理這張急救單 / 補資料</a>
+    </p>
+  </div>
+</div>
+
+{% if ticket.evidence.get('sample_queries') %}
+<div class="card">
+  <h2>樣本查詢</h2>
+  <table>
+    <thead><tr><th>時間</th><th>座標</th><th>結果數</th><th>區域</th><th>地圖</th></tr></thead>
+    <tbody>
+      {% for q in ticket.evidence.get('sample_queries') %}
+      <tr>
+        <td>{{ q.created_at }}</td>
+        <td>{{ q.lat }}, {{ q.lon }}</td>
+        <td>{{ q.result_count }}</td>
+        <td>{{ q.area_name }}</td>
+        <td>{% if q.map_url %}<a href="{{ q.map_url }}" target="_blank" rel="noopener">地圖</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}
