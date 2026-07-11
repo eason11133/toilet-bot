@@ -2,15 +2,17 @@
 {% block content %}
 <div class="card">
   <h2>環境部公廁 FAC_P_07 同步</h2>
-  <p class="muted">上傳最新 public_toilets.csv，CivicFix 會 upsert 官方欄位，保留使用者回報、Gate、補強資料，不整表重建。</p>
+  <p class="muted">上傳環境部公廁 CSV。中文檔名可用，例如「全國公廁建檔資料.csv」。CivicFix 會 upsert 官方欄位，保留使用者回報、Gate、補強資料，不整表重建。</p>
   <form method="post" action="/dashboard/civicfix/sync/toilets" enctype="multipart/form-data">
     <label>上傳 CSV</label>
-    <input type="file" name="file" accept=".csv" />
+    <input type="file" name="file" accept=".csv,text/csv" />
     <label>或使用伺服器本地路徑</label>
     <input name="local_path" placeholder="預設 data/public_toilets.csv" />
     <p><button class="primary" type="submit">開始同步</button></p>
   </form>
+  <p class="mini">如果看到 only .csv uploads are allowed，通常是舊版 secure_filename 對中文檔名誤判；套用新版 routes.py 後可修正。</p>
 </div>
+
 {% if result %}
 <div class="card">
   <h2>同步結果</h2>
@@ -28,6 +30,7 @@
   {% endif %}
 </div>
 {% endif %}
+
 <div class="card">
   <h2>同步紀錄</h2>
   <table>
@@ -35,6 +38,8 @@
     <tbody>
     {% for log in logs %}
       <tr><td>{{ log.started_at }}</td><td>{{ log.source }}</td><td>{{ log.file_name }}</td><td>{{ log.total_rows }}</td><td>{{ log.inserted_count }}</td><td>{{ log.updated_count }}</td><td>{{ log.skipped_count }}</td><td>{{ log.error_count }}</td></tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">尚無同步紀錄。</td></tr>
     {% endfor %}
     </tbody>
   </table>

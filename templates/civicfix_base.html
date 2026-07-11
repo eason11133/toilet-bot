@@ -6,17 +6,18 @@
   <title>CivicFix 公共服務資料急救站</title>
   <style>
     :root { --bg:#f5f7fb; --card:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --primary:#0f172a; --accent:#2563eb; --danger:#b91c1c; --ok:#047857; --warn:#b45309; }
-    * { box-sizing: border-box; }
+    * { box-sizing:border-box; }
     body { margin:0; font-family:"Segoe UI","Noto Sans TC",Arial,sans-serif; background:var(--bg); color:var(--text); }
-    .wrap { max-width:1280px; margin:0 auto; padding:28px; }
+    .wrap { max-width:1320px; margin:0 auto; padding:28px; }
     .top { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:20px; }
     h1 { margin:0 0 8px; font-size:28px; }
     h2 { margin:0 0 14px; font-size:20px; }
+    h3 { margin:0 0 10px; font-size:17px; }
     p { line-height:1.6; }
     .muted { color:var(--muted); }
     .nav { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0 20px; }
     .btn, button { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:9px 14px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--text); text-decoration:none; cursor:pointer; font-size:14px; }
-    .btn.primary, button.primary { background:var(--primary); color:#fff; border-color:var(--primary); }
+    .btn.active, .btn.primary, button.primary { background:var(--primary); color:#fff; border-color:var(--primary); }
     .btn.accent, button.accent { background:var(--accent); color:#fff; border-color:var(--accent); }
     .btn.danger, button.danger { background:#fff1f2; color:var(--danger); border-color:#fecdd3; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:0 4px 16px rgba(15,23,42,.04); margin-bottom:16px; }
@@ -35,9 +36,9 @@
     label { display:block; font-size:13px; color:#374151; margin:10px 0 6px; font-weight:600; }
     .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px 16px; }
     .message { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; padding:12px 14px; border-radius:12px; margin-bottom:16px; }
-    .authbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:flex-end; margin:0 0 12px; }
-    .authbar input { width:min(320px,100%); }
     pre { white-space:pre-wrap; background:#0f172a; color:#e5e7eb; padding:14px; border-radius:12px; overflow:auto; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+    .mini { font-size:12px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -45,92 +46,26 @@
     <div class="top">
       <div>
         <h1>CivicFix 公共服務資料急救站</h1>
-        <p class="muted">正式版核心：資料來源同步 → 急救單 → 補資料 → Gate → 查詢發布</p>
+        <p class="muted">資料來源同步 → 系統產生急救單 → 補資料 → Gate → 查詢發布</p>
       </div>
       <div class="nav">
         <a class="btn" href="/dashboard">原 Dashboard</a>
         <a class="btn" href="/dashboard/gap">Gap</a>
+        <a class="btn danger" href="/dashboard/civicfix/logout">登出</a>
       </div>
     </div>
-    <div class="authbar">
-      <input id="civicfixTokenInput" type="password" placeholder="ADMIN_TOKEN" autocomplete="current-password">
-      <button id="civicfixApplyTokenBtn" type="button">套用密碼</button>
-      <button id="civicfixClearTokenBtn" type="button">清除密碼</button>
+
+    {% set path = request.path %}
+    <div class="nav">
+      <a class="btn {% if path.startswith('/dashboard/civicfix/help') %}active{% endif %}" href="/dashboard/civicfix/help">使用說明</a>
+      <a class="btn {% if path.startswith('/dashboard/civicfix/tickets') %}active{% endif %}" href="/dashboard/civicfix/tickets">資料急救單</a>
+      <a class="btn {% if path.startswith('/dashboard/civicfix/sync') %}active{% endif %}" href="/dashboard/civicfix/sync">資料同步</a>
+      <a class="btn {% if path.startswith('/dashboard/civicfix/gate') %}active{% endif %}" href="/dashboard/civicfix/gate">Gate 審核</a>
+      <a class="btn {% if path.startswith('/civicfix/submit') %}active{% endif %}" href="/civicfix/submit">補資料</a>
     </div>
 
-    <div class="nav">
-      <a class="btn primary" href="/dashboard/civicfix">總覽</a>
-      <a class="btn" href="/dashboard/civicfix/sync">資料同步</a>
-      <a class="btn" href="/dashboard/civicfix/tickets">資料急救單</a>
-      <a class="btn" href="/dashboard/civicfix/tickets/new">手動單（進階）</a>
-      <a class="btn" href="/civicfix/submit">補資料</a>
-      <a class="btn" href="/dashboard/civicfix/gate">Gate</a>
-    </div>
     {% if message %}<div class="message">{{ message }}</div>{% endif %}
     {% block content %}{% endblock %}
   </div>
-
-  <script>
-    (function () {
-      const params = new URLSearchParams(window.location.search);
-      const queryToken = (params.get('token') || '').trim();
-      const storedToken = (sessionStorage.getItem('civicfix_admin_token') || sessionStorage.getItem('maintenance_token') || '').trim();
-      const token = queryToken || storedToken;
-      const tokenInput = document.getElementById('civicfixTokenInput');
-      const applyBtn = document.getElementById('civicfixApplyTokenBtn');
-      const clearBtn = document.getElementById('civicfixClearTokenBtn');
-
-      function saveToken(t) {
-        if (!t) return;
-        sessionStorage.setItem('civicfix_admin_token', t);
-        sessionStorage.setItem('maintenance_token', t);
-      }
-
-      function withTokenUrl(href, t) {
-        const url = new URL(href, window.location.origin);
-        url.searchParams.set('token', t);
-        return url.pathname + url.search + url.hash;
-      }
-
-      function applyTokenToPage(t) {
-        if (!t) return;
-        document.querySelectorAll('a[href^="/dashboard/civicfix"], a[href^="/civicfix"]').forEach(function (a) {
-          try { a.setAttribute('href', withTokenUrl(a.getAttribute('href'), t)); } catch (e) {}
-        });
-        document.querySelectorAll('form').forEach(function (form) {
-          let hidden = form.querySelector('input[name="token"]');
-          if (!hidden) {
-            hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = 'token';
-            form.appendChild(hidden);
-          }
-          hidden.value = t;
-        });
-      }
-
-      if (tokenInput && token) tokenInput.value = token;
-      if (queryToken) saveToken(queryToken);
-      applyTokenToPage(token);
-
-      if (applyBtn && tokenInput) {
-        applyBtn.addEventListener('click', function () {
-          const t = (tokenInput.value || '').trim();
-          if (!t) { alert('請先輸入 ADMIN_TOKEN'); return; }
-          saveToken(t);
-          window.location.href = withTokenUrl(window.location.pathname + window.location.search, t);
-        });
-      }
-
-      if (clearBtn && tokenInput) {
-        clearBtn.addEventListener('click', function () {
-          sessionStorage.removeItem('civicfix_admin_token');
-          sessionStorage.removeItem('maintenance_token');
-          tokenInput.value = '';
-          alert('已清除本分頁記住的密碼');
-        });
-      }
-    })();
-  </script>
 </body>
 </html>

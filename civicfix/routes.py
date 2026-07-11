@@ -1,9 +1,13 @@
+import hashlib
+import hmac
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from flask import jsonify, redirect, render_template, request, url_for
+from flask import jsonify, make_response, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 
 from civicfix.facilities import configure_facilities, get_civicfix_overview, get_recent_sync_logs
@@ -27,6 +31,9 @@ UPLOAD_DIR = None
 DATA_DIR = None
 _maintenance_auth_ok = None
 
+_CIVICFIX_COOKIE = "civicfix_admin_session"
+_CIVICFIX_COOKIE_MAX_AGE = 12 * 60 * 60
+
 
 def configure_civicfix(postgres_enabled, pg_connect, psycopg2_module, upload_dir=None, maintenance_auth_ok_func=None):
     global POSTGRES_ENABLED, _pg_connect, psycopg2, UPLOAD_DIR, DATA_DIR, _maintenance_auth_ok
@@ -43,48 +50,114 @@ def configure_civicfix(postgres_enabled, pg_connect, psycopg2_module, upload_dir
     configure_publish(postgres_enabled, pg_connect, psycopg2_module)
 
 
-def _current_admin_token():
-    # Keep this aligned with admin.routes._maintenance_auth_ok input sources.
-    try:
-        form_token = request.form.get("token") or ""
-    except Exception:
-        form_token = ""
-    json_token = ""
-    try:
-        data = request.get_json(silent=True) if request.is_json else None
-        if isinstance(data, dict):
-            json_token = data.get("token") or ""
-    except Exception:
-        json_token = ""
-    return (
-        request.headers.get("X-Admin-Token")
-        or request.args.get("token")
-        or form_token
-        or json_token
-        or ""
-    ).strip()
+def _admin_secret():
+    return (os.getenv("ADMIN_TOKEN") or "").strip()
 
 
-def _token_kwargs(extra=None):
-    token = _current_admin_token()
-    data = dict(extra or {})
-    if token:
-        data["token"] = token
-    return data
+def _cookie_signature(expires_at: str) -> str:
+    secret = _admin_secret()
+    if not secret:
+        return ""
+    return hmac.new(secret.encode("utf-8"), str(expires_at).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _make_cookie_value() -> str:
+    expires_at = str(int(time.time()) + _CIVICFIX_COOKIE_MAX_AGE)
+    return f"{expires_at}:{_cookie_signature(expires_at)}"
+
+
+def _cookie_auth_ok() -> bool:
+    raw = request.cookies.get(_CIVICFIX_COOKIE) or ""
+    try:
+        expires_at, sig = raw.split(":", 1)
+        if int(expires_at) < int(time.time()):
+            return False
+        expected = _cookie_signature(expires_at)
+        return bool(expected) and hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+
+def _request_token_ok() -> bool:
+    return bool(_maintenance_auth_ok and _maintenance_auth_ok())
+
+
+def _auth_ok() -> bool:
+    # Compatibility: direct ?token= / X-Admin-Token still works.
+    # Safer admin UX: after /dashboard/civicfix/login, a signed HttpOnly cookie is used.
+    return _cookie_auth_ok() or _request_token_ok()
+
+
+def _safe_next_path(next_path: str) -> str:
+    default = "/dashboard/civicfix/tickets"
+    if not next_path:
+        return default
+    raw = str(next_path).strip()
+    if not raw.startswith("/") or raw.startswith("//"):
+        return default
+
+    parts = urlsplit(raw)
+    if parts.scheme or parts.netloc:
+        return default
+
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "token"])
+    path = parts.path or default
+    return urlunsplit(("", "", path, query, parts.fragment))
 
 
 def _require_auth():
-    # CivicFix is an admin/development surface for now. Public citizen-facing
-    # endpoints can be reopened later after a separate abuse-control design.
-    if _maintenance_auth_ok and not _maintenance_auth_ok():
+    if not _auth_ok():
         if request.method == "GET":
             return render_template(
                 "civicfix_auth.html",
-                next_path=request.full_path if request.query_string else request.path,
+                next_path=_safe_next_path(request.full_path if request.query_string else request.path),
                 message="請輸入 ADMIN_TOKEN 後再進入 CivicFix 後台。",
             ), 401
         return "Unauthorized", 401
     return None
+
+
+def _token_kwargs(extra=None):
+    # Kept so older call sites still work, but do not propagate ADMIN_TOKEN in URLs anymore.
+    return dict(extra or {})
+
+
+def civicfix_login_page():
+    if _auth_ok():
+        return redirect(_safe_next_path(request.args.get("next") or "/dashboard/civicfix/tickets"))
+    return render_template(
+        "civicfix_auth.html",
+        next_path=_safe_next_path(request.args.get("next") or "/dashboard/civicfix/tickets"),
+        message="請輸入 ADMIN_TOKEN。",
+    )
+
+
+def civicfix_login():
+    if not _request_token_ok():
+        return render_template(
+            "civicfix_auth.html",
+            next_path=_safe_next_path(request.form.get("next_path") or "/dashboard/civicfix/tickets"),
+            message="密碼錯誤，請重新輸入 ADMIN_TOKEN。",
+        ), 401
+
+    next_path = _safe_next_path(request.form.get("next_path") or "/dashboard/civicfix/tickets")
+    resp = make_response(redirect(next_path))
+    resp.set_cookie(
+        _CIVICFIX_COOKIE,
+        _make_cookie_value(),
+        max_age=_CIVICFIX_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=bool(request.is_secure),
+        samesite="Lax",
+        path="/",
+    )
+    return resp
+
+
+def civicfix_logout():
+    resp = make_response(redirect(url_for("civicfix_login_page")))
+    resp.delete_cookie(_CIVICFIX_COOKIE, path="/")
+    return resp
 
 
 def _safe_data_path(local_path: str) -> str:
@@ -93,8 +166,6 @@ def _safe_data_path(local_path: str) -> str:
         return os.path.join(root, "public_toilets.csv")
 
     raw = str(local_path).strip().replace("\\", "/")
-    # Accept both "public_toilets.csv" and the common UI wording
-    # "data/public_toilets.csv", while still pinning reads to DATA_DIR.
     if raw.startswith("data/"):
         raw = raw[len("data/"):]
     if os.path.isabs(raw):
@@ -107,29 +178,40 @@ def _safe_data_path(local_path: str) -> str:
 
 
 def _validate_csv_filename(filename: str) -> str:
-    safe = secure_filename(filename or "")
-    if not safe:
+    raw = (filename or "").strip()
+    if not raw:
         raise ValueError("missing CSV filename")
-    if not safe.lower().endswith(".csv"):
+    if not raw.lower().endswith(".csv"):
         raise ValueError("only .csv uploads are allowed")
+
+    safe = secure_filename(raw)
+    # secure_filename("全國公廁建檔資料.csv") may become "csv" on some environments.
+    # Accept the original .csv extension, then fall back to a stable ASCII filename.
+    if not safe or "." not in safe:
+        return "public_toilets.csv"
+    if not safe.lower().endswith(".csv"):
+        safe = os.path.splitext(safe)[0] + ".csv"
     return safe
 
 
 def _db_required_response():
     if POSTGRES_ENABLED:
         return None
-    return render_template("civicfix_dashboard.html", overview={"postgres_enabled": False}, logs=[], message="CivicFix 需要 DATABASE_URL/Postgres 才能使用同步與急救單功能。")
+    return render_template("civicfix_help.html", message="CivicFix 需要 DATABASE_URL/Postgres 才能使用同步與急救單功能。")
 
 
 def civicfix_dashboard():
     auth_error = _require_auth()
     if auth_error:
         return auth_error
-    if not POSTGRES_ENABLED:
-        return _db_required_response()
-    overview = get_civicfix_overview()
-    logs = get_recent_sync_logs(8)
-    return render_template("civicfix_dashboard.html", overview=overview, logs=logs, message=request.args.get("message", ""))
+    return redirect(url_for("civicfix_tickets_page"))
+
+
+def civicfix_help():
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+    return render_template("civicfix_help.html", message=request.args.get("message", ""))
 
 
 def civicfix_sync_page():
@@ -169,7 +251,7 @@ def civicfix_sync_toilets():
         return render_template("civicfix_sync.html", logs=logs, result=result)
     except Exception as e:
         logs = get_recent_sync_logs(20)
-        return render_template("civicfix_sync.html", logs=logs, result={"ok": False, "error": str(e)}), 500
+        return render_template("civicfix_sync.html", logs=logs, result={"ok": False, "error": str(e)}), 400
 
 
 def _parse_ticket_evidence(ticket):
@@ -192,7 +274,7 @@ def _decorate_ticket(ticket):
         "gap_dashboard": "Gap 缺口",
         "toilet_feedbacks": "使用者回報",
         "source_sync_logs": "同步狀態",
-        "manual": "手動",
+        "manual": "手動備用",
     }.get(source, source)
     t["problem_label"] = {
         "no_result": "查無結果",
@@ -203,6 +285,7 @@ def _decorate_ticket(ticket):
         "outdated_official_data": "官方資料過期",
         "biggis_hotspot": "BigGIS 熱區",
     }.get(t.get("problem_type"), t.get("problem_type") or "未知")
+
     summary_bits = []
     for key, label in (
         ("effective_queries", "有效查詢"),
@@ -275,12 +358,12 @@ def civicfix_new_ticket():
         "lat": data.get("lat") or None,
         "lon": data.get("lon") or None,
         "problem_type": data.get("problem_type") or "no_result",
-        "evidence": {"manual_note": data.get("evidence") or ""},
+        "evidence": {"source": "manual", "manual_note": data.get("evidence") or ""},
         "suspected_reason": data.get("suspected_reason") or "",
         "suggested_action": data.get("suggested_action") or "",
         "priority_level": data.get("priority_level") or "medium",
     })
-    return redirect(url_for("civicfix_ticket_detail", **_token_kwargs({"ticket_id": ticket["id"]})))
+    return redirect(url_for("civicfix_ticket_detail", ticket_id=ticket["id"]))
 
 
 def civicfix_convert_feedback():
@@ -290,7 +373,7 @@ def civicfix_convert_feedback():
     if not POSTGRES_ENABLED:
         return _db_required_response()
     result = create_tickets_from_negative_feedback(limit=int(request.form.get("limit") or 300))
-    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({"message": f"已掃描 {result['scanned']} 筆回饋，建立 {result['created']} 張急救單"})))
+    return redirect(url_for("civicfix_tickets_page", message=f"已掃描 {result['scanned']} 筆回饋，建立 {result['created']} 張急救單"))
 
 
 def civicfix_convert_gap():
@@ -303,9 +386,7 @@ def civicfix_convert_gap():
         range_key=request.form.get("range") or "30d",
         limit=int(request.form.get("limit") or 10),
     )
-    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({
-        "message": f"已從 Gap Dashboard 掃描 {result['scanned']} 個缺口群，建立 {result['created']} 張急救單，略過重複 {result.get('skipped_duplicate', 0)} 張"
-    })))
+    return redirect(url_for("civicfix_tickets_page", message=f"已從 Gap Dashboard 掃描 {result['scanned']} 個缺口群，建立 {result['created']} 張急救單，略過重複 {result.get('skipped_duplicate', 0)} 張"))
 
 
 def civicfix_convert_sync_issues():
@@ -315,9 +396,7 @@ def civicfix_convert_sync_issues():
     if not POSTGRES_ENABLED:
         return _db_required_response()
     result = create_ticket_from_sync_status(stale_days=int(request.form.get("stale_days") or 30))
-    return redirect(url_for("civicfix_tickets_page", **_token_kwargs({
-        "message": f"同步狀態檢查完成：建立 {result.get('created', 0)} 張急救單（{result.get('reason', '')}）"
-    })))
+    return redirect(url_for("civicfix_tickets_page", message=f"同步狀態檢查完成：建立 {result.get('created', 0)} 張急救單（{result.get('reason', '')}）"))
 
 
 def civicfix_submit_page():
@@ -400,6 +479,42 @@ def civicfix_submit():
         conn.close()
 
 
+def _decode_risk_flags(raw):
+    if isinstance(raw, list):
+        return raw
+    try:
+        data = json.loads(raw or "[]")
+        return data if isinstance(data, list) else [str(data)]
+    except Exception:
+        if not raw:
+            return []
+        return [str(raw)]
+
+
+def _decorate_submission(row):
+    s = dict(row or {})
+    flags = _decode_risk_flags(s.get("risk_flags"))
+    s["risk_flag_list"] = flags
+    s["risk_flag_labels"] = [{
+        "missing_name": "缺名稱",
+        "invalid_coordinate": "座標異常",
+        "missing_coordinate": "缺座標",
+        "missing_photo": "缺照片",
+        "missing_placement_note": "缺位置描述",
+        "missing_access_note": "缺到達說明",
+        "looks_like_test_data": "疑似測試資料",
+        "low_info": "資訊不足",
+    }.get(f, f) for f in flags]
+    s["action_label"] = {
+        "approve": "建議通過",
+        "need_review": "建議人工查核",
+        "reject": "建議拒絕",
+        "approved": "已通過",
+        "rejected": "已拒絕",
+    }.get(s.get("verification_status"), s.get("verification_status") or "待處理")
+    return s
+
+
 def civicfix_gate_page():
     auth_error = _require_auth()
     if auth_error:
@@ -416,7 +531,7 @@ def civicfix_gate_page():
             ORDER BY created_at DESC
             LIMIT 200
         """)
-        submissions = [dict(r) for r in (cur.fetchall() or [])]
+        submissions = [_decorate_submission(dict(r)) for r in (cur.fetchall() or [])]
         return render_template("civicfix_gate.html", submissions=submissions, message=request.args.get("message", ""))
     finally:
         conn.close()
@@ -426,8 +541,8 @@ def civicfix_gate_approve(submission_id):
     auth_error = _require_auth()
     if auth_error:
         return auth_error
-    result = approve_submission(int(submission_id))
-    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已通過 submission #{submission_id}"})))
+    approve_submission(int(submission_id))
+    return redirect(url_for("civicfix_gate_page", message=f"已通過 submission #{submission_id}"))
 
 
 def civicfix_gate_reject(submission_id):
@@ -436,7 +551,7 @@ def civicfix_gate_reject(submission_id):
         return auth_error
     reason = request.form.get("reason") or ""
     reject_submission(int(submission_id), reason=reason)
-    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已拒絕 submission #{submission_id}"})))
+    return redirect(url_for("civicfix_gate_page", message=f"已拒絕 submission #{submission_id}"))
 
 
 def civicfix_gate_need_review(submission_id):
@@ -444,7 +559,7 @@ def civicfix_gate_need_review(submission_id):
     if auth_error:
         return auth_error
     mark_need_review(int(submission_id))
-    return redirect(url_for("civicfix_gate_page", **_token_kwargs({"message": f"已標記待查核 submission #{submission_id}"})))
+    return redirect(url_for("civicfix_gate_page", message=f"已標記待查核 submission #{submission_id}"))
 
 
 def api_civicfix_overview():
@@ -456,6 +571,10 @@ def api_civicfix_overview():
 
 def register_civicfix_routes(app):
     app.add_url_rule("/dashboard/civicfix", endpoint="civicfix_dashboard", view_func=civicfix_dashboard, methods=["GET"])
+    app.add_url_rule("/dashboard/civicfix/login", endpoint="civicfix_login_page", view_func=civicfix_login_page, methods=["GET"])
+    app.add_url_rule("/dashboard/civicfix/login", endpoint="civicfix_login", view_func=civicfix_login, methods=["POST"])
+    app.add_url_rule("/dashboard/civicfix/logout", endpoint="civicfix_logout", view_func=civicfix_logout, methods=["GET", "POST"])
+    app.add_url_rule("/dashboard/civicfix/help", endpoint="civicfix_help", view_func=civicfix_help, methods=["GET"])
     app.add_url_rule("/dashboard/civicfix/sync", endpoint="civicfix_sync_page", view_func=civicfix_sync_page, methods=["GET"])
     app.add_url_rule("/dashboard/civicfix/sync/toilets", endpoint="civicfix_sync_toilets", view_func=civicfix_sync_toilets, methods=["POST"])
     app.add_url_rule("/dashboard/civicfix/tickets", endpoint="civicfix_tickets_page", view_func=civicfix_tickets_page, methods=["GET"])

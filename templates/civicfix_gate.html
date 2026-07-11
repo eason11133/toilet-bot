@@ -1,14 +1,19 @@
 {% extends "civicfix_base.html" %}
 {% block content %}
 <div class="card">
+  <h2>Gate 審核說明</h2>
+  <p class="muted">Gate 不是 AI 判真偽。它是資料進查詢服務前的規則式檢查，先看座標、名稱、補充類型、照片、位置描述、到達說明與可疑測試資料，再給出「建議通過 / 人工查核 / 拒絕」。</p>
+</div>
+
+<div class="card">
   <h2>Gate 待審核資料</h2>
   <table>
-    <thead><tr><th>ID</th><th>狀態</th><th>類型</th><th>名稱/設施</th><th>補充內容</th><th>分數</th><th>風險</th><th>動作</th></tr></thead>
+    <thead><tr><th>ID</th><th>Gate 建議</th><th>補充類型</th><th>名稱/設施</th><th>補充內容</th><th>分數</th><th>風險標籤</th><th>動作</th></tr></thead>
     <tbody>
     {% for s in submissions %}
       <tr>
         <td>{{ s.id }}</td>
-        <td><span class="tag {% if s.verification_status == 'approve' %}ok{% elif s.verification_status == 'need_review' %}warn{% endif %}">{{ s.verification_status }}</span></td>
+        <td><span class="tag {% if s.verification_status == 'approve' %}ok{% elif s.verification_status == 'need_review' %}warn{% elif s.verification_status == 'reject' %}danger{% endif %}">{{ s.action_label }}</span></td>
         <td>{{ s.facility_type }}<br><span class="muted">{{ s.submission_type }}</span></td>
         <td>{{ s.name or ('facility #' ~ s.related_facility_id) }}<br><span class="muted">{{ s.address }}</span></td>
         <td>
@@ -16,15 +21,29 @@
           {% if s.placement_note %}<div>位置：{{ s.placement_note }}</div>{% endif %}
           {% if s.access_note %}<div>到達：{{ s.access_note }}</div>{% endif %}
           {% if s.status_note %}<div>狀態：{{ s.status_note }}</div>{% endif %}
+          {% if not s.photo_url and not s.placement_note and not s.access_note and not s.status_note %}
+            <span class="muted">沒有補充內容</span>
+          {% endif %}
         </td>
-        <td>{{ s.verification_score }}<br>{{ s.trust_level }} / {{ s.field_info_level }}</td>
-        <td><pre style="max-width:220px;">{{ s.risk_flags }}</pre></td>
+        <td>
+          <b>{{ s.verification_score }}</b><br>
+          <span class="muted">{{ s.trust_level }} / {{ s.field_info_level }}</span>
+        </td>
+        <td>
+          {% for f in s.risk_flag_labels %}
+            <span class="tag warn">{{ f }}</span>
+          {% else %}
+            <span class="tag ok">無明顯風險</span>
+          {% endfor %}
+        </td>
         <td>
           <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/approve" style="margin-bottom:6px;"><button class="accent" type="submit">通過發布</button></form>
           <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/need-review" style="margin-bottom:6px;"><button type="submit">待查核</button></form>
           <form method="post" action="/dashboard/civicfix/gate/{{ s.id }}/reject"><input name="reason" placeholder="拒絕原因" style="margin-bottom:6px;"><button class="danger" type="submit">拒絕</button></form>
         </td>
       </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">目前沒有待 Gate 審核的補資料。</td></tr>
     {% endfor %}
     </tbody>
   </table>

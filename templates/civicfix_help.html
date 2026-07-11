@@ -1,0 +1,52 @@
+{% extends "civicfix_base.html" %}
+{% block content %}
+<div class="card">
+  <h2>CivicFix 這版到底在做什麼</h2>
+  <p>CivicFix 不是新的公廁查詢 Bot，也不是讓使用者手填急救單。它是你原本公廁平台的「資料維護引擎」。</p>
+  <pre>政府資料 / 查詢紀錄 / 使用者回報 / BigGIS 缺口
+        ↓
+系統產生資料急救單
+        ↓
+補資料或修正資料
+        ↓
+Gate 規則式驗證
+        ↓
+通過後回到查詢資料，讓 LINE Bot 結果變好</pre>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>1. 資料同步</h3>
+    <p class="muted">把環境部公廁 CSV 同步到 facilities。重點不是重新做資料庫，而是讓官方資料可更新，避免你本機幾個月前的資料變死資料。</p>
+  </div>
+  <div class="card">
+    <h3>2. 資料急救單</h3>
+    <p class="muted">急救單應該從後端資料產生：Gap Dashboard、使用者回報、同步狀態。手動建立只是備用工具。</p>
+  </div>
+  <div class="card">
+    <h3>3. 補資料</h3>
+    <p class="muted">急救單出來後，管理者或未來民眾補新點位、修正狀態、補照片、補位置描述。</p>
+  </div>
+  <div class="card">
+    <h3>4. Gate</h3>
+    <p class="muted">Gate 用規則式檢查補資料能不能進查詢服務。它不是 AI，也不是學術模型。</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>使用者回報吃什麼資料？</h2>
+  <p>目前吃原本公廁 Bot 後台的 <b>toilet_feedbacks</b>。它會找「不存在、找不到、關閉、不可用」這類負面回報，整理成 <b>unavailable_reported</b> 急救單。原本 feedback 不會被刪掉或修改。</p>
+</div>
+
+<div class="card">
+  <h2>目前跟你原本缺口分析差在哪</h2>
+  <p>缺口分析負責「找問題」。CivicFix 負責「把問題變成任務，追蹤處理，最後回到查詢服務」。</p>
+  <pre>缺口分析：發現哪裡查不到 / 哪裡低覆蓋
+CivicFix：產生急救單 → 補資料 → Gate → 發布 → 改善 LINE Bot 查詢</pre>
+</div>
+
+<div class="card">
+  <h2>現在還沒完成的最後一段</h2>
+  <p class="muted">目前這版重點是後台治理流程。下一步要做的是：Gate 通過或急救單處理後，真正影響原本 30,000+ 使用者正在用的 LINE Bot 查詢結果。</p>
+</div>
+{% endblock %}
