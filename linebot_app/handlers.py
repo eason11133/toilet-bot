@@ -25,8 +25,8 @@ from core.i18n import (
     set_user_lang, get_user_lang, T, L, _localize_outgoing_messages,
 )
 from core.utils import norm_coord, haversine
-from linebot_app.reply_tokens import CHANNEL_ACCESS_TOKEN, show_loading
-from linebot_app.dedupe import is_duplicate_and_mark_event
+from linebot_app.reply_tokens import CHANNEL_ACCESS_TOKEN, claim_reply_token, show_loading
+from linebot_app.dedupe import is_duplicate_and_mark_event, is_redelivery
 from linebot_app.replies import (
     make_location_quick_reply,
     make_retry_location_text,
@@ -261,6 +261,10 @@ def safe_reply(event, messages):
         logging.warning("[safe_reply] no reply_token; skip (push disabled).")
         return
 
+    if not claim_reply_token(reply_token):
+        logging.info("[safe_reply] reply token already claimed; skip duplicate reply.")
+        return
+
     try:
         line_bot_api.reply_message(reply_token, messages)
         return
@@ -285,8 +289,12 @@ def safe_reply(event, messages):
 
 def _too_old_to_reply(event, limit_seconds=None):
     try:
+        # A redelivered event receives a renewed one-minute reply window. LINE
+        # keeps the original event timestamp, so age cannot be judged from it.
+        if is_redelivery(event):
+            return False
         if limit_seconds is None:
-            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "1800"))
+            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "50"))
 
         evt_ms = int(getattr(event, "timestamp", 0))
         if evt_ms <= 0:
@@ -783,6 +791,9 @@ def handle_text(event):
         logging.warning("[handle_text] event too old; skip reply.")
         return
 
+    if is_duplicate_and_mark_event(event):
+        return
+
     uid = event.source.user_id
     text_raw = event.message.text or ""
 
@@ -823,9 +834,6 @@ def handle_text(event):
     # =========================
     # 🚫 重複事件 / 同意條款 gate
     # =========================
-    if is_duplicate_and_mark_event(event):
-        return
-
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
@@ -1039,6 +1047,8 @@ def handle_location(event):
     if _too_old_to_reply(event):
         logging.warning("[handle_location] event too old; skip reply.")
         return
+    if is_duplicate_and_mark_event(event):
+        return
     uid = event.source.user_id
     show_loading(uid, seconds=15)
     lat = event.message.latitude
@@ -1061,9 +1071,6 @@ def handle_location(event):
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
         safe_reply(event, gate_msg)
-        return
-
-    if is_duplicate_and_mark_event(event):
         return
 
     # 記下使用者最近一次的位置
@@ -1197,6 +1204,12 @@ def handle_location(event):
         _release_loc_slot()
 
 def handle_postback(event):
+    if _too_old_to_reply(event):
+        logging.warning("[handle_postback] event too old; skip reply.")
+        return
+    if is_duplicate_and_mark_event(event):
+        return
+
     uid = event.source.user_id
     data_raw = (event.postback.data or "").strip()
 
@@ -1281,9 +1294,6 @@ def handle_postback(event):
     # =========================
     # 2️⃣ 重複事件擋掉
     # =========================
-    if is_duplicate_and_mark_event(event):
-        return
-
     # =========================
     # 3️⃣ 同意條款 gate
     # =========================

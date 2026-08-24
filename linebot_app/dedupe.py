@@ -5,9 +5,10 @@ import threading
 import time
 
 from linebot.models import MessageEvent, TextMessage, LocationMessage, PostbackEvent
+from core.database import POSTGRES_ENABLED, _pg_connect
 
 # === 防重複（簡單版：避免同一 webhook 在短時間內重複處理）===
-DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "10"))
+DEDUPE_WINDOW = int(os.getenv("DEDUPE_WINDOW", "60"))
 _DEDUPE_SIMPLE_LOCK = threading.Lock()
 _RECENT_EVENTS_SIMPLE = {}
 
@@ -40,6 +41,10 @@ def is_duplicate_and_mark(key: str, window: int = DEDUPE_WINDOW) -> bool:
 def _event_type_and_key(event):
     """回傳 (event_type, dedupe_key)。盡量使用 LINE event 的穩定欄位組 key。"""
     try:
+        webhook_event_id = getattr(event, "webhook_event_id", None)
+        if webhook_event_id:
+            return "webhook", f"webhook_event_id|{webhook_event_id}"
+
         source = getattr(event, "source", None)
         uid = getattr(source, "user_id", "") or ""
         ts = str(getattr(event, "timestamp", "") or "")
@@ -75,16 +80,49 @@ def _event_type_and_key(event):
 
 
 def is_duplicate_and_mark_event(event, window: int = DEDUPE_WINDOW) -> bool:
-    """事件級防重複：
-    - 若 LINE 標記為 redelivery，直接略過
-    - 其餘事件用穩定 key 在短時間內去重
-    """
+    """Atomically mark an event, using Postgres across workers when available."""
     try:
-        if is_redelivery(event):
-            logging.info("🔁 skip redelivery event")
-            return True
-
         event_type, key = _event_type_and_key(event)
+        if POSTGRES_ENABLED:
+            conn = None
+            cur = None
+            try:
+                conn = _pg_connect()
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO line_webhook_events (event_key) VALUES (%s) "
+                    "ON CONFLICT (event_key) DO NOTHING RETURNING event_key",
+                    (key,),
+                )
+                inserted = cur.fetchone() is not None
+                if inserted and hash(key) % 100 == 0:
+                    cur.execute(
+                        "DELETE FROM line_webhook_events "
+                        "WHERE created_at < NOW() - INTERVAL '24 hours'"
+                    )
+                conn.commit()
+                if not inserted:
+                    logging.info(f"skip duplicate {event_type}: {key}")
+                return not inserted
+            except Exception as e:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                logging.warning(f"persistent webhook dedupe failed; using local fallback: {e}")
+            finally:
+                if cur is not None:
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
         duplicated = is_duplicate_and_mark(key, window=window)
         if duplicated:
             logging.info(f"🔁 skip duplicate {event_type}: {key}")
@@ -100,4 +138,3 @@ def is_redelivery(event) -> bool:
         return bool(getattr(dc, "is_redelivery", False))
     except Exception:
         return False
-

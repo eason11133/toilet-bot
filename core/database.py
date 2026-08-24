@@ -66,6 +66,22 @@ def init_persistent_store():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
 
+        # Shared idempotency state for all Gunicorn workers.
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS line_webhook_events (
+            event_key TEXT PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_line_webhook_events_created_at ON line_webhook_events(created_at)")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS line_reply_tokens (
+            token_hash TEXT PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_line_reply_tokens_created_at ON line_reply_tokens(created_at)")
+
         # === User-added toilets ===
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_toilets (
@@ -613,4 +629,3 @@ def _start_persistent_store_init_background():
         logging.info("⏳ Postgres init scheduled in background")
     except Exception as e:
         logging.error(f"❌ failed to start Postgres init thread: {e}", exc_info=True)
-
