@@ -70,18 +70,6 @@
 | --- | --- |
 | `routes.py` | 投稿清單、人工審核、重新驗證與維護摘要 |
 
-## `civicfix/`：公共設施資料維護
-
-| 檔案／目錄 | 職責 |
-| --- | --- |
-| `routes.py` | CivicFix 頁面、驗證、同步、工單與 Gate 路由 |
-| `sync.py` | 正規化後的設施資料批次 upsert 與同步紀錄 |
-| `rescue.py` | 從負面回饋、缺口及同步問題建立維護工單 |
-| `gate.py` | 投稿基本品質與座標規則評估 |
-| `publish.py` | 核准、拒絕、待複查與正式資料發布 |
-| `facilities.py` | 設施資料查詢與彙整 |
-| `source_adapters/` | 將外部來源轉為系統統一欄位；目前包含環境部廁所 CSV adapter |
-
 ## `features/`：跨功能使用體驗
 
 | 檔案 | 職責 |
@@ -92,7 +80,7 @@
 
 | 目錄 | 職責 |
 | --- | --- |
-| `templates/` | LIFF、回饋、儀表板、管理與 CivicFix HTML templates |
+| `templates/` | LIFF、回饋、儀表板與管理 HTML templates |
 | `data/` | 政府公共廁所 CSV 與本機資料檔 |
 | `models/` | scikit-learn 清潔度模型及 encoders |
 | `lang/` | 中英文 JSON 文字資源 |
@@ -107,4 +95,3 @@
 - 想理解推薦：`toilet/search.py` → `toilet/scoring.py` → `toilet/recommendation_logs.py`
 - 想理解資料品質：`toilet/submission.py` → `toilet/auto_verify.py` → `admin/routes.py`
 - 想理解研究分析：`dashboard/routes.py` → `dashboard/gap_analysis.py` → `dashboard/nts_routes.py`
-- 想理解維護閉環：`civicfix/rescue.py` → `civicfix/gate.py` → `civicfix/publish.py`

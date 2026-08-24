@@ -52,22 +52,21 @@ flowchart TD
     T --> DB
     F --> DB
     DB --> A["Dashboard / Gap Analysis"]
-    A --> R["CivicFix Rescue Tickets"]
-    R --> G["人工 Gate 審核"]
-    G --> P["Publish / 修正正式資料"]
+    A --> G["管理端人工審核"]
+    G --> P["核准、拒絕或重新驗證"]
     P --> DB
 ```
 
 - 投稿先經 `auto_verify.py` 檢查座標、文字品質、重複性與空間背景。
 - 回饋與狀態資料會影響管理資訊及部分推薦訊號。
 - `dashboard/` 將事件轉成使用趨勢、服務缺口與來源品質指標。
-- `civicfix/` 將資料問題轉為可追蹤工單，再經人工審核發布。
+- `admin/` 提供投稿審核、重新驗證與維護摘要。
 
 ## 3. 儲存層
 
 | 儲存來源 | 用途 | 主要模組 |
 | --- | --- | --- |
-| PostgreSQL | 投稿、回饋、狀態、收藏、分析、推薦紀錄、CivicFix 與跨 worker 去重 | `core/database.py` |
+| PostgreSQL | 投稿、回饋、狀態、收藏、分析、推薦紀錄與跨 worker 去重 | `core/database.py` |
 | SQLite | 本機查詢快取、語言設定、搜尋與分析輔助資料 | `core/database.py` |
 | CSV | 基礎公共廁所資料 | `data/public_toilets.csv`、`toilet/data_sources.py` |
 | PKL 模型 | 清潔度分類與標籤編碼 | `models/`、`toilet/cleanliness.py` |
@@ -84,7 +83,6 @@ PostgreSQL 是多 worker 間需要共享狀態時的正式來源；記憶體與 
 | `toilet` | 廁所領域邏輯與使用者資料 | 管理儀表板呈現 |
 | `dashboard` | 分析聚合與視覺化 API | 修改正式廁所資料 |
 | `admin` | 人工審核與管理操作 | 一般使用者聊天流程 |
-| `civicfix` | 資料同步、問題救援、審核與發布 | LINE webhook transport |
 | `features` | 跨領域的成就、徽章與 AI 使用功能 | 基礎資料庫連線管理 |
 
 ## 5. 可靠性與安全邊界
@@ -93,7 +91,7 @@ PostgreSQL 是多 worker 間需要共享狀態時的正式來源；記憶體與 
 - `webhookEventId` 與 reply token 使用 PostgreSQL 原子 claim，避免 Gunicorn workers 重複回覆。
 - reply token 不做 push fallback，避免非預期主動訊息與重複通知。
 - 外部資料查詢設有 timeout；OpenStreetMap 只在主要資料不足時 fallback。
-- 管理與 CivicFix 操作使用 token／cookie 驗證。
+- 管理操作使用 token 驗證。
 - `.env`、服務帳號、SQLite runtime DB 與 Python cache 均不應進入版本控制。
 
 ## 6. 部署啟動順序
