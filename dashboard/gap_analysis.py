@@ -323,17 +323,27 @@ def _gap_add_metrics(obj, event, low_threshold, slow_ms):
     obj["slow_query_count"] = obj.get("slow_query_count", 0) + (1 if rt >= slow_ms else 0)
     obj["success_count"] = obj.get("success_count", 0) + (1 if success else 0)
     if rt > 0:
-        obj.setdefault("response_values", []).append(rt)
+        obj["response_sum"] = obj.get("response_sum", 0) + rt
+        obj["response_count"] = obj.get("response_count", 0) + 1
     obj.setdefault("user_set", set()).add(event.get("user_key") or "anon")
     obj.setdefault("day_set", set()).add(event.get("day_key") or "unknown")
     obj["raw_queries"] = obj.get("raw_queries", 0) + int(event.get("raw_weight") or 1)
 def _gap_finish_row(r):
     vals = r.pop("response_values", [])
+    response_sum = int(r.pop("response_sum", 0) or 0)
+    response_count = int(r.pop("response_count", 0) or 0)
+    if vals:
+        response_sum += sum(vals)
+        response_count += len(vals)
     user_set = r.pop("user_set", set())
     day_set = r.pop("day_set", set())
     total = int(r.get("effective_queries") or r.get("total_queries") or 0)
-    avg_rt = round(sum(vals) / len(vals)) if vals else 0
+    avg_rt = round(response_sum / response_count) if response_count else 0
     r["avg_response_ms"] = avg_rt
+    # Keep exact aggregates until higher-level clusters are finished. These
+    # private fields are removed before the API response is serialized.
+    r["_response_sum"] = response_sum
+    r["_response_count"] = response_count
     r["unique_users"] = len(user_set) if isinstance(user_set, set) else int(r.get("unique_users") or 0)
     r["active_days"] = len(day_set) if isinstance(day_set, set) else int(r.get("active_days") or 0)
     r["no_result_rate"] = round((int(r.get("no_result_count") or 0) / max(total, 1)) * 100, 1)
@@ -380,6 +390,17 @@ def _gap_cluster_rows(rows, radius_m=500):
         candidates.append(dict(r))
 
     candidates.sort(key=lambda x: (float(x.get("gap_score") or 0), int(x.get("effective_queries") or 0)), reverse=True)
+    # Bucket candidates before greedy clustering. The previous implementation
+    # compared every seed with every point (O(N²)), which made an all-history
+    # dashboard appear to hang as the number of unique grids grew.
+    cell_deg = max(float(radius_m) / 111000.0, 0.0001)
+    spatial_index = {}
+    for idx, candidate in enumerate(candidates):
+        key = (
+            math.floor(float(candidate["lat"]) / cell_deg),
+            math.floor(float(candidate["lon"]) / cell_deg),
+        )
+        spatial_index.setdefault(key, []).append(idx)
     used = set()
     clusters = []
 
@@ -388,9 +409,27 @@ def _gap_cluster_rows(rows, radius_m=500):
             continue
         members = []
         seed_lat, seed_lon = float(seed["lat"]), float(seed["lon"])
-        for j, r in enumerate(candidates):
+        lat_delta = float(radius_m) / 111000.0
+        lon_delta = float(radius_m) / (
+            111000.0 * max(0.1, math.cos(math.radians(seed_lat)))
+        )
+        min_key = (
+            math.floor((seed_lat - lat_delta) / cell_deg),
+            math.floor((seed_lon - lon_delta) / cell_deg),
+        )
+        max_key = (
+            math.floor((seed_lat + lat_delta) / cell_deg),
+            math.floor((seed_lon + lon_delta) / cell_deg),
+        )
+        nearby_indices = []
+        for lat_key in range(min_key[0], max_key[0] + 1):
+            for lon_key in range(min_key[1], max_key[1] + 1):
+                nearby_indices.extend(spatial_index.get((lat_key, lon_key), ()))
+        # Preserve the old greedy order so equal input produces equal clusters.
+        for j in sorted(nearby_indices):
             if j in used:
                 continue
+            r = candidates[j]
             d = _gap_haversine_m(seed_lat, seed_lon, r.get("lat"), r.get("lon"))
             if d <= radius_m:
                 used.add(j)
@@ -442,7 +481,13 @@ def _gap_cluster_rows(rows, radius_m=500):
             "sample_queries": sum([m.get("sample_queries") or [] for m in members], [])[:6],
             "map_url": _gap_google_maps_url(center_lat, center_lon),
         }
-        agg = _gap_finish_row({**agg, "response_values": sum([m.get("response_values_raw") or [] for m in members], []), "user_set": set(), "day_set": set()})
+        agg = _gap_finish_row({
+            **agg,
+            "response_sum": sum(int(m.get("_response_sum") or 0) for m in members),
+            "response_count": sum(int(m.get("_response_count") or 0) for m in members),
+            "user_set": set(),
+            "day_set": set(),
+        })
         # _gap_finish_row 會以空 set 覆蓋 unique_users；補回聚合值並重算關鍵欄位
         agg["unique_users"] = max(sum(int(m.get("unique_users") or 0) for m in members), 0)
         agg["active_days"] = max([int(m.get("active_days") or 0) for m in members] or [0])
@@ -463,6 +508,7 @@ def _gap_cluster_rows(rows, radius_m=500):
     clusters.sort(key=lambda x: (float(x.get("gap_score") or 0), int(x.get("effective_queries") or 0)), reverse=True)
     return clusters
 def _build_gap_summary(range_key="all", anchor_date=None):
+    build_started = time.perf_counter()
     if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
         range_key = "all"
 
@@ -585,19 +631,26 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             duplicate_skipped += 1
             continue
         last_seen[dedupe_key] = minute
-        ee = dict(e)
+        # Query rows are private to this request, so annotate them in place.
+        # Copying every accepted event doubled memory on all-history analysis.
+        ee = e
         ee["user_key"] = user_key
         ee["cell_key"] = cell_key
         ee["day_key"] = _gap_day_key(e.get("created_at"))
         ee["raw_weight"] = 1
         deduped.append(ee)
 
+    # The accepted rows are now referenced by deduped; release the original
+    # container before building area/grid aggregates.
+    del events
+
     total_queries = len(deduped)
     no_result_count = 0
     low_result_count = 0
     slow_query_count = 0
     success_count = 0
-    response_values = []
+    response_sum = 0
+    response_count = 0
     area_map = {}
     grid_map = {}
     all_users = set()
@@ -620,7 +673,8 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         if rt >= SLOW_QUERY_MS:
             slow_query_count += 1
         if rt > 0:
-            response_values.append(rt)
+            response_sum += rt
+            response_count += 1
 
         if area not in area_map:
             area_map[area] = {
@@ -632,7 +686,8 @@ def _build_gap_summary(range_key="all", anchor_date=None):
                 "low_result_count": 0,
                 "slow_query_count": 0,
                 "success_count": 0,
-                "response_values": [],
+                "response_sum": 0,
+                "response_count": 0,
                 "user_set": set(),
                 "day_set": set(),
             }
@@ -658,8 +713,8 @@ def _build_gap_summary(range_key="all", anchor_date=None):
                     "low_result_count": 0,
                     "slow_query_count": 0,
                     "success_count": 0,
-                    "response_values": [],
-                    "response_values_raw": [],
+                    "response_sum": 0,
+                    "response_count": 0,
                     "user_set": set(),
                     "day_set": set(),
                     "day_hint": e.get("day_key"),
@@ -668,8 +723,6 @@ def _build_gap_summary(range_key="all", anchor_date=None):
                 }
             g = grid_map[gkey]
             _gap_add_metrics(g, e, LOW_RESULT_THRESHOLD, SLOW_QUERY_MS)
-            if rt > 0:
-                g.setdefault("response_values_raw", []).append(rt)
             sample = _gap_sample_event(e)
             if sample and (rc == 0 or rc <= LOW_RESULT_THRESHOLD or rt >= SLOW_QUERY_MS):
                 if len(g.get("sample_queries") or []) < 5:
@@ -683,7 +736,17 @@ def _build_gap_summary(range_key="all", anchor_date=None):
 
     clusters = _gap_cluster_rows(hotspot_rows, radius_m=CLUSTER_RADIUS_M)
 
-    avg_response = round(sum(response_values) / len(response_values)) if response_values else 0
+    for row in area_rows:
+        row.pop("_response_sum", None)
+        row.pop("_response_count", None)
+    for row in hotspot_rows:
+        row.pop("_response_sum", None)
+        row.pop("_response_count", None)
+    for row in clusters:
+        row.pop("_response_sum", None)
+        row.pop("_response_count", None)
+
+    avg_response = round(response_sum / response_count) if response_count else 0
     top_area = area_rows[0]["area_name"] if area_rows else "-"
     top_cluster = clusters[0]["center"] if clusters else "-"
     classified_queries = sum(int(r.get("effective_queries") or 0) for r in area_rows if not str(r.get("area_name") or "").startswith("待分類") and r.get("area_name") != "其他區域")
@@ -713,7 +776,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     GAP_PRECISE_HOTSPOT_LIMIT = _gap_output_limit("GAP_PRECISE_HOTSPOT_LIMIT", "0")
     GAP_RECOMMENDED_LIMIT = _gap_output_limit("GAP_RECOMMENDED_LIMIT", "10") or 10
 
-    return {
+    result = {
         "ok": True,
         "version": "demand_gap_v7_taiwan_valid_unlimited_points",
         "range": range_key,
@@ -769,3 +832,13 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "OSM fallback 或慢查詢高的區域，通常優先做本地資料補強，降低外部 API 延遲。"
         ]
     }
+    logging.info(
+        "gap summary built: range=%s raw=%s effective=%s hotspots=%s clusters=%s elapsed_ms=%s",
+        range_key,
+        raw_total_queries,
+        total_queries,
+        len(hotspot_rows),
+        len(clusters),
+        round((time.perf_counter() - build_started) * 1000),
+    )
+    return result
