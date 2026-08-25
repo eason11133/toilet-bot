@@ -54,26 +54,9 @@ Toilet Bot 以 LINE 作為入口。使用者只要傳送目前位置，系統就
 
 ## 系統運作方式
 
-```mermaid
-flowchart LR
-    U["LINE 使用者"] --> W["Webhook 與同意檢查"]
-    W --> Q["位置搜尋服務"]
-    Q --> D1["政府 CSV"]
-    Q --> D2["PostgreSQL 使用者資料"]
-    Q --> D3["OpenStreetMap / Overpass"]
-    D1 --> M["合併與空間去重"]
-    D2 --> M
-    D3 --> M
-    M --> N["NTS 排名"]
-    N --> R["LINE Flex Message 回覆"]
-    U --> F["回饋、狀態與新增資料"]
-    F --> DB["PostgreSQL"]
-    W --> A["Analytics"]
-    DB --> A
-    A --> G["Dashboard / Gap Analysis"]
-    G --> C["管理端審核與資料維護"]
-    C --> DB
-```
+![Toilet Bot 系統流程：LINE 查詢、多來源資料、可信排序與需求缺口分析](docs/images/toilet-bot-system-flow.png)
+
+這張圖呈現兩條互相連接的流程：左側是使用者新增、狀態與清潔度回報經過檢查及後台審核；中間是多來源資料經距離篩選、Top-k 候選保留及可信排序後回覆使用者；右側則把查詢太慢、低覆蓋與查無結果整理成需求圈和缺口分析 Dashboard。
 
 完整的元件與資料流說明請見 [ARCHITECTURE.md](ARCHITECTURE.md)，逐檔職責請見 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。
 
