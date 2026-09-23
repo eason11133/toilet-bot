@@ -26,7 +26,7 @@ from core.i18n import (
 )
 from core.utils import norm_coord, haversine
 from linebot_app.reply_tokens import CHANNEL_ACCESS_TOKEN, claim_reply_token, show_loading
-from linebot_app.dedupe import is_duplicate_and_mark_event, is_redelivery
+from linebot_app.dedupe import is_duplicate_and_mark_event
 from linebot_app.replies import (
     make_location_quick_reply,
     make_retry_location_text,
@@ -307,24 +307,6 @@ def safe_reply(event, messages):
     except Exception as ex:
         logging.error(f"[safe_reply] unexpected error: {ex}", exc_info=True)
         return
-
-def _too_old_to_reply(event, limit_seconds=None):
-    try:
-        # A redelivered event receives a renewed one-minute reply window. LINE
-        # keeps the original event timestamp, so age cannot be judged from it.
-        if is_redelivery(event):
-            return False
-        if limit_seconds is None:
-            limit_seconds = int(os.getenv("MAX_EVENT_AGE_SEC", "50"))
-
-        evt_ms = int(getattr(event, "timestamp", 0))
-        if evt_ms <= 0:
-            return False
-
-        now_ms = int(time.time() * 1000)
-        return (now_ms - evt_ms) > (limit_seconds * 1000)
-    except Exception:
-        return False
 
 def reply_only(event, messages):
     try:
@@ -808,10 +790,6 @@ def get_user_loc_mode(uid):
         return user_loc_mode.get(uid, "normal")
 
 def handle_text(event):
-    if _too_old_to_reply(event):
-        logging.warning("[handle_text] event too old; skip reply.")
-        return
-
     if is_duplicate_and_mark_event(event):
         return
 
@@ -1065,9 +1043,6 @@ def handle_text(event):
         )
 
 def handle_location(event):
-    if _too_old_to_reply(event):
-        logging.warning("[handle_location] event too old; skip reply.")
-        return
     if is_duplicate_and_mark_event(event):
         return
     uid = event.source.user_id
@@ -1225,9 +1200,6 @@ def handle_location(event):
         _release_loc_slot()
 
 def handle_postback(event):
-    if _too_old_to_reply(event):
-        logging.warning("[handle_postback] event too old; skip reply.")
-        return
     if is_duplicate_and_mark_event(event):
         return
 
