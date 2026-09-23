@@ -283,9 +283,9 @@
     map = L.map('gapMap', { zoomControl:true, scrollWheelZoom:true, preferCanvas:true }).setView(DEFAULT_CENTER, 12);
     if (!map.getPane('demandDotsPane')) { map.createPane('demandDotsPane'); map.getPane('demandDotsPane').style.zIndex = 660; }
     if (!map.getPane('demandPinsPane')) { map.createPane('demandPinsPane'); map.getPane('demandPinsPane').style.zIndex = 720; }
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap &copy; CARTO'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'
     }).addTo(map);
     heatLayer = L.layerGroup().addTo(map);
     circleLayer = L.layerGroup().addTo(map);
