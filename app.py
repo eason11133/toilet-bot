@@ -58,6 +58,7 @@ from linebot_app.reply_tokens import CHANNEL_ACCESS_TOKEN
 from linebot_app.replies import configure_replies
 from linebot_app.consent import configure_consent, _start_consent_worker
 from linebot_app.consent_routes import register_consent_routes
+from linebot_app.rich_menu_migration import start_rich_menu_help_repair
 from linebot_app.handlers import (
     register_linebot_routes,
     _base_url,
@@ -295,6 +296,7 @@ register_usage_routes(app)
 register_feedback_routes(app)
 register_status_routes(app)
 register_consent_routes(app)
+start_rich_menu_help_repair()
 
 
 # -----------------------------------------------------------------------------
