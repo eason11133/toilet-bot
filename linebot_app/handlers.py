@@ -55,27 +55,6 @@ LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
 
 LINE_REPLY_MAX = 5
 
-
-def make_help_text(uid):
-    """Return the built-in guide used for rich-menu postbacks.
-
-    A rich-menu ``displayText`` only looks like a user text message in LINE;
-    it does not trigger Official Account keyword auto-responses.  Keep the
-    typed ``使用說明`` path silent so LINE can serve the configured image, and
-    answer the rich-menu postback here instead.
-    """
-    return L(
-        uid,
-        "📌 使用說明：\n"
-        "・點「附近廁所」或直接傳位置\n"
-        "・可加入最愛、回饋、看 AI 摘要\n"
-        "・也可切換 AI 推薦模式",
-        "📌 Help:\n"
-        "• Tap 'Nearby Toilets' or send location\n"
-        "• Add favorites, leave feedback, view AI summary\n"
-        "• You can also switch to AI recommendation mode",
-    )
-
 # push fallback 去重（避免重送 / 重試造成重複推播）
 _PUSH_DEDUPE = getattr(globals(), "_PUSH_DEDUPE", {})
 _PUSH_LOCK = threading.Lock()
@@ -1414,7 +1393,6 @@ def handle_postback(event):
 
             # 使用說明
             if cmd == "help":
-                safe_reply(event, TextSendMessage(text=make_help_text(uid)))
                 return
 
             # 新增廁所
