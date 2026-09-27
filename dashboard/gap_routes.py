@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 
 from flask import request, jsonify, render_template
 from core.memory import log_memory
@@ -13,6 +14,8 @@ from dashboard.gap_analysis import (
     _GAP_VALID_LON_MIN,
     _GAP_VALID_LON_MAX,
 )
+
+_GAP_BUILD_LOCK = threading.Lock()
 
 # === Gap dashboard routes ===
 def dashboard_gap_page():
@@ -49,9 +52,19 @@ def api_gap_summary():
                 log_memory("gap_endpoint_after", cached=True)
                 return jsonify(out)
 
-        data = _build_gap_summary(range_key, anchor_date)
-        data["cached"] = False
-        _gap_cache_set(cache_key, data)
+        # A gthread worker can receive multiple expensive refreshes at once.
+        # Serialize builds so their large temporary maps cannot multiply RSS.
+        with _GAP_BUILD_LOCK:
+            if not force:
+                cached = _gap_cache_get(cache_key)
+                if cached is not None:
+                    out = dict(cached)
+                    out["cached"] = True
+                    log_memory("gap_endpoint_after", cached=True, waited=True)
+                    return jsonify(out)
+            data = _build_gap_summary(range_key, anchor_date)
+            data["cached"] = False
+            _gap_cache_set(cache_key, data)
         log_memory("gap_endpoint_after", cached=False)
         return jsonify(data)
     except Exception as e:
