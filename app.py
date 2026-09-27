@@ -25,6 +25,7 @@ from core.database import (
     _start_persistent_store_init_background,
 )
 from core.cache import _CACHE, _ENRICH_CACHE
+from core.memory import log_memory
 from core.utils import (
     _in_bbox,
     mask_user_id,
@@ -297,6 +298,7 @@ register_feedback_routes(app)
 register_status_routes(app)
 register_consent_routes(app)
 start_rich_menu_help_repair()
+log_memory("startup_complete")
 
 
 # -----------------------------------------------------------------------------

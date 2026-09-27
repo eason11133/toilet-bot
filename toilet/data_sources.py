@@ -4,7 +4,6 @@ import logging
 import requests
 import heapq
 import math
-import threading
 import time
 from urllib.parse import quote
 
@@ -18,10 +17,9 @@ from toilet.enrichment import enrich_nearby_places
 DATA_DIR = os.path.join(os.getcwd(), "data")
 TOILETS_FILE_PATH = os.path.join(DATA_DIR, "public_toilets.csv")
 
-# public_toilets.csv is in the hot path for every location query.
-# Cache it in memory and reload only when the file mtime changes.
-_PUBLIC_CSV_CACHE = {"mtime": None, "rows": []}
-_PUBLIC_CSV_CACHE_LOCK = threading.Lock()
+# Do not cache the 45k-row CSV as dicts.  The parsed representation was many
+# times larger than the 10 MiB file and was duplicated in every Gunicorn
+# worker.  Streaming keeps idle RSS and request peak bounded.
 
 
 def query_overpass_toilets(lat, lon, radius=500):
@@ -244,79 +242,48 @@ def query_saved_toilets(user_lat, user_lon, radius=500):
 
     return [item for _, _, item in sorted(heap, key=lambda x: -x[0])]
 
-def _load_public_csv_rows_cached():
-    """Load public_toilets.csv once and refresh only when the file changes."""
-    if not os.path.exists(TOILETS_FILE_PATH):
-        return []
-
-    try:
-        mtime = os.path.getmtime(TOILETS_FILE_PATH)
-    except Exception as e:
-        logging.error(f"讀 public_toilets.csv mtime 失敗：{e}")
-        return []
-
-    cached_rows = _PUBLIC_CSV_CACHE.get("rows") or []
-    if _PUBLIC_CSV_CACHE.get("mtime") == mtime:
-        return cached_rows
-
-    with _PUBLIC_CSV_CACHE_LOCK:
-        cached_rows = _PUBLIC_CSV_CACHE.get("rows") or []
-        if _PUBLIC_CSV_CACHE.get("mtime") == mtime:
-            return cached_rows
-
-        try:
-            with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as f:
-                rows = list(csv.DictReader(f))
-            _PUBLIC_CSV_CACHE["mtime"] = mtime
-            _PUBLIC_CSV_CACHE["rows"] = rows
-            logging.info(f"✅ public_toilets.csv cached: {len(rows)} rows")
-            return rows
-        except Exception as e:
-            logging.error(f"讀 public_toilets.csv 失敗：{e}")
-            return cached_rows
-
 def query_public_csv_toilets(user_lat, user_lon, radius=500):
-    rows = _load_public_csv_rows_cached()
-    if not rows:
+    if not os.path.exists(TOILETS_FILE_PATH):
         return []
 
     heap = []
     limit = LOC_MAX_RESULTS
 
     try:
-        for row in rows:
-            try:
-                t_lat = float(row.get("latitude"))
-                t_lon = float(row.get("longitude"))
-            except Exception:
-                continue
+        with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    t_lat = float(row.get("latitude"))
+                    t_lon = float(row.get("longitude"))
+                except Exception:
+                    continue
 
-            if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
-                continue
+                if not _in_bbox(t_lat, t_lon, user_lat, user_lon, radius):
+                    continue
 
-            dist = haversine(user_lat, user_lon, t_lat, t_lon)
-            if dist > radius:
-                continue
+                dist = haversine(user_lat, user_lon, t_lat, t_lon)
+                if dist > radius:
+                    continue
 
-            name = (row.get("name") or "無名稱").strip()
-            addr = (row.get("address") or "").strip()
-            floor_hint = _floor_from_name(name)
+                name = (row.get("name") or "無名稱").strip()
+                addr = (row.get("address") or "").strip()
+                floor_hint = _floor_from_name(name)
 
-            item = {
-                "name": name,
-                "lat": float(norm_coord(t_lat)),
-                "lon": float(norm_coord(t_lon)),
-                "address": addr,
-                "distance": dist,
-                "type": "public_csv",
-                "grade": row.get("grade", ""),
-                "category": row.get("type2", ""),
-                "floor_hint": floor_hint,
-            }
+                item = {
+                    "name": name,
+                    "lat": float(norm_coord(t_lat)),
+                    "lon": float(norm_coord(t_lon)),
+                    "address": addr,
+                    "distance": dist,
+                    "type": "public_csv",
+                    "grade": row.get("grade", ""),
+                    "category": row.get("type2", ""),
+                    "floor_hint": floor_hint,
+                }
 
-            heapq.heappush(heap, (-dist, id(item), item))
-            if len(heap) > limit:
-                heapq.heappop(heap)
+                heapq.heappush(heap, (-dist, id(item), item))
+                if len(heap) > limit:
+                    heapq.heappop(heap)
 
     except Exception as e:
         logging.error(f"查詢 public_toilets.csv 快取資料失敗：{e}")

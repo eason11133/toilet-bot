@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 
 from flask import request, jsonify, render_template
+from core.memory import log_memory
 
 from config import TW_TZ
 
@@ -425,12 +426,15 @@ def dashboard_page():
 
 
 def api_dashboard():
+    log_memory("dashboard_before")
     range_key = (request.args.get("range") or "1h").strip()
     if range_key not in ("1h", "1d", "7d", "30d", "1y"):
         range_key = "1h"
 
     anchor_date = (request.args.get("anchor_date") or "").strip() or None
-    return jsonify(_generate_dashboard_data(range_key, anchor_date))
+    response = jsonify(_generate_dashboard_data(range_key, anchor_date))
+    log_memory("dashboard_after")
+    return response
 
 
 def api_events():

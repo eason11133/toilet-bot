@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from config import TW_TZ
 from dashboard.routes import _dashboard_range_to_sqlite
+from core.memory import log_memory
 
 POSTGRES_ENABLED = False
 _pg_connect = None
@@ -83,6 +84,7 @@ def _backfill_area_names_async(events, max_rows=1000):
         return
 
     def worker(batch):
+        rss_before = log_memory("gap_backfill_before", rows=len(batch))
         try:
             conn = _pg_connect()
             cur = conn.cursor()
@@ -99,6 +101,10 @@ def _backfill_area_names_async(events, max_rows=1000):
             logging.info(f"✅ gap area_name backfilled: {len(batch)} rows")
         except Exception as e:
             logging.warning(f"gap area_name backfill skipped: {e}")
+        finally:
+            rss_after = log_memory("gap_backfill_after", rows=len(batch))
+            if rss_before is not None and rss_after is not None:
+                logging.info("memory stage=gap_backfill_delta delta_mb=%.1f", rss_after - rss_before)
 
     try:
         threading.Thread(target=worker, args=(updates,), name="gap-area-backfill", daemon=True).start()
@@ -106,6 +112,7 @@ def _backfill_area_names_async(events, max_rows=1000):
         pass
 # === Demand Gap Dashboard v165：去重、需求群聚與建議設點分析 ===
 _GAP_SUMMARY_CACHE = {}
+_GAP_MEMORY_CACHE_MAX = max(0, int(os.getenv("GAP_MEMORY_CACHE_MAX", "1")))
 # Gap summary is expensive because it scans and clusters analytics_events.
 # Default to 12 hours so the research/dashboard page opens fast.
 # Manual refresh still works via ?force=1 / ?refresh=1.
@@ -134,7 +141,9 @@ def _gap_cache_get(key):
         data = get_cached_data(f"gap_summary:{key}", ttl_sec=_GAP_SUMMARY_CACHE_TTL)
         if data is not None:
             try:
-                _GAP_SUMMARY_CACHE[key] = (time.time(), data)
+                if _GAP_MEMORY_CACHE_MAX:
+                    _GAP_SUMMARY_CACHE.clear()
+                    _GAP_SUMMARY_CACHE[key] = (time.time(), data)
             except Exception:
                 pass
             return data
@@ -144,11 +153,9 @@ def _gap_cache_get(key):
     return None
 def _gap_cache_set(key, data):
     try:
-        _GAP_SUMMARY_CACHE[key] = (time.time(), data)
-        if len(_GAP_SUMMARY_CACHE) > 30:
-            oldest = sorted(_GAP_SUMMARY_CACHE.items(), key=lambda kv: kv[1][0])[:10]
-            for k, _ in oldest:
-                _GAP_SUMMARY_CACHE.pop(k, None)
+        if _GAP_MEMORY_CACHE_MAX:
+            _GAP_SUMMARY_CACHE.clear()
+            _GAP_SUMMARY_CACHE[key] = (time.time(), data)
     except Exception:
         pass
 
@@ -509,6 +516,7 @@ def _gap_cluster_rows(rows, radius_m=500):
     return clusters
 def _build_gap_summary(range_key="all", anchor_date=None):
     build_started = time.perf_counter()
+    rss_before = log_memory("gap_build_before", range=range_key)
     if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
         range_key = "all"
 
@@ -525,18 +533,25 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         "osm_reasons": []
     }
 
+    max_events = max(1000, int(os.getenv("GAP_MAX_EVENTS", "20000")))
     if POSTGRES_ENABLED:
         conn = _pg_connect()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT id, user_id, event_type, result_count, success, response_time_ms,
-                   lat, lon, area_name, query_text, created_at
-            FROM analytics_events
-            WHERE created_at >= %s AND created_at <= %s
-              AND event_type = 'location_query'
-              AND COALESCE(response_time_ms, 0) > 0
+                   lat, lon, area_name, created_at
+            FROM (
+              SELECT id, user_id, event_type, result_count, success, response_time_ms,
+                     lat, lon, area_name, created_at
+              FROM analytics_events
+              WHERE created_at >= %s AND created_at <= %s
+                AND event_type = 'location_query'
+                AND COALESCE(response_time_ms, 0) > 0
+              ORDER BY created_at DESC
+              LIMIT %s
+            ) recent_events
             ORDER BY created_at ASC
-        """, (start, end))
+        """, (start, end, max_events))
         events = [dict(r) for r in cur.fetchall()]
 
         try:
@@ -580,13 +595,19 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         cur = conn.cursor()
         cur.execute("""
             SELECT id, user_id, event_type, result_count, success, response_time_ms,
-                   lat, lon, area_name, query_text, created_at
-            FROM analytics_events
-            WHERE created_at >= ? AND created_at <= ?
-              AND event_type = 'location_query'
-              AND COALESCE(response_time_ms, 0) > 0
+                   lat, lon, area_name, created_at
+            FROM (
+              SELECT id, user_id, event_type, result_count, success, response_time_ms,
+                     lat, lon, area_name, created_at
+              FROM analytics_events
+              WHERE created_at >= ? AND created_at <= ?
+                AND event_type = 'location_query'
+                AND COALESCE(response_time_ms, 0) > 0
+              ORDER BY created_at DESC
+              LIMIT ?
+            ) recent_events
             ORDER BY created_at ASC
-        """, (start.isoformat(), end.isoformat()))
+        """, (start.isoformat(), end.isoformat(), max_events))
         events = [dict(r) for r in cur.fetchall()]
         conn.close()
 
@@ -771,14 +792,14 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     def _gap_take(rows, limit):
         return rows if not limit else rows[:limit]
 
-    GAP_CLUSTER_OUTPUT_LIMIT = _gap_output_limit("GAP_CLUSTER_OUTPUT_LIMIT", "0")
-    GAP_HOTSPOT_OUTPUT_LIMIT = _gap_output_limit("GAP_HOTSPOT_OUTPUT_LIMIT", "0")
-    GAP_PRECISE_HOTSPOT_LIMIT = _gap_output_limit("GAP_PRECISE_HOTSPOT_LIMIT", "0")
+    GAP_CLUSTER_OUTPUT_LIMIT = _gap_output_limit("GAP_CLUSTER_OUTPUT_LIMIT", "500") or 500
+    GAP_HOTSPOT_OUTPUT_LIMIT = _gap_output_limit("GAP_HOTSPOT_OUTPUT_LIMIT", "1000") or 1000
+    GAP_PRECISE_HOTSPOT_LIMIT = _gap_output_limit("GAP_PRECISE_HOTSPOT_LIMIT", "1000") or 1000
     GAP_RECOMMENDED_LIMIT = _gap_output_limit("GAP_RECOMMENDED_LIMIT", "10") or 10
 
     result = {
         "ok": True,
-        "version": "demand_gap_v7_taiwan_valid_unlimited_points",
+        "version": "demand_gap_v8_memory_bounded",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -788,6 +809,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "dedupe_minutes": DEDUPE_MINUTES,
             "cluster_radius_m": CLUSTER_RADIUS_M,
             "cache_ttl_seconds": _GAP_SUMMARY_CACHE_TTL,
+            "max_source_events": max_events,
         },
         "summary": {
             "raw_total_queries": raw_total_queries,
@@ -841,4 +863,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         len(clusters),
         round((time.perf_counter() - build_started) * 1000),
     )
+    rss_after = log_memory("gap_build_after", source_rows=raw_total_queries_before_scope, hotspots=len(hotspot_rows), clusters=len(clusters))
+    if rss_before is not None and rss_after is not None:
+        logging.info("memory stage=gap_build_delta delta_mb=%.1f", rss_after - rss_before)
     return result

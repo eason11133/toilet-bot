@@ -2,6 +2,7 @@ import os
 import logging
 
 from flask import request, jsonify, render_template
+from core.memory import log_memory
 
 from dashboard.gap_analysis import (
     _gap_cache_get,
@@ -21,6 +22,7 @@ def dashboard_gap_page():
 
 def api_gap_summary():
     """公共設施需求缺口分析 API：去重、群聚、建議設點。"""
+    log_memory("gap_endpoint_before")
     try:
         range_key = (request.args.get("range") or "all").strip()
         if range_key not in ("all", "1h", "1d", "7d", "30d", "1y"):
@@ -33,9 +35,10 @@ def api_gap_summary():
 
         # Cache key version bumped because global/outlier coordinates are now excluded from the research map.
         cache_key = (
-            f"v250_taiwan_valid_gap_points:{range_key}:{anchor_date or ''}:"
-            f"{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '0')}:"
-            f"{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '0')}:"
+            f"v251_memory_bounded:{range_key}:{anchor_date or ''}:"
+            f"{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '500')}:"
+            f"{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '1000')}:"
+            f"{os.getenv('GAP_MAX_EVENTS', '20000')}:"
             f"{_GAP_VALID_LAT_MIN},{_GAP_VALID_LAT_MAX},{_GAP_VALID_LON_MIN},{_GAP_VALID_LON_MAX}"
         )
         if not force:
@@ -43,11 +46,13 @@ def api_gap_summary():
             if cached is not None:
                 out = dict(cached)
                 out["cached"] = True
+                log_memory("gap_endpoint_after", cached=True)
                 return jsonify(out)
 
         data = _build_gap_summary(range_key, anchor_date)
         data["cached"] = False
         _gap_cache_set(cache_key, data)
+        log_memory("gap_endpoint_after", cached=False)
         return jsonify(data)
     except Exception as e:
         logging.error(f"/api/gap-summary failed: {e}", exc_info=True)

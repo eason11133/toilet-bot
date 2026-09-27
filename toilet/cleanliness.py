@@ -2,12 +2,7 @@ import os
 import logging
 import statistics
 
-import joblib
-
-try:
-    import pandas as pd
-except Exception:
-    pd = None
+import threading
 
 from core.database import POSTGRES_ENABLED
 from core.utils import _parse_lat_lon
@@ -25,6 +20,7 @@ def configure_cleanliness(fetch_feedback_pg_by_coord):
 
 def load_cleanliness_model():
     try:
+        import joblib
         model_path = os.path.join(BASE_DIR, 'models', 'clean_model.pkl')
         model = joblib.load(model_path)
         logging.info("✅ 清潔度模型已載入")
@@ -35,6 +31,7 @@ def load_cleanliness_model():
 
 def load_label_encoder():
     try:
+        import joblib
         encoder_path = os.path.join(BASE_DIR, 'models', 'label_encoder.pkl')
         encoder = joblib.load(encoder_path)
         logging.info("✅ LabelEncoder 已載入")
@@ -43,8 +40,18 @@ def load_label_encoder():
         logging.error(f"❌ LabelEncoder 載入失敗: {e}")
         return None
 
-cleanliness_model = load_cleanliness_model()
-label_encoder = load_label_encoder()
+cleanliness_model = None
+label_encoder = None
+_model_lock = threading.Lock()
+
+def _ensure_models_loaded():
+    global cleanliness_model, label_encoder
+    if cleanliness_model is not None:
+        return
+    with _model_lock:
+        if cleanliness_model is None:
+            cleanliness_model = load_cleanliness_model()
+            label_encoder = load_label_encoder()
 
 # === 參數 ===
 LAST_N_HISTORY = 5
@@ -52,13 +59,14 @@ LAST_N_HISTORY = 5
 # === 清潔度預測 ===
 def expected_from_feats(feats):
     try:
-        if not feats or cleanliness_model is None:
+        if not feats:
             return None
-        if pd is not None:
-            df = pd.DataFrame(feats, columns=["rating","toilet_paper","accessibility"])
-            probs = cleanliness_model.predict_proba(df)
-        else:
-            probs = cleanliness_model.predict_proba(feats)
+        _ensure_models_loaded()
+        if cleanliness_model is None:
+            return None
+        import pandas as pd
+        df = pd.DataFrame(feats, columns=["rating","toilet_paper","accessibility"])
+        probs = cleanliness_model.predict_proba(df)
 
         try:
             classes_enc = cleanliness_model.classes_

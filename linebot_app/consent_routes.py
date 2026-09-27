@@ -11,6 +11,7 @@ from linebot_app.consent import (
     _consent_lock,
     _last_consent_ts,
     CONSENT_MIN_INTERVAL,
+    record_consent_attempt,
     upsert_consent,
 )
 
@@ -53,7 +54,7 @@ def api_consent():
         last = _last_consent_ts.get(user_id, 0.0)
         if now - last < CONSENT_MIN_INTERVAL:
             return {"ok": True, "message": "accepted"}, 200
-        _last_consent_ts[user_id] = now
+        record_consent_attempt(user_id, now)
 
         ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
         if not ok:

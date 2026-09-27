@@ -175,7 +175,7 @@ def _repair_active_menus() -> int:
 
 
 def repair_rich_menu_help_actions_once() -> None:
-    if os.getenv("AUTO_REPAIR_RICH_MENU_HELP", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("AUTO_REPAIR_RICH_MENU_HELP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return
 
     conn = None
@@ -209,6 +209,11 @@ def repair_rich_menu_help_actions_once() -> None:
 
 
 def start_rich_menu_help_repair() -> None:
+    # This migration has already repaired production menus.  Do not create a
+    # background thread or call LINE on every worker boot unless explicitly
+    # re-enabled for a future migration.
+    if os.getenv("AUTO_REPAIR_RICH_MENU_HELP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
     threading.Thread(
         target=repair_rich_menu_help_actions_once,
         name="rich-menu-help-repair",

@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import time
+from collections import OrderedDict, deque
 
 from linebot.models import TextSendMessage
 
@@ -20,7 +21,7 @@ def configure_consent(postgres_enabled=False, pg_connect=None, T_func=None, cons
 
 
 # === consent 背景排隊（429 時不回 500） ===
-_consent_q = []                    
+_consent_q = deque(maxlen=max(10, int(os.getenv("CONSENT_QUEUE_MAX", "200"))))
 _consent_lock = threading.Lock()    
 
 def _start_consent_worker():
@@ -31,7 +32,7 @@ def _start_consent_worker():
                 # 取出一個工作
                 with _consent_lock:
                     if _consent_q:
-                        job = _consent_q.pop(0)
+                        job = _consent_q.popleft()
             except Exception as e:
                 logging.error(f"Consent worker dequeue error: {e}")
 
@@ -54,8 +55,15 @@ def _booly(v):
     return s in ["1", "true", "yes", "y", "同意"]
 
 # （可選微優化）本機同意快取，TTL 預設 10 分鐘；失敗時當未同意（不影響功能）
-_consent_cache = {}   # user_id -> (ts, bool)
+_consent_cache = OrderedDict()   # bounded user_id -> (ts, bool)
 _CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
+_CONSENT_CACHE_MAX = max(100, int(os.getenv("CONSENT_CACHE_MAX", "2000")))
+
+def _consent_cache_set(user_id, value):
+    _consent_cache[user_id] = (time.time(), bool(value))
+    _consent_cache.move_to_end(user_id)
+    while len(_consent_cache) > _CONSENT_CACHE_MAX:
+        _consent_cache.popitem(last=False)
 
 def has_consented(user_id: str) -> bool:
     """Read consent from Neon user_consent."""
@@ -68,6 +76,7 @@ def has_consented(user_id: str) -> bool:
         now = time.time()
         hit = _consent_cache.get(user_id)
         if hit and (now - hit[0] < _CONSENT_TTL):
+            _consent_cache.move_to_end(user_id)
             return bool(hit[1])
 
         conn = _pg_connect()
@@ -77,7 +86,7 @@ def has_consented(user_id: str) -> bool:
         conn.close()
 
         ok = bool(row and row[0])
-        _consent_cache[user_id] = (now, ok)
+        _consent_cache_set(user_id, ok)
         return ok
     except Exception as e:
         logging.warning(f"查詢 Neon 同意資料失敗: {e}")
@@ -107,7 +116,7 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
         """, (user_id, bool(agreed), display_name or "", source_type or "", ua or ""))
         conn.commit()
         conn.close()
-        _consent_cache[user_id] = (time.time(), bool(agreed))
+        _consent_cache_set(user_id, agreed)
         return True
     except Exception as e:
         logging.error(f"寫入/更新 Neon 同意資料失敗: {e}", exc_info=True)
@@ -121,5 +130,13 @@ def ensure_consent_or_prompt(user_id: str):
 
 
 # === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
-_last_consent_ts = {}
+_last_consent_ts = OrderedDict()
+_CONSENT_RATE_LIMIT_MAX = max(100, int(os.getenv("CONSENT_RATE_LIMIT_MAX", "5000")))
+
+def record_consent_attempt(user_id, now):
+    _last_consent_ts[user_id] = now
+    _last_consent_ts.move_to_end(user_id)
+    while len(_last_consent_ts) > _CONSENT_RATE_LIMIT_MAX:
+        _last_consent_ts.popitem(last=False)
+
 CONSENT_MIN_INTERVAL = float(os.getenv("CONSENT_MIN_INTERVAL", "1.0"))
