@@ -47,4 +47,4 @@ Keep your existing folders in the project root when deploying or testing.
 
 ## Important limitation
 
-This environment did not run a full live Flask/LINE/Render integration test with real env vars, LINE credentials, Postgres, model files, templates, and data files. Before production deployment, run the app in staging and test the checklist in `CLAUDE_DIFF_PROMPT.md`.
+This environment did not run a full live Flask/LINE/Render integration test with real env vars, LINE credentials, Postgres, model files, templates, and data files. Before production deployment, run the app in staging and test the checklist in [`docs/history/CLAUDE_DIFF_PROMPT.md`](docs/history/CLAUDE_DIFF_PROMPT.md).
