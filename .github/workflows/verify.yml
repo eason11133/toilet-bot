@@ -1,0 +1,31 @@
+name: Verify public portfolio build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LINE_CHANNEL_ACCESS_TOKEN: test-token
+      LINE_CHANNEL_SECRET: test-secret
+      ADMIN_TOKEN: test-admin-token
+      CONTACT_EMAIL: test@example.com
+      DASHBOARD_PUBLIC_READ: "1"
+      OSM_FALLBACK_ENABLE: "0"
+      GAP_MAX_EVENTS: "20000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q app.py config.py core dashboard admin features linebot_app toilet scripts
+      - name: Run memory and route smoke test
+        run: python scripts/memory_smoke.py
