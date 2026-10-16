@@ -62,6 +62,19 @@ def init_persistent_store():
             created_at TIMESTAMPTZ DEFAULT NOW()
         )
         """)
+        # Canonical location-query lifecycle. Existing columns remain for
+        # backwards-compatible dashboard reads while every new query is updated
+        # in place from processing -> success/failed.
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS query_id TEXT")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS user_id_hash TEXT")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS cache_hit BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS status TEXT")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS failure_reason TEXT")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS reply_attempted BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS reply_accepted BOOLEAN DEFAULT FALSE")
+        # PostgreSQL permits multiple NULL values in a regular unique index, and
+        # the non-partial index lets INSERT ... ON CONFLICT (query_id) resolve it.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_query_id_unique ON analytics_events(query_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type)")
@@ -369,6 +382,9 @@ def create_cache_db():
         ts TEXT
     )
     """)
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(search_log)").fetchall()}
+    if "query_id" not in columns:
+        cursor.execute("ALTER TABLE search_log ADD COLUMN query_id TEXT")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_search_log_user_id ON search_log(user_id)"
     )
@@ -447,6 +463,21 @@ def create_analytics_tables():
         created_at TEXT
     )
     """)
+
+    columns = {row[1] for row in cur.execute("PRAGMA table_info(analytics_events)").fetchall()}
+    migrations = {
+        "query_id": "TEXT",
+        "user_id_hash": "TEXT",
+        "cache_hit": "INTEGER DEFAULT 0",
+        "status": "TEXT",
+        "failure_reason": "TEXT",
+        "reply_attempted": "INTEGER DEFAULT 0",
+        "reply_accepted": "INTEGER DEFAULT 0",
+    }
+    for name, ddl in migrations.items():
+        if name not in columns:
+            cur.execute(f"ALTER TABLE analytics_events ADD COLUMN {name} {ddl}")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_query_id_unique ON analytics_events(query_id)")
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_analytics_user_id ON analytics_events(user_id)")

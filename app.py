@@ -22,7 +22,7 @@ from core.database import (
     create_analytics_tables,
     get_cached_data,
     save_cache,
-    _start_persistent_store_init_background,
+    init_persistent_store,
 )
 from core.cache import _CACHE, _ENRICH_CACHE
 from core.memory import log_memory
@@ -184,7 +184,10 @@ configure_consent(
 create_cache_db()
 tune_sqlite_for_concurrency()
 create_analytics_tables()
-_start_persistent_store_init_background()
+# Schema migrations must finish before the service accepts webhooks/dashboard
+# requests; otherwise a just-deployed worker can receive a query before the new
+# lifecycle columns exist.
+init_persistent_store()
 
 
 # -----------------------------------------------------------------------------

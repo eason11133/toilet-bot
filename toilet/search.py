@@ -96,7 +96,7 @@ def nearby_toilets():
     return {"toilets": all_toilets}, 200
 
 
-def build_nearby_toilets(uid, lat, lon, radius=500):
+def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query_id=None):
     # 預設使用 NTS 排序；若要回到純距離排序，可設定 TOILET_SORT_ALGO=distance_only
     algo = os.getenv("TOILET_SORT_ALGO", "nts_score").strip().lower()
     model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
@@ -115,11 +115,11 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
     query_key = f"nearby:{algo}:{model_version}:osm{int(osm_enabled)}:min{osm_fallback_min}:{lat_g},{lon_g},{radius}"
 
     cached = get_cached_data(query_key)
-    if cached:
+    if cached is not None:
         logging.debug(f"[cache hit] nearby {query_key}")
-        return cached
+        return (cached, {"cache_hit": True}) if return_metadata else cached
 
-    query_id_for_source = "SRC_" + uuid.uuid4().hex[:16]
+    query_id_for_source = query_id or ("SRC_" + uuid.uuid4().hex[:16])
     total_start = time.time()
     csv_res, saved_res, osm_res = [], [], []
 
@@ -222,7 +222,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500):
     # === 寫入 cache（Grid cache）===
     save_cache(query_key, result)
 
-    return result
+    return (result, {"cache_hit": False}) if return_metadata else result
 
 
 def register_search_routes(app):

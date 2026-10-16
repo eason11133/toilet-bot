@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -7,6 +8,7 @@ import time
 import urllib.parse
 from urllib.parse import quote, unquote, parse_qs
 from datetime import datetime
+from collections import OrderedDict
 
 from flask import request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -18,7 +20,10 @@ from linebot.models import (
     PostbackEvent, PostbackAction,
 )
 
-from config import TW_TZ, LOC_MAX_CONCURRENCY
+from config import (
+    TW_TZ, LOC_MAX_CONCURRENCY,
+    LOC_USER_DEDUPE_SECONDS, LOC_USER_DEDUPE_DISTANCE_M,
+)
 from core.database import POSTGRES_ENABLED, _pg_connect, ANALYTICS_DB_PATH, _get_db, psycopg2
 from core.cache import _CACHE
 from core.i18n import (
@@ -49,6 +54,9 @@ line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 _LOC_SEM = threading.Semaphore(LOC_MAX_CONCURRENCY)
+_RECENT_LOCATION_QUERIES = OrderedDict()
+_RECENT_LOCATION_LOCK = threading.Lock()
+_RECENT_LOCATION_MAX_USERS = 5000
 
 PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
 LIFF_STATUS_ID = os.getenv("LIFF_STATUS_ID", "")
@@ -164,6 +172,26 @@ def _release_loc_slot():
     except Exception:
         pass
 
+def _accept_user_location_query(uid, lat, lon, now=None):
+    """Atomically suppress rapid repeated taps without creating a query row."""
+    now = time.monotonic() if now is None else float(now)
+    with _RECENT_LOCATION_LOCK:
+        previous = _RECENT_LOCATION_QUERIES.get(uid)
+        if previous:
+            prev_at, prev_lat, prev_lon = previous
+            if now - prev_at <= LOC_USER_DEDUPE_SECONDS:
+                try:
+                    if haversine(float(lat), float(lon), prev_lat, prev_lon) <= LOC_USER_DEDUPE_DISTANCE_M:
+                        _RECENT_LOCATION_QUERIES.move_to_end(uid)
+                        return False
+                except Exception:
+                    pass
+        _RECENT_LOCATION_QUERIES[uid] = (now, float(lat), float(lon))
+        _RECENT_LOCATION_QUERIES.move_to_end(uid)
+        while len(_RECENT_LOCATION_QUERIES) > _RECENT_LOCATION_MAX_USERS:
+            _RECENT_LOCATION_QUERIES.popitem(last=False)
+        return True
+
 def _base_url():
     # PUBLIC_URL 優先，沒設定就用 request.url_root
     try:
@@ -239,12 +267,12 @@ def safe_reply(event, messages):
     - 保留最多 5 則訊息限制，避免 LINE API 拒絕
     """
     if messages is None:
-        return
+        return False
     if not isinstance(messages, list):
         messages = [messages]
     messages = [m for m in messages if m is not None]
     if not messages:
-        return
+        return False
 
     # LINE 規則：一次 reply 最多 5 則
     if len(messages) > LINE_REPLY_MAX:
@@ -259,15 +287,15 @@ def safe_reply(event, messages):
     reply_token = getattr(event, "reply_token", None)
     if not reply_token:
         logging.warning("[safe_reply] no reply_token; skip (push disabled).")
-        return
+        return False
 
     if not claim_reply_token(reply_token):
         logging.info("[safe_reply] reply token already claimed; skip duplicate reply.")
-        return
+        return False
 
     try:
         line_bot_api.reply_message(reply_token, messages)
-        return
+        return True
     except LineBotApiError as e:
         # 解析錯誤訊息
         try:
@@ -278,14 +306,14 @@ def safe_reply(event, messages):
         # reply_token 無效/過期：不做 push，直接跳過
         if "Invalid reply token" in msg_txt:
             logging.warning(f"[safe_reply] invalid reply token; skip (push disabled). err={msg_txt}")
-            return
+            return False
 
         # 月額度/限流/其他：只記錄，不重試、不 fallback
         logging.warning(f"[safe_reply] reply_message failed; skip (push disabled). err={msg_txt}")
-        return
+        return False
     except Exception as ex:
         logging.error(f"[safe_reply] unexpected error: {ex}", exc_info=True)
-        return
+        return False
 
 def reply_only(event, messages):
     try:
@@ -363,6 +391,93 @@ def log_analytics_event(
         conn.close()
     except Exception as e:
         logging.warning(f"log_analytics_event failed: {e}")
+
+def _analytics_user_hash(user_id):
+    secret = os.getenv("ANALYTICS_HASH_SALT") or os.getenv("LINE_CHANNEL_SECRET") or "toilet-bot"
+    return hashlib.sha256(f"{secret}:{user_id or ''}".encode("utf-8")).hexdigest()
+
+def _start_location_query(query_id, user_id, lat, lon, area_name, created_at=None):
+    """Create exactly one canonical row when a formal search is accepted."""
+    created_at = created_at or datetime.now(TW_TZ)
+    user_hash = _analytics_user_hash(user_id)
+    try:
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO analytics_events
+                (query_id, user_id, user_id_hash, event_type, result_count, success,
+                 response_time_ms, lat, lon, area_name, created_at, cache_hit, status,
+                 reply_attempted, reply_accepted)
+                VALUES (%s,%s,%s,'location_query',0,0,NULL,%s,%s,%s,%s,FALSE,'processing',FALSE,FALSE)
+                ON CONFLICT (query_id) DO NOTHING
+            """, (query_id, user_hash, user_hash, float(lat), float(lon), area_name, created_at))
+            conn.commit()
+            conn.close()
+        else:
+            conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+            conn.execute("""
+                INSERT OR IGNORE INTO analytics_events
+                (query_id, user_id, user_id_hash, event_type, result_count, success,
+                 response_time_ms, lat, lon, area_name, created_at, cache_hit, status,
+                 reply_attempted, reply_accepted)
+                VALUES (?,?,?,'location_query',0,0,NULL,?,?,?,?,0,'processing',0,0)
+            """, (query_id, user_hash, user_hash, float(lat), float(lon), area_name, created_at.isoformat()))
+            conn.commit()
+            conn.close()
+    except Exception as exc:
+        logging.warning("start location query analytics failed query_id=%s error=%s", query_id, type(exc).__name__)
+
+def _finish_location_query(query_id, status, result_count, processing_ms, cache_hit=False,
+                           failure_reason=None, reply_attempted=False, reply_accepted=False):
+    success = status == "success"
+    try:
+        values = (
+            int(result_count or 0), int(processing_ms or 0), bool(cache_hit), status,
+            failure_reason, bool(reply_attempted), bool(reply_accepted), query_id,
+        )
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE analytics_events
+                SET result_count=%s, success=%s, response_time_ms=%s, cache_hit=%s,
+                    status=%s, failure_reason=%s, reply_attempted=%s, reply_accepted=%s
+                WHERE query_id=%s
+            """, (
+                values[0], int(success), values[1], values[2], values[3], values[4],
+                values[5], values[6], values[7],
+            ))
+            conn.commit()
+            conn.close()
+        else:
+            conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+            conn.execute("""
+                UPDATE analytics_events
+                SET result_count=?, success=?, response_time_ms=?, cache_hit=?, status=?,
+                    failure_reason=?, reply_attempted=?, reply_accepted=?
+                WHERE query_id=?
+            """, (
+                values[0], int(success), values[1], int(values[2]), values[3], values[4],
+                int(values[5]), int(values[6]), values[7],
+            ))
+            conn.commit()
+            conn.close()
+    except Exception as exc:
+        logging.warning("finish location query analytics failed query_id=%s error=%s", query_id, type(exc).__name__)
+
+def _log_formal_search(query_id, user_id, lat, lon):
+    """Legacy usage counter, now aligned to accepted formal searches only."""
+    try:
+        conn = _get_db()
+        conn.execute(
+            "INSERT INTO search_log (query_id, user_id, lat, lon, ts) VALUES (?,?,?,?,?)",
+            (query_id, user_id, norm_coord(lat), norm_coord(lon), datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logging.warning("formal search counter failed query_id=%s error=%s", query_id, type(exc).__name__)
 
 def _unknown_area_grid_label(lat, lon):
     try:
@@ -1025,23 +1140,8 @@ def handle_location(event):
     if is_duplicate_and_mark_event(event):
         return
     uid = event.source.user_id
-    show_loading(uid, seconds=15)
     lat = event.message.latitude
     lon = event.message.longitude
-
-    # 記錄查詢次數（寫 DB）
-    try:
-        conn = _get_db()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO search_log (user_id, lat, lon, ts) VALUES (?,?,?,?)",
-            (uid, norm_coord(lat), norm_coord(lon),
-             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.warning(f"記錄查詢次數失敗: {e}")
 
     gate_msg = ensure_consent_or_prompt(uid)
     if gate_msg:
@@ -1055,13 +1155,25 @@ def handle_location(event):
         safe_reply(event, make_retry_location_text())
         return
 
+    # LINE event dedupe handles webhook retries; this gate handles a human
+    # tapping/sending the same nearby location repeatedly with distinct events.
+    if not _accept_user_location_query(uid, lat, lon):
+        logging.info("rapid location query suppressed user=%s", _analytics_user_hash(uid)[:12])
+        _release_loc_slot()
+        return
+
     start_ts = time.time()
     area_name = get_area_name(lat, lon)
+    query_id = make_query_id()
+    _start_location_query(query_id, uid, lat, lon, area_name)
+    _log_formal_search(query_id, uid, lat, lon)
+    show_loading(uid, seconds=15)
 
     try:
-        query_id = make_query_id()
-
-        toilets = build_nearby_toilets(uid, lat, lon)
+        toilets, search_meta = build_nearby_toilets(
+            uid, lat, lon, return_metadata=True, query_id=query_id
+        )
+        cache_hit = bool((search_meta or {}).get("cache_hit"))
         elapsed_ms = int((time.time() - start_ts) * 1000)
 
         if toilets:
@@ -1080,20 +1192,6 @@ def handle_location(event):
                 user_lon=lon,
                 toilets=toilets,
                 limit=5
-            )
-
-        elapsed_ms = int((time.time() - start_ts) * 1000)
-
-        if elapsed_ms > 0:
-            log_analytics_event(
-                user_id=uid,
-                event_type="location_query",
-                result_count=len(toilets or []),
-                success=1,
-                response_time_ms=elapsed_ms,
-                lat=lat,
-                lon=lon,
-                area_name=area_name
             )
 
         if toilets:
@@ -1156,25 +1254,35 @@ def handle_location(event):
                     ),
                 ]
 
-            safe_reply(event, messages)
+            reply_accepted = safe_reply(event, messages)
         else:
-            safe_reply(event, make_no_toilet_quick_reply(uid, lat, lon))
+            reply_accepted = safe_reply(event, make_no_toilet_quick_reply(uid, lat, lon))
+
+        elapsed_ms = max(1, int((time.time() - start_ts) * 1000))
+        _finish_location_query(
+            query_id=query_id,
+            status="success",
+            result_count=len(toilets or []),
+            processing_ms=elapsed_ms,
+            cache_hit=cache_hit,
+            reply_attempted=True,
+            reply_accepted=reply_accepted,
+        )
 
     except Exception as e:
-        elapsed_ms = int((time.time() - start_ts) * 1000)
-        log_analytics_event(
-            user_id=uid,
-            event_type="error",
-            result_count=0,
-            success=0,
-            response_time_ms=elapsed_ms,
-            lat=lat,
-            lon=lon,
-            area_name=area_name,
-            query_text=str(e)[:200]
-        )
+        elapsed_ms = max(1, int((time.time() - start_ts) * 1000))
         logging.error(f"nearby error: {e}", exc_info=True)
-        safe_reply(event, TextSendMessage(text=L(uid, "系統忙線中，請稍後再試 🙏", "System is busy. Please try again later 🙏")))
+        reply_accepted = safe_reply(event, TextSendMessage(text=L(uid, "系統忙線中，請稍後再試 🙏", "System is busy. Please try again later 🙏")))
+        _finish_location_query(
+            query_id=query_id,
+            status="failed",
+            result_count=0,
+            processing_ms=elapsed_ms,
+            cache_hit=False,
+            failure_reason=type(e).__name__,
+            reply_attempted=True,
+            reply_accepted=reply_accepted,
+        )
     finally:
         _release_loc_slot()
 

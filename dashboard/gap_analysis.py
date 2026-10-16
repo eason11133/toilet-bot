@@ -326,8 +326,11 @@ def _gap_add_metrics(obj, event, low_threshold, slow_ms):
     obj["effective_queries"] = obj.get("effective_queries", 0) + 1
     obj["total_queries"] = obj.get("total_queries", 0) + 1  # 相容前端舊欄位
     obj["no_result_count"] = obj.get("no_result_count", 0) + (1 if rc == 0 else 0)
-    obj["low_result_count"] = obj.get("low_result_count", 0) + (1 if rc <= low_threshold else 0)
+    obj["low_result_count"] = obj.get("low_result_count", 0) + (1 if 1 <= rc <= low_threshold else 0)
     obj["slow_query_count"] = obj.get("slow_query_count", 0) + (1 if rt >= slow_ms else 0)
+    obj["gap_query_count"] = obj.get("gap_query_count", 0) + (
+        1 if rc == 0 or 1 <= rc <= low_threshold or rt >= slow_ms else 0
+    )
     obj["success_count"] = obj.get("success_count", 0) + (1 if success else 0)
     if rt > 0:
         obj["response_sum"] = obj.get("response_sum", 0) + rt
@@ -353,6 +356,8 @@ def _gap_finish_row(r):
     r["_response_count"] = response_count
     r["unique_users"] = len(user_set) if isinstance(user_set, set) else int(r.get("unique_users") or 0)
     r["active_days"] = len(day_set) if isinstance(day_set, set) else int(r.get("active_days") or 0)
+    r["_user_set"] = set(user_set) if isinstance(user_set, set) else set()
+    r["_day_set"] = set(day_set) if isinstance(day_set, set) else set()
     r["no_result_rate"] = round((int(r.get("no_result_count") or 0) / max(total, 1)) * 100, 1)
     r["low_result_rate"] = round((int(r.get("low_result_count") or 0) / max(total, 1)) * 100, 1)
     r["slow_query_rate"] = round((int(r.get("slow_query_count") or 0) / max(total, 1)) * 100, 1)
@@ -466,6 +471,8 @@ def _gap_cluster_rows(rows, radius_m=500):
         display_radius = max(120, int(round(radius)))
         demand_label = f"{area_name}附近約 {display_radius}m 需求圈"
 
+        cluster_user_set = set().union(*(m.get("_user_set") or set() for m in members))
+        cluster_day_set = set().union(*(m.get("_day_set") or set() for m in members))
         agg = {
             "cluster_id": f"C{len(clusters)+1}",
             "center": f"{center_lat:.5f},{center_lon:.5f}",
@@ -482,8 +489,9 @@ def _gap_cluster_rows(rows, radius_m=500):
             "no_result_count": sum(int(m.get("no_result_count") or 0) for m in members),
             "low_result_count": sum(int(m.get("low_result_count") or 0) for m in members),
             "slow_query_count": sum(int(m.get("slow_query_count") or 0) for m in members),
-            "unique_users": sum(int(m.get("unique_users") or 0) for m in members),
-            "active_days": len(set([str(m.get("day_hint") or "") for m in members if m.get("day_hint")])) or max([int(m.get("active_days") or 0) for m in members] or [0]),
+            "gap_query_count": sum(int(m.get("gap_query_count") or 0) for m in members),
+            "unique_users": len(cluster_user_set),
+            "active_days": len(cluster_day_set),
             "member_grids": [m.get("grid") for m in members[:8]],
             "sample_queries": sum([m.get("sample_queries") or [] for m in members], [])[:6],
             "map_url": _gap_google_maps_url(center_lat, center_lon),
@@ -492,12 +500,9 @@ def _gap_cluster_rows(rows, radius_m=500):
             **agg,
             "response_sum": sum(int(m.get("_response_sum") or 0) for m in members),
             "response_count": sum(int(m.get("_response_count") or 0) for m in members),
-            "user_set": set(),
-            "day_set": set(),
+            "user_set": cluster_user_set,
+            "day_set": cluster_day_set,
         })
-        # _gap_finish_row 會以空 set 覆蓋 unique_users；補回聚合值並重算關鍵欄位
-        agg["unique_users"] = max(sum(int(m.get("unique_users") or 0) for m in members), 0)
-        agg["active_days"] = max([int(m.get("active_days") or 0) for m in members] or [0])
         agg["gap_score"] = round(sum(float(m.get("gap_score") or 0) for m in members) + agg["point_count"] * 3, 2)
         agg["gap_level"] = _gap_level(agg["gap_score"], agg["unique_users"], agg["active_days"])
         agg["suggestion"] = _gap_suggestion(agg)
@@ -538,10 +543,10 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         conn = _pg_connect()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
-            SELECT id, user_id, event_type, result_count, success, response_time_ms,
+            SELECT id, query_id, COALESCE(user_id_hash, user_id) AS user_id, event_type, result_count, success, response_time_ms,
                    lat, lon, area_name, created_at
             FROM (
-              SELECT id, user_id, event_type, result_count, success, response_time_ms,
+              SELECT id, query_id, user_id, user_id_hash, event_type, result_count, success, response_time_ms,
                      lat, lon, area_name, created_at
               FROM analytics_events
               WHERE created_at >= %s AND created_at <= %s
@@ -594,10 +599,10 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, user_id, event_type, result_count, success, response_time_ms,
+            SELECT id, query_id, COALESCE(user_id_hash, user_id) AS user_id, event_type, result_count, success, response_time_ms,
                    lat, lon, area_name, created_at
             FROM (
-              SELECT id, user_id, event_type, result_count, success, response_time_ms,
+              SELECT id, query_id, user_id, user_id_hash, event_type, result_count, success, response_time_ms,
                      lat, lon, area_name, created_at
               FROM analytics_events
               WHERE created_at >= ? AND created_at <= ?
@@ -669,6 +674,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     no_result_count = 0
     low_result_count = 0
     slow_query_count = 0
+    gap_query_count = 0
     success_count = 0
     response_sum = 0
     response_count = 0
@@ -689,10 +695,12 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             success_count += 1
         if rc == 0:
             no_result_count += 1
-        if rc <= LOW_RESULT_THRESHOLD:
+        elif rc <= LOW_RESULT_THRESHOLD:
             low_result_count += 1
         if rt >= SLOW_QUERY_MS:
             slow_query_count += 1
+        if rc == 0 or (1 <= rc <= LOW_RESULT_THRESHOLD) or rt >= SLOW_QUERY_MS:
+            gap_query_count += 1
         if rt > 0:
             response_sum += rt
             response_count += 1
@@ -760,12 +768,18 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     for row in area_rows:
         row.pop("_response_sum", None)
         row.pop("_response_count", None)
+        row.pop("_user_set", None)
+        row.pop("_day_set", None)
     for row in hotspot_rows:
         row.pop("_response_sum", None)
         row.pop("_response_count", None)
+        row.pop("_user_set", None)
+        row.pop("_day_set", None)
     for row in clusters:
         row.pop("_response_sum", None)
         row.pop("_response_count", None)
+        row.pop("_user_set", None)
+        row.pop("_day_set", None)
 
     avg_response = round(response_sum / response_count) if response_count else 0
     top_area = area_rows[0]["area_name"] if area_rows else "-"
@@ -822,6 +836,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "no_result_count": no_result_count,
             "low_result_count": low_result_count,
             "slow_query_count": slow_query_count,
+            "gap_query_count": gap_query_count,
             "avg_response_ms": avg_response,
             "top_gap_area": top_area,
             "top_gap_cluster": top_cluster,

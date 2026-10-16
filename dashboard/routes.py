@@ -154,6 +154,13 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
                 lon,
                 area_name,
                 query_text,
+                query_id,
+                user_id_hash,
+                cache_hit,
+                status,
+                failure_reason,
+                reply_attempted,
+                reply_accepted,
                 created_at
             FROM analytics_events
             WHERE created_at >= %s AND created_at <= %s
@@ -194,19 +201,25 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     user_ids = [e["user_id"] for e in valid_query_events if e["user_id"]]
     active_users = len(set(user_ids))
 
-    success_events = valid_query_events
-    success_count = len([e for e in success_events if int(e.get("success") or 0) == 1])
-    success_rate = round((success_count / len(success_events)) * 100, 1) if success_events else 0.0
+    success_events = [
+        e for e in valid_query_events
+        if (e.get("status") == "success") or (not e.get("status") and int(e.get("success") or 0) == 1)
+    ]
+    success_count = len(success_events)
+    success_rate = round((success_count / total_queries) * 100, 1) if total_queries else 0.0
 
     response_values = [int(e["response_time_ms"]) for e in valid_query_events if e.get("response_time_ms") is not None]
 
-    instant_responses = [t for t in response_values if t < 50]
-    valid_responses = [t for t in response_values if t >= 50]
+    cache_hit_events = [e for e in valid_query_events if bool(e.get("cache_hit"))]
+    valid_responses = response_values
 
     avg_response = round(sum(valid_responses) / len(valid_responses)) if valid_responses else 0
 
     no_result_count = len([e for e in success_events if int(e.get("result_count") or 0) == 0])
-    error_count = len([e for e in events if e["event_type"] == "error" or int(e.get("success") or 0) == 0])
+    error_count = len([
+        e for e in valid_query_events
+        if e.get("status") == "failed" or (not e.get("status") and int(e.get("success") or 0) == 0)
+    ])
 
     new_users = 0
     returning_users = 0
@@ -216,15 +229,16 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         for uid in set(user_ids):
             cur.execute("""
-                SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
+                SELECT MIN(created_at) AS first_seen,
+                       COUNT(DISTINCT DATE(created_at AT TIME ZONE 'Asia/Taipei')) AS active_days
                 FROM analytics_events
-                WHERE user_id = %s
+                WHERE user_id = %s AND event_type = 'location_query'
             """, (uid,))
             r = cur.fetchone()
             if not r:
                 continue
             first_seen = r.get("first_seen")
-            cnt = r.get("cnt") or 0
+            active_days = r.get("active_days") or 0
             if first_seen:
                 if isinstance(first_seen, str):
                     first_seen = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
@@ -233,7 +247,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
 
                 if first_seen >= start:
                     new_users += 1
-            if cnt >= 2:
+            if active_days >= 2:
                 returning_users += 1
         conn.close()
     else:
@@ -242,18 +256,19 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
         cur = conn.cursor()
         for uid in set(user_ids):
             cur.execute("""
-                SELECT MIN(created_at) AS first_seen, COUNT(*) AS cnt
+                SELECT MIN(created_at) AS first_seen,
+                       COUNT(DISTINCT DATE(created_at)) AS active_days
                 FROM analytics_events
-                WHERE user_id = ?
+                WHERE user_id = ? AND event_type = 'location_query'
             """, (uid,))
             r = cur.fetchone()
             if not r:
                 continue
             first_seen = r["first_seen"]
-            cnt = r["cnt"] or 0
+            active_days = r["active_days"] or 0
             if first_seen and first_seen >= start.isoformat():
                 new_users += 1
-            if cnt >= 2:
+            if active_days >= 2:
                 returning_users += 1
         conn.close()
 
@@ -352,7 +367,9 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             "no_result_count": no_result_count,
             "error_count": error_count,
             "retention_rate": retention_rate,
-            "instant_responses": len(instant_responses)
+            "cache_hits": len(cache_hit_events),
+            # Backwards-compatible key; the UI now labels this as explicit cache hits.
+            "instant_responses": len(cache_hit_events)
         },
         "trend": {
             "labels": default_labels,
@@ -387,7 +404,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             },
             "successRate": {
                 "successCount": success_count,
-                "failedCount": max(0, len(success_events) - success_count),
+                "failedCount": max(0, total_queries - success_count),
                 "successRate": success_rate
             },
             "avgResponse": {
@@ -395,6 +412,10 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
                 "median": median_value,
                 "p95": p95_value,
                 "max": max(response_values) if response_values else 0
+            },
+            "instantResponses": {
+                "count": len(cache_hit_events),
+                "rate": round((len(cache_hit_events) / total_queries) * 100, 1) if total_queries else 0,
             },
             "newUsers": {
                 "newUsers": new_users,

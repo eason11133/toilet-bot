@@ -160,7 +160,7 @@
     </header>
 
     <div class="meta-strip">
-      <span class="pill">資料範圍：系統全資料</span>
+      <span class="pill">資料範圍：近期可分析資料（最多 20,000 筆）</span>
       <span class="pill">分析尺度：約 500m 需求圈</span>
       <span class="pill" id="lastUpdated">尚未載入</span>
       <span class="pill" id="cacheState">—</span>
@@ -182,13 +182,13 @@
 
     <section class="kpis">
       <div class="kpi" style="--accent:var(--teal)"><div class="label">有效需求訊號</div><div class="num" id="kpiDemand">—</div><div class="sub">去重後的位置查詢需求</div></div>
-      <div class="kpi" style="--accent:var(--red)"><div class="label">查無 / 低覆蓋</div><div class="num" id="kpiGapSignals">—</div><div class="sub">可視為資料或設施服務缺口</div></div>
+      <div class="kpi" style="--accent:var(--red)"><div class="label">獨立缺口查詢</div><div class="num" id="kpiGapSignals">—</div><div class="sub">至少符合查無、低覆蓋或慢查詢之一</div></div>
       <div class="kpi" style="--accent:var(--orange)"><div class="label">需求圈數量</div><div class="num" id="kpiClusters">—</div><div class="sub">附近數百公尺內合併後的熱區</div></div>
       <div class="kpi" style="--accent:var(--blue)"><div class="label">可提供候選點</div><div class="num" id="kpiSites">—</div><div class="sub">可匯出給單位檢視的 Top 清單</div></div>
       <div class="kpi" style="--accent:var(--purple)"><div class="label">最高需求圈半徑</div><div class="num" id="kpiRadius">—</div><div class="sub">代表熱區涵蓋的空間範圍</div></div>
     </section>
 
-    <div id="loadingBox" class="loading">正在整理全資料需求圈、地圖與研究圖表...</div>
+    <div id="loadingBox" class="loading">正在整理近期可分析資料、需求圈、地圖與研究圖表...</div>
     <div id="errorBox" class="error hidden"></div>
 
     <section class="hero-grid">
@@ -437,7 +437,7 @@
     const s = data.summary || {};
     const clusters = scopedRows(data.demand_clusters || []);
     const top = clusters[0] || {};
-    const gapSignals = n(s.no_result_count) + n(s.low_result_count);
+    const gapSignals = n(s.gap_query_count);
     const radius = Math.max(...clusters.map(c => n(c.radius_m, 0)), 0);
     const title = top.demand_label || (top.lat ? `${top.area_name || '候選位置'}附近約 ${Math.max(120, Math.round(n(top.radius_m,150)))}m 需求圈` : '尚無需求圈');
     const text = clusters.length

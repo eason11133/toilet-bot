@@ -770,14 +770,14 @@
       <button class="card metric-card" data-metric="avgResponse">
         <h3><span class="heading-inline" data-i18n="avgResponseTitle">平均回應時間 <span class="info-icon" data-info="avgResponse" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="avgResponse">0 ms</div>
-        <div class="subtext" data-i18n="avgResponseSub">已排除小於 50 ms 的瞬時回應</div>
+        <div class="subtext" data-i18n="avgResponseSub">所有正式查詢的平均處理時間</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
       <button class="card metric-card" data-metric="instantResponses">
-        <h3><span class="heading-inline" data-i18n="instantResponsesTitle">瞬時回應筆數 <span class="info-icon" data-info="instantResponses" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="instantResponsesTitle">快取命中筆數 <span class="info-icon" data-info="instantResponses" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="instantResponses">0</div>
-        <div class="subtext" data-i18n="instantResponsesSub">小於 50 ms 的瞬時回應次數</div>
+        <div class="subtext" data-i18n="instantResponsesSub">由後端明確記錄的 cache hit</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
@@ -906,7 +906,7 @@
         activeUsersTitle: '活躍使用者',
         successRateTitle: '成功率',
         avgResponseTitle: '平均回應時間',
-        instantResponsesTitle: '瞬時回應筆數',
+        instantResponsesTitle: '快取命中筆數',
         newUsersTitle: '新使用者',
         retentionRateTitle: '回訪率',
         noResultCountTitle: '查無結果次數',
@@ -914,8 +914,8 @@
         totalQueriesSub: '所選期間內總查詢次數',
         activeUsersSub: '所選期間內至少查詢一次',
         successRateSub: '成功回傳結果 / 全部查詢',
-        avgResponseSub: '已排除小於 50 ms 的瞬時回應',
-        instantResponsesSub: '小於 50 ms 的瞬時回應次數',
+        avgResponseSub: '所有正式查詢的平均處理時間',
+        instantResponsesSub: '由後端明確記錄的 cache hit',
         newUsersSub: '首次使用者數',
         retentionRateSub: '曾在不同日期再次使用',
         noResultCountSub: '結果數量 = 0',
@@ -951,7 +951,7 @@
           activeUsers: '活躍使用者明細',
           successRate: '成功率明細',
           avgResponse: '平均回應時間明細',
-          instantResponses: '瞬時回應筆數明細',
+          instantResponses: '快取命中明細',
           newUsers: '新使用者明細',
           retentionRate: '回訪率明細',
           noResultCount: '查無結果次數明細',
@@ -979,7 +979,7 @@
         activeUsersTitle: 'Active Users',
         successRateTitle: 'Success Rate',
         avgResponseTitle: 'Average Response Time',
-        instantResponsesTitle: 'Instant Responses',
+        instantResponsesTitle: 'Cache Hits',
         newUsersTitle: 'New Users',
         retentionRateTitle: 'Retention Rate',
         noResultCountTitle: 'No-result Count',
@@ -987,8 +987,8 @@
         totalQueriesSub: 'Total queries in the selected period',
         activeUsersSub: 'Users with at least one query in the selected period',
         successRateSub: 'Successful results / all queries',
-        avgResponseSub: 'Excludes instant responses under 50 ms',
-        instantResponsesSub: 'Count of responses under 50 ms',
+        avgResponseSub: 'Average processing time for all formal queries',
+        instantResponsesSub: 'Explicit cache hits recorded by the backend',
         newUsersSub: 'First-time users',
         retentionRateSub: 'Used again on a different date',
         noResultCountSub: 'Result count = 0',
@@ -1024,7 +1024,7 @@
           activeUsers: 'Active Users Details',
           successRate: 'Success Rate Details',
           avgResponse: 'Average Response Time Details',
-          instantResponses: 'Instant Responses Details',
+          instantResponses: 'Cache Hit Details',
           newUsers: 'New Users Details',
           retentionRate: 'Retention Rate Details',
           noResultCount: 'No-result Details',
@@ -1052,7 +1052,7 @@
         activeUsersTitle: 'アクティブユーザー',
         successRateTitle: '成功率',
         avgResponseTitle: '平均応答時間',
-        instantResponsesTitle: '瞬時応答件数',
+        instantResponsesTitle: 'キャッシュヒット数',
         newUsersTitle: '新規ユーザー',
         retentionRateTitle: '再訪率',
         noResultCountTitle: '結果なし回数',
@@ -1060,8 +1060,8 @@
         totalQueriesSub: '選択期間内の総検索回数',
         activeUsersSub: '選択期間内に1回以上検索した人数',
         successRateSub: '結果を返した回数 / 全検索回数',
-        avgResponseSub: '50 ms 未満の瞬時応答を除外',
-        instantResponsesSub: '50 ms 未満の応答回数',
+        avgResponseSub: 'すべての正式検索の平均処理時間',
+        instantResponsesSub: 'バックエンドが明示的に記録した cache hit',
         newUsersSub: '初回利用者数',
         retentionRateSub: '別の日に再度利用した割合',
         noResultCountSub: '結果数 = 0',
@@ -1097,7 +1097,7 @@
           activeUsers: 'アクティブユーザー詳細',
           successRate: '成功率詳細',
           avgResponse: '平均応答時間詳細',
-          instantResponses: '瞬時応答件数詳細',
+          instantResponses: 'キャッシュヒット詳細',
           newUsers: '新規ユーザー詳細',
           retentionRate: '再訪率詳細',
           noResultCount: '結果なし回数詳細',
@@ -1164,11 +1164,11 @@
       ageList: 'LINE 後台提供的年齡分布，屬官方彙整資料，不跟下方區間一起切換。',
       areaInsightList: 'LINE 後台提供的地區分布，僅供整體受眾觀察。',
       lineDeviceSubscription: '包含使用裝置與加入好友時間長短，屬 LINE 官方資料，固定每日更新。',
-      totalQueries: '所選期間內的總查詢次數，包含定位查詢與文字查詢。',
+      totalQueries: '所選期間內真正開始執行的正式定位查詢次數；快取命中仍算一次。',
       activeUsers: '所選期間內至少使用過一次的使用者數。',
       successRate: '成功回傳結果的比例，公式為成功回傳結果 ÷ 全部查詢。',
-      avgResponse: '系統平均回應時間，已排除小於 50 ms 的瞬時回應，避免平均值失真。',
-      instantResponses: '小於 50 ms 的瞬時回應次數，通常代表快取命中或極快回傳。',
+      avgResponse: '所有正式定位查詢的平均處理時間，包含快取命中。',
+      instantResponses: '由查詢流程明確記錄的快取命中次數，不再用回應時間推測。',
       newUsers: '所選期間內首次使用本系統的使用者數。',
       retentionRate: '曾在不同日期再次使用系統的比例。',
       noResultCount: '查詢成功送出，但結果數量為 0 的次數。',
@@ -1683,9 +1683,9 @@
       } else if (metric === 'successRate') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>成功次數</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>失敗次數</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>成功率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
       } else if (metric === 'avgResponse') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div><div class="empty-text">平均值已排除小於 50 ms 的瞬時回應，避免統計失真。</div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div><div class="empty-text">平均值涵蓋所有正式定位查詢；快取命中另行統計。</div>`;
       } else if (metric === 'instantResponses') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>瞬時回應次數</h4><div class="detail-value">${detail.count ?? 0}</div></div><div class="detail-card"><h4>判定門檻</h4><div class="detail-value">&lt; ${detail.thresholdMs ?? 50} ms</div></div><div class="detail-card"><h4>占總查詢比例</h4><div class="detail-value">${detail.rate ?? 0}%</div></div></div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>快取命中次數</h4><div class="detail-value">${detail.count ?? 0}</div></div><div class="detail-card"><h4>判定方式</h4><div class="detail-value">明確欄位</div></div><div class="detail-card"><h4>占總查詢比例</h4><div class="detail-value">${detail.rate ?? 0}%</div></div></div>`;
       } else if (metric === 'newUsers') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>新使用者</h4><div class="detail-value">${detail.newUsers ?? 0}</div></div><div class="detail-card"><h4>既有使用者</h4><div class="detail-value">${detail.existingUsers ?? 0}</div></div><div class="detail-card"><h4>新用戶占比</h4><div class="detail-value">${detail.newUserRate ?? 0}%</div></div></div>`;
       } else if (metric === 'retentionRate') {
