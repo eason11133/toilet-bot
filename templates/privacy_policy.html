@@ -18,7 +18,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <div class="muted" id="t_updated">最後更新：2026-02-07</div>
+      <div class="muted" id="t_updated">最後更新：2026-10-16</div>
       <h1 id="t_h1">隱私權政策</h1>
 
       <p id="t_intro">
@@ -27,8 +27,8 @@
 
       <h2 id="t_h2_1">我們會收集什麼</h2>
       <ul id="t_list_1">
-        <li>LINE 使用者識別（userId）與暱稱（displayName）</li>
-        <li>你選擇分享的位置資訊（僅用於即時查詢；隱私模式下會做近似網格化）</li>
+        <li>LINE 使用者識別（分析紀錄會改存不可直接辨識的雜湊代碼）與暱稱（displayName）</li>
+        <li>你選擇分享的位置資訊；系統會保存查詢座標或近似網格，用於查詢紀錄、服務統計與需求缺口分析</li>
         <li>你提交的廁所回饋（分數、是否有衛生紙、無障礙設施、留言等）</li>
       </ul>
 
@@ -36,12 +36,13 @@
       <ul id="t_list_2">
         <li>提供附近廁所查詢與導航</li>
         <li>整合回饋資料以產生清潔度預測與趨勢</li>
+        <li>以去識別化紀錄分析查詢品質、系統錯誤與公共廁所需求缺口</li>
         <li>計算成就/徽章（僅用於遊戲化體驗）</li>
       </ul>
 
       <h2 id="t_h2_3">資料保存</h2>
       <p id="t_retention">
-        位置資訊僅用於即時查詢，不會永久儲存。回饋資料會儲存於 Google Sheets 作為模型與服務品質改善用途。
+        查詢、近似位置、回饋與系統分析紀錄會保存在服務資料庫，僅供功能運作、統計與改善使用；不再需要或收到有效刪除請求時會刪除或去識別化。
       </p>
 
       <h2 id="t_h2_4">你的權利</h2>
@@ -59,23 +60,24 @@
 const I18N = {
   zh: {
     title: "隱私權政策 | 廁所幫手",
-    updated: "最後更新：2026-02-07",
+    updated: "最後更新：2026-10-16",
     h1: "隱私權政策",
     intro: "我們重視你的隱私。本服務（「廁所幫手」）會在提供功能所必需的範圍內，處理你的資料。",
     h2_1: "我們會收集什麼",
     list_1: [
-      "LINE 使用者識別（userId）與暱稱（displayName）",
-      "你選擇分享的位置資訊（僅用於即時查詢；隱私模式下會做近似網格化）",
+      "LINE 使用者識別（分析紀錄會改存不可直接辨識的雜湊代碼）與暱稱（displayName）",
+      "你選擇分享的位置資訊；系統會保存查詢座標或近似網格，用於查詢紀錄、服務統計與需求缺口分析",
       "你提交的廁所回饋（分數、是否有衛生紙、無障礙設施、留言等）"
     ],
     h2_2: "我們怎麼使用",
     list_2: [
       "提供附近廁所查詢與導航",
       "整合回饋資料以產生清潔度預測與趨勢",
+      "以去識別化紀錄分析查詢品質、系統錯誤與公共廁所需求缺口",
       "計算成就/徽章（僅用於遊戲化體驗）"
     ],
     h2_3: "資料保存",
-    retention: "位置資訊僅用於即時查詢，不會永久儲存。回饋資料會儲存於 Google Sheets 作為模型與服務品質改善用途。",
+    retention: "查詢、近似位置、回饋與系統分析紀錄會保存在服務資料庫，僅供功能運作、統計與改善使用；不再需要或收到有效刪除請求時會刪除或去識別化。",
     h2_4: "你的權利",
     list_4: [
       "你可以隨時撤回同意並停止使用服務",
@@ -86,23 +88,24 @@ const I18N = {
   },
   en: {
     title: "Privacy Policy | Restroom Helper",
-    updated: "Last updated: 2026-02-07",
+    updated: "Last updated: 2026-10-16",
     h1: "Privacy Policy",
     intro: "We value your privacy. This service (“Restroom Helper”) processes your data only as needed to provide features.",
     h2_1: "What we collect",
     list_1: [
-      "LINE identifiers (userId) and display name (displayName)",
-      "Location data you choose to share (used only for real-time search; privacy mode uses approximate grids)",
+      "LINE identifiers (analytics records use a pseudonymous hash) and display name (displayName)",
+      "Location data you choose to share; query coordinates or approximate grids are retained for query history, service statistics, and demand-gap analysis",
       "Feedback you submit (rating, toilet paper, accessibility, comments, etc.)"
     ],
     h2_2: "How we use it",
     list_2: [
       "Provide nearby restroom search and navigation",
       "Aggregate feedback to generate cleanliness predictions and trends",
+      "Use pseudonymous records to analyze query quality, system errors, and public-restroom demand gaps",
       "Compute achievements/badges (gamification only)"
     ],
     h2_3: "Data retention",
-    retention: "Location data is used for real-time search only and is not stored permanently. Feedback is stored in Google Sheets to improve the model and service quality.",
+    retention: "Queries, approximate locations, feedback, and system analytics are retained in the service database only for operations, statistics, and improvement, then deleted or de-identified when no longer needed or upon a valid deletion request.",
     h2_4: "Your rights",
     list_4: [
       "You can withdraw consent anytime and stop using the service",

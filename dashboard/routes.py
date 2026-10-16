@@ -161,6 +161,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
                 failure_reason,
                 reply_attempted,
                 reply_accepted,
+                source_status,
                 created_at
             FROM analytics_events
             WHERE created_at >= %s AND created_at <= %s
@@ -211,6 +212,11 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     response_values = [int(e["response_time_ms"]) for e in valid_query_events if e.get("response_time_ms") is not None]
 
     cache_hit_events = [e for e in valid_query_events if bool(e.get("cache_hit"))]
+    reply_attempted_events = [e for e in valid_query_events if bool(e.get("reply_attempted"))]
+    reply_accepted_events = [e for e in valid_query_events if bool(e.get("reply_accepted"))]
+    reply_acceptance_rate = round(
+        len(reply_accepted_events) / len(reply_attempted_events) * 100, 1
+    ) if reply_attempted_events else 0.0
     valid_responses = response_values
 
     avg_response = round(sum(valid_responses) / len(valid_responses)) if valid_responses else 0
@@ -227,49 +233,62 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     if POSTGRES_ENABLED:
         conn = _pg_connect()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        for uid in set(user_ids):
-            cur.execute("""
-                SELECT MIN(created_at) AS first_seen,
-                       COUNT(DISTINCT DATE(created_at AT TIME ZONE 'Asia/Taipei')) AS active_days
+        cur.execute("""
+            WITH active_users AS (
+                SELECT DISTINCT user_id
                 FROM analytics_events
-                WHERE user_id = %s AND event_type = 'location_query'
-            """, (uid,))
-            r = cur.fetchone()
-            if not r:
-                continue
-            first_seen = r.get("first_seen")
-            active_days = r.get("active_days") or 0
-            if first_seen:
-                if isinstance(first_seen, str):
-                    first_seen = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
-                if first_seen.tzinfo is None:
-                    first_seen = first_seen.replace(tzinfo=TW_TZ)
-
-                if first_seen >= start:
-                    new_users += 1
-            if active_days >= 2:
-                returning_users += 1
+                WHERE created_at >= %s AND created_at <= %s
+                  AND event_type = 'location_query'
+                  AND COALESCE(response_time_ms, 0) > 0
+                  AND user_id IS NOT NULL
+            ), user_history AS (
+                SELECT e.user_id,
+                       MIN(e.created_at) AS first_seen,
+                       COUNT(DISTINCT DATE(e.created_at AT TIME ZONE 'Asia/Taipei')) AS active_days
+                FROM analytics_events e
+                JOIN active_users a ON a.user_id = e.user_id
+                WHERE e.event_type = 'location_query'
+                  AND COALESCE(e.response_time_ms, 0) > 0
+                GROUP BY e.user_id
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE first_seen >= %s) AS new_users,
+                COUNT(*) FILTER (WHERE active_days >= 2) AS returning_users
+            FROM user_history
+        """, (start, end, start))
+        r = cur.fetchone() or {}
+        new_users = int(r.get("new_users") or 0)
+        returning_users = int(r.get("returning_users") or 0)
         conn.close()
     else:
         conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        for uid in set(user_ids):
-            cur.execute("""
-                SELECT MIN(created_at) AS first_seen,
-                       COUNT(DISTINCT DATE(created_at)) AS active_days
+        cur.execute("""
+            WITH active_users AS (
+                SELECT DISTINCT user_id
                 FROM analytics_events
-                WHERE user_id = ? AND event_type = 'location_query'
-            """, (uid,))
-            r = cur.fetchone()
-            if not r:
-                continue
-            first_seen = r["first_seen"]
-            active_days = r["active_days"] or 0
-            if first_seen and first_seen >= start.isoformat():
-                new_users += 1
-            if active_days >= 2:
-                returning_users += 1
+                WHERE created_at >= ? AND created_at <= ?
+                  AND event_type = 'location_query'
+                  AND COALESCE(response_time_ms, 0) > 0
+                  AND user_id IS NOT NULL
+            ), user_history AS (
+                SELECT e.user_id, MIN(e.created_at) AS first_seen,
+                       COUNT(DISTINCT DATE(e.created_at)) AS active_days
+                FROM analytics_events e
+                JOIN active_users a ON a.user_id = e.user_id
+                WHERE e.event_type = 'location_query'
+                  AND COALESCE(e.response_time_ms, 0) > 0
+                GROUP BY e.user_id
+            )
+            SELECT
+                SUM(CASE WHEN first_seen >= ? THEN 1 ELSE 0 END) AS new_users,
+                SUM(CASE WHEN active_days >= 2 THEN 1 ELSE 0 END) AS returning_users
+            FROM user_history
+        """, (start.isoformat(), end.isoformat(), start.isoformat()))
+        r = cur.fetchone()
+        new_users = int((r["new_users"] if r else 0) or 0)
+        returning_users = int((r["returning_users"] if r else 0) or 0)
         conn.close()
 
     retention_rate = round((returning_users / active_users) * 100, 1) if active_users else 0.0
@@ -277,7 +296,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     trend_map_queries = {label: 0 for label in default_labels}
     trend_map_users = {label: set() for label in default_labels}
 
-    for e in events:
+    for e in valid_query_events:
         try:
             raw_time = e.get("created_at") or e.get("time")
             if not raw_time:
@@ -293,9 +312,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             if label not in trend_map_queries:
                 continue
 
-            if e.get("event_type") == "location_query" and int(e.get("response_time_ms") or 0) > 0:
-                trend_map_queries[label] += 1
-
+            trend_map_queries[label] += 1
             uid = (e.get("user_id") or "").strip()
             if uid:
                 trend_map_users[label].add(uid)
@@ -307,7 +324,7 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
     trend_users = [len(trend_map_users[label]) for label in default_labels]
 
     hourly_map = {f"{i:02d}:00": 0 for i in range(24)}
-    for e in events:
+    for e in valid_query_events:
         try:
             raw_time = e.get("created_at") or e.get("time")
             if not raw_time:
@@ -329,11 +346,11 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
         "定位查詢": len([e for e in events if e["event_type"] == "location_query" and int(e.get("response_time_ms") or 0) > 0]),
         "文字查詢": len([e for e in events if e["event_type"] == "text_query"]),
         "點擊結果": len([e for e in events if e["event_type"] == "search_result"]),
-        "錯誤": len([e for e in events if e["event_type"] == "error"]),
+        "錯誤": error_count,
     }
 
     area_counter = {}
-    for e in events:
+    for e in valid_query_events:
         area = e.get("area_name") or "其他區域"
         area_counter[area] = area_counter.get(area, 0) + 1
     areas = sorted(area_counter.items(), key=lambda x: x[1], reverse=True)[:8]
@@ -368,6 +385,9 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
             "error_count": error_count,
             "retention_rate": retention_rate,
             "cache_hits": len(cache_hit_events),
+            "reply_acceptance_rate": reply_acceptance_rate,
+            "reply_attempted_count": len(reply_attempted_events),
+            "reply_accepted_count": len(reply_accepted_events),
             # Backwards-compatible key; the UI now labels this as explicit cache hits.
             "instant_responses": len(cache_hit_events)
         },
@@ -398,14 +418,23 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
                 )[:5]
             },
             "activeUsers": {
-                "inactiveUsersEstimate": max(0, total_queries - active_users),
+                "repeatQueryCount": max(0, total_queries - active_users),
                 "avgQueriesPerUser": f"{(total_queries / active_users):.2f}" if active_users else "0.00",
                 "topUserSamples": []
             },
             "successRate": {
                 "successCount": success_count,
                 "failedCount": max(0, total_queries - success_count),
-                "successRate": success_rate
+                "successRate": success_rate,
+                "replyAttemptedCount": len(reply_attempted_events),
+                "replyAcceptedCount": len(reply_accepted_events),
+                "replyAcceptanceRate": reply_acceptance_rate,
+            },
+            "replyAcceptanceRate": {
+                "attemptedCount": len(reply_attempted_events),
+                "acceptedCount": len(reply_accepted_events),
+                "rejectedCount": max(0, len(reply_attempted_events) - len(reply_accepted_events)),
+                "rate": reply_acceptance_rate,
             },
             "avgResponse": {
                 "min": min(response_values) if response_values else 0,

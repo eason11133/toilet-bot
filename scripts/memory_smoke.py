@@ -49,7 +49,7 @@ def seed(count=20000):
 def cleanup():
     conn = sqlite3.connect(ANALYTICS_DB_PATH)
     conn.execute("DELETE FROM analytics_events WHERE query_text = ?", (MARKER,))
-    conn.execute("DELETE FROM request_cache WHERE query_key LIKE 'gap_summary:v251_memory_bounded:%'")
+    conn.execute("DELETE FROM request_cache WHERE query_key LIKE 'gap_summary:v252_quality_filtered:%'")
     conn.commit()
     conn.close()
 

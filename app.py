@@ -23,6 +23,7 @@ from core.database import (
     get_cached_data,
     save_cache,
     init_persistent_store,
+    backfill_analytics_user_hashes,
 )
 from core.cache import _CACHE, _ENRICH_CACHE
 from core.memory import log_memory
@@ -188,6 +189,12 @@ create_analytics_tables()
 # requests; otherwise a just-deployed worker can receive a query before the new
 # lifecycle columns exist.
 init_persistent_store()
+try:
+    normalized_users = backfill_analytics_user_hashes(mask_user_id)
+    if normalized_users:
+        logging.info("analytics identity backfill complete rows=%s", normalized_users)
+except Exception as exc:
+    logging.warning("analytics identity backfill skipped error=%s", type(exc).__name__)
 
 
 # -----------------------------------------------------------------------------

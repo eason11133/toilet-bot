@@ -544,10 +544,10 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT id, query_id, COALESCE(user_id_hash, user_id) AS user_id, event_type, result_count, success, response_time_ms,
-                   lat, lon, area_name, created_at
+                   lat, lon, area_name, status, source_status, created_at
             FROM (
               SELECT id, query_id, user_id, user_id_hash, event_type, result_count, success, response_time_ms,
-                     lat, lon, area_name, created_at
+                     lat, lon, area_name, status, source_status, created_at
               FROM analytics_events
               WHERE created_at >= %s AND created_at <= %s
                 AND event_type = 'location_query'
@@ -562,12 +562,15 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         try:
             cur.execute("""
                 SELECT
-                  COUNT(*) AS total_source_calls,
-                  COUNT(*) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS osm_calls,
-                  COUNT(*) FILTER (WHERE (used_osm = TRUE OR source_name = 'osm') AND success = TRUE) AS osm_success_calls,
-                  AVG(elapsed_ms) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS avg_osm_elapsed_ms,
-                  AVG(elapsed_ms) FILTER (WHERE NOT (used_osm = TRUE OR source_name = 'osm')) AS avg_non_osm_elapsed_ms,
-                  MAX(elapsed_ms) FILTER (WHERE used_osm = TRUE OR source_name = 'osm') AS max_osm_elapsed_ms
+                  COUNT(*) FILTER (
+                    WHERE source_name IN ('csv', 'saved', 'osm')
+                      AND NOT (source_name = 'osm' AND used_osm = FALSE)
+                  ) AS total_source_calls,
+                  COUNT(*) FILTER (WHERE source_name = 'osm' AND used_osm = TRUE) AS osm_calls,
+                  COUNT(*) FILTER (WHERE source_name = 'osm' AND used_osm = TRUE AND success = TRUE) AS osm_success_calls,
+                  AVG(elapsed_ms) FILTER (WHERE source_name = 'osm' AND used_osm = TRUE) AS avg_osm_elapsed_ms,
+                  AVG(elapsed_ms) FILTER (WHERE source_name = 'total' AND used_osm = FALSE) AS avg_non_osm_elapsed_ms,
+                  MAX(elapsed_ms) FILTER (WHERE source_name = 'osm' AND used_osm = TRUE) AS max_osm_elapsed_ms
                 FROM source_query_logs
                 WHERE created_at >= %s AND created_at <= %s
             """, (start, end))
@@ -584,7 +587,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
                 SELECT COALESCE(reason, 'unknown') AS reason, COUNT(*) AS count
                 FROM source_query_logs
                 WHERE created_at >= %s AND created_at <= %s
-                  AND (used_osm = TRUE OR source_name = 'osm')
+                  AND source_name = 'osm' AND used_osm = TRUE
                 GROUP BY COALESCE(reason, 'unknown')
                 ORDER BY count DESC
                 LIMIT 8
@@ -600,10 +603,10 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         cur = conn.cursor()
         cur.execute("""
             SELECT id, query_id, COALESCE(user_id_hash, user_id) AS user_id, event_type, result_count, success, response_time_ms,
-                   lat, lon, area_name, created_at
+                   lat, lon, area_name, status, source_status, created_at
             FROM (
               SELECT id, query_id, user_id, user_id_hash, event_type, result_count, success, response_time_ms,
-                     lat, lon, area_name, created_at
+                     lat, lon, area_name, status, source_status, created_at
               FROM analytics_events
               WHERE created_at >= ? AND created_at <= ?
                 AND event_type = 'location_query'
@@ -619,6 +622,19 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     # Keep all valid demand points, but exclude out-of-scope/global/test coordinates so the map
     # does not zoom out to the whole world. This dashboard is for Taiwan public facility research.
     raw_total_queries_before_scope = len(events)
+    excluded_failed_queries = sum(
+        1 for e in events
+        if e.get("status") == "failed"
+        or e.get("source_status") == "failed"
+        or (not e.get("status") and int(e.get("success") or 0) == 0)
+    )
+    excluded_degraded_queries = sum(1 for e in events if e.get("source_status") == "degraded")
+    events = [
+        e for e in events
+        if e.get("status") != "failed"
+        and e.get("source_status") not in ("failed", "degraded")
+        and not (not e.get("status") and int(e.get("success") or 0) == 0)
+    ]
     scoped_events = []
     excluded_coord_count = 0
     for e in events:
@@ -813,7 +829,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
 
     result = {
         "ok": True,
-        "version": "demand_gap_v8_memory_bounded",
+        "version": "demand_gap_v9_quality_filtered",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -854,6 +870,8 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "coordinate_scope": "Taiwan + offshore islands",
             "raw_total_queries_before_scope_filter": raw_total_queries_before_scope,
             "excluded_out_of_scope_queries": excluded_coord_count,
+            "excluded_failed_queries": excluded_failed_queries,
+            "excluded_degraded_queries": excluded_degraded_queries,
         },
         "demand_clusters": _gap_take(clusters, GAP_CLUSTER_OUTPUT_LIMIT),
         "recommended_sites": clusters[:GAP_RECOMMENDED_LIMIT],

@@ -40,7 +40,8 @@ def api_shadow_ranking_metrics():
         }
         cur.execute("""
             WITH clicked AS (
-                SELECT a.id AS action_id, a.created_at AS action_time, a.query_id, a.toilet_id,
+                SELECT DISTINCT ON (a.query_id, a.toilet_id)
+                       a.id AS action_id, a.created_at AS action_time, a.query_id, a.toilet_id,
                        p.rank AS production_rank, s.rank AS shadow_rank,
                        p.toilet_name, p.distance_m,
                        p.nts_score AS production_score, s.nts_score AS shadow_score
@@ -49,6 +50,7 @@ def api_shadow_ranking_metrics():
                 LEFT JOIN recommendation_shadow_logs s ON a.query_id = s.query_id AND a.toilet_id = s.toilet_id
                   AND s.production_model_version = %s AND s.shadow_model_version = %s
                 WHERE a.action_type = 'click_navigation' AND p.model_version = %s
+                ORDER BY a.query_id, a.toilet_id, a.created_at ASC
             )
             SELECT COUNT(*) AS clicked_items,
                    ROUND(AVG(production_rank)::numeric, 2) AS avg_production_clicked_rank,
@@ -61,12 +63,14 @@ def api_shadow_ranking_metrics():
         click_compare = cur.fetchone()
         cur.execute("""
             WITH clicked AS (
-                SELECT a.id AS action_id, p.rank AS production_rank, s.rank AS shadow_rank
+                SELECT DISTINCT ON (a.query_id, a.toilet_id)
+                       a.id AS action_id, p.rank AS production_rank, s.rank AS shadow_rank
                 FROM user_actions a
                 JOIN recommendation_logs p ON a.query_id = p.query_id AND a.toilet_id = p.toilet_id
                 LEFT JOIN recommendation_shadow_logs s ON a.query_id = s.query_id AND a.toilet_id = s.toilet_id
                   AND s.production_model_version = %s AND s.shadow_model_version = %s
                 WHERE a.action_type = 'click_navigation' AND p.model_version = %s
+                ORDER BY a.query_id, a.toilet_id, a.created_at ASC
             )
             SELECT 'production' AS model, production_rank AS rank, COUNT(*) AS click_count
             FROM clicked GROUP BY production_rank
@@ -569,7 +573,7 @@ def api_nts_behavior():
                 WHERE (%s = 'all' OR model_version = %s)
             ),
             clicks AS (
-                SELECT DISTINCT a.id
+                SELECT DISTINCT a.query_id, a.toilet_id
                 FROM user_actions a
                 JOIN filtered r
                   ON a.query_id = r.query_id
@@ -581,7 +585,7 @@ def api_nts_behavior():
                 COUNT(DISTINCT query_id) AS query_count,
                 (SELECT COUNT(*) FROM clicks) AS navigation_clicks,
                 ROUND((SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS click_rate_by_recommendation_percent,
-                ROUND((SELECT COUNT(*) FROM clicks)::numeric / NULLIF(COUNT(DISTINCT query_id), 0) * 100, 2) AS click_rate_by_query_percent
+                ROUND((SELECT COUNT(DISTINCT query_id) FROM clicks)::numeric / NULLIF(COUNT(DISTINCT query_id), 0) * 100, 2) AS click_rate_by_query_percent
             FROM filtered
         """, (version, version))
         summary = cur.fetchone()
@@ -598,7 +602,7 @@ def api_nts_behavior():
                 GROUP BY rank
             ),
             clicks AS (
-                SELECT r.rank, COUNT(DISTINCT a.id) AS click_count
+                SELECT r.rank, COUNT(DISTINCT (a.query_id, a.toilet_id)) AS click_count
                 FROM user_actions a
                 JOIN filtered r
                   ON a.query_id = r.query_id
@@ -630,12 +634,13 @@ def api_nts_behavior():
                     r.toilet_id,
                     r.rank,
                     r.nts_score,
-                    CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS clicked
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM user_actions a
+                        WHERE a.query_id = r.query_id
+                          AND a.toilet_id = r.toilet_id
+                          AND a.action_type = 'click_navigation'
+                    ) THEN 1 ELSE 0 END AS clicked
                 FROM filtered r
-                LEFT JOIN user_actions a
-                  ON r.query_id = a.query_id
-                 AND r.toilet_id = a.toilet_id
-                 AND a.action_type = 'click_navigation'
             ),
             grouped AS (
                 SELECT

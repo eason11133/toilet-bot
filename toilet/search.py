@@ -97,6 +97,7 @@ def nearby_toilets():
 
 
 def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query_id=None):
+    total_start = time.time()
     # 預設使用 NTS 排序；若要回到純距離排序，可設定 TOILET_SORT_ALGO=distance_only
     algo = os.getenv("TOILET_SORT_ALGO", "nts_score").strip().lower()
     model_version = os.getenv("NTS_MODEL_VERSION", "nts_1_0").strip() or "nts_1_0"
@@ -114,14 +115,25 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
     lon_g = grid_coord(lon)
     query_key = f"nearby:{algo}:{model_version}:osm{int(osm_enabled)}:min{osm_fallback_min}:{lat_g},{lon_g},{radius}"
 
+    query_id_for_source = query_id or ("SRC_" + uuid.uuid4().hex[:16])
     cached = get_cached_data(query_key)
     if cached is not None:
         logging.debug(f"[cache hit] nearby {query_key}")
-        return (cached, {"cache_hit": True}) if return_metadata else cached
+        elapsed_ms = max(0, int((time.time() - total_start) * 1000))
+        log_source_query(
+            query_id_for_source, uid, "cache", len(cached), elapsed_ms,
+            True, "cache_hit", "", False,
+        )
+        log_source_query(
+            query_id_for_source, uid, "total", len(cached), elapsed_ms,
+            True, "cache_hit", "", False,
+        )
+        meta = {"cache_hit": True, "source_status": "cached", "source_failures": []}
+        return (cached, meta) if return_metadata else cached
 
-    query_id_for_source = query_id or ("SRC_" + uuid.uuid4().hex[:16])
-    total_start = time.time()
     csv_res, saved_res, osm_res = [], [], []
+    source_failures = []
+    successful_sources = 0
 
     # === 第一階段：只查本地/Neon/政府資料，不先打 OSM，降低延遲 ===
     futures = []
@@ -138,6 +150,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
                     csv_res = res or []
                 else:
                     saved_res = res or []
+                successful_sources += 1
                 log_source_query(
                     query_id=query_id_for_source,
                     uid=uid,
@@ -151,10 +164,12 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
             except FuturesTimeoutError:
                 elapsed_ms = int((time.time() - source_start) * 1000)
                 logging.warning(f"{name} 查詢逾時")
+                source_failures.append(f"{name}:timeout")
                 log_source_query(query_id_for_source, uid, name, 0, elapsed_ms, False, "timeout", "timeout", False)
             except Exception as e:
                 elapsed_ms = int((time.time() - source_start) * 1000)
                 logging.warning(f"{name} 查詢失敗: {e}")
+                source_failures.append(f"{name}:error")
                 log_source_query(query_id_for_source, uid, name, 0, elapsed_ms, False, "error", str(e), False)
     finally:
         for _, fut in futures:
@@ -170,6 +185,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
         source_start = time.time()
         try:
             osm_res = query_overpass_toilets(lat, lon, radius) or []
+            successful_sources += 1
             elapsed_ms = int((time.time() - source_start) * 1000)
             log_source_query(
                 query_id=query_id_for_source,
@@ -184,6 +200,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
         except Exception as e:
             elapsed_ms = int((time.time() - source_start) * 1000)
             logging.warning(f"osm fallback 查詢失敗: {e}")
+            source_failures.append("osm:error")
             log_source_query(query_id_for_source, uid, "osm", 0, elapsed_ms, False, f"fallback_candidates_lt_{osm_fallback_min}", str(e), True)
     else:
         # 記錄 skipped，之後可統計省下多少 OSM 查詢
@@ -206,6 +223,8 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
         quick = sort_toilets_nts(quick)
 
     result = quick[:LOC_MAX_RESULTS]
+    all_sources_failed = successful_sources == 0
+    source_status = "failed" if all_sources_failed else ("degraded" if source_failures else "ok")
 
     total_elapsed_ms = int((time.time() - total_start) * 1000)
     log_source_query(
@@ -214,15 +233,22 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
         source_name="total",
         result_count=len(result),
         elapsed_ms=total_elapsed_ms,
-        success=True,
-        reason="used_osm" if used_osm else "without_osm",
+        success=not all_sources_failed,
+        reason=("all_sources_failed" if all_sources_failed else ("used_osm" if used_osm else "without_osm")),
         used_osm=used_osm
     )
 
-    # === 寫入 cache（Grid cache）===
-    save_cache(query_key, result)
+    # Only cache a complete source run. Caching an all-source failure would turn
+    # the next request into a misleading successful empty cache hit.
+    if source_status == "ok":
+        save_cache(query_key, result)
 
-    return (result, {"cache_hit": False}) if return_metadata else result
+    meta = {
+        "cache_hit": False,
+        "source_status": source_status,
+        "source_failures": source_failures,
+    }
+    return (result, meta) if return_metadata else result
 
 
 def register_search_routes(app):

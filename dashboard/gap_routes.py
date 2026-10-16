@@ -36,9 +36,9 @@ def api_gap_summary():
             or (request.args.get("refresh") or "0").strip() == "1"
         )
 
-        # Cache key version bumped because global/outlier coordinates are now excluded from the research map.
+        # Bump when calculation semantics change so old persisted summaries are not served.
         cache_key = (
-            f"v251_memory_bounded:{range_key}:{anchor_date or ''}:"
+            f"v252_quality_filtered:{range_key}:{anchor_date or ''}:"
             f"{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '500')}:"
             f"{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '1000')}:"
             f"{os.getenv('GAP_MAX_EVENTS', '20000')}:"

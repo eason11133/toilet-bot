@@ -9,6 +9,7 @@ import hashlib
 import html
 import logging
 import math
+import os
 from math import radians, cos, sin, asin, sqrt
 
 
@@ -41,10 +42,21 @@ def _in_bbox(lat, lon, clat, clon, radius_m):
     )
 
 
-def mask_user_id(uid):
+def canonical_user_hash(uid):
     if not uid:
         return None
-    return hashlib.sha256(str(uid).encode()).hexdigest()[:10]
+    value = str(uid)
+    # Already-canonical values must not be hashed a second time when old/new
+    # analytics rows are read and normalized.
+    if len(value) == 64 and all(ch in "0123456789abcdef" for ch in value.lower()):
+        return value.lower()
+    salt = os.getenv("ANALYTICS_HASH_SALT") or os.getenv("LINE_CHANNEL_SECRET") or "toilet-bot"
+    return hashlib.sha256(f"{salt}:{value}".encode("utf-8")).hexdigest()
+
+
+def mask_user_id(uid):
+    """Canonical persisted pseudonymous user key (stable across app tables)."""
+    return canonical_user_hash(uid)
 
 
 def norm_coord(x, ndigits=6):

@@ -72,6 +72,7 @@ def init_persistent_store():
         cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS failure_reason TEXT")
         cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS reply_attempted BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS reply_accepted BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS source_status TEXT")
         # PostgreSQL permits multiple NULL values in a regular unique index, and
         # the non-partial index lets INSERT ... ON CONFLICT (query_id) resolve it.
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_analytics_query_id_unique ON analytics_events(query_id)")
@@ -473,6 +474,7 @@ def create_analytics_tables():
         "failure_reason": "TEXT",
         "reply_attempted": "INTEGER DEFAULT 0",
         "reply_accepted": "INTEGER DEFAULT 0",
+        "source_status": "TEXT",
     }
     for name, ddl in migrations.items():
         if name not in columns:
@@ -485,6 +487,49 @@ def create_analytics_tables():
 
     conn.commit()
     conn.close()
+
+def backfill_analytics_user_hashes(hash_user_id_func, batch_size=1000):
+    """Normalize pre-lifecycle analytics identities without loading all rows."""
+    if not callable(hash_user_id_func):
+        return 0
+    updated = 0
+    if POSTGRES_ENABLED:
+        while True:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, user_id FROM analytics_events
+                WHERE user_id IS NOT NULL AND user_id_hash IS NULL
+                ORDER BY id LIMIT %s
+            """, (int(batch_size),))
+            rows = cur.fetchall()
+            if not rows:
+                conn.close()
+                break
+            values = [(hash_user_id_func(uid), hash_user_id_func(uid), row_id) for row_id, uid in rows]
+            cur.executemany(
+                "UPDATE analytics_events SET user_id=%s, user_id_hash=%s WHERE id=%s",
+                values,
+            )
+            conn.commit()
+            conn.close()
+            updated += len(values)
+        return updated
+
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+    rows = conn.execute("""
+        SELECT id, user_id FROM analytics_events
+        WHERE user_id IS NOT NULL AND user_id_hash IS NULL
+    """).fetchall()
+    values = [(hash_user_id_func(uid), hash_user_id_func(uid), row_id) for row_id, uid in rows]
+    if values:
+        conn.executemany(
+            "UPDATE analytics_events SET user_id=?, user_id_hash=? WHERE id=?",
+            values,
+        )
+        conn.commit()
+    conn.close()
+    return len(values)
 
 # === Postgres startup init ===
 _PERSISTENT_INIT_STARTED = False

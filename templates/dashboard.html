@@ -761,9 +761,16 @@
       </button>
 
       <button class="card metric-card" data-metric="successRate">
-        <h3><span class="heading-inline" data-i18n="successRateTitle">成功率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <h3><span class="heading-inline" data-i18n="successRateTitle">後端搜尋完成率 <span class="info-icon" data-info="successRate" role="button" tabindex="0">ⓘ</span></span></h3>
         <div class="big-number mono" id="successRate">0%</div>
-        <div class="subtext" data-i18n="successRateSub">成功回傳結果 / 全部查詢</div>
+        <div class="subtext" data-i18n="successRateSub">後端完成搜尋 / 全部正式查詢</div>
+        <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
+      </button>
+
+      <button class="card metric-card" data-metric="replyAcceptanceRate">
+        <h3><span class="heading-inline" data-i18n="replyAcceptanceRateTitle">LINE 回覆接受率 <span class="info-icon" data-info="replyAcceptanceRate" role="button" tabindex="0">ⓘ</span></span></h3>
+        <div class="big-number mono" id="replyAcceptanceRate">0%</div>
+        <div class="subtext" data-i18n="replyAcceptanceRateSub">LINE API 接受 / 已嘗試回覆</div>
         <div class="card-hint" data-i18n="clickForDetails">點擊查看明細</div>
       </button>
 
@@ -904,7 +911,8 @@
         lineDevicePeriod: 'LINE 裝置 / 關係期間',
         totalQueriesTitle: '查詢總量',
         activeUsersTitle: '活躍使用者',
-        successRateTitle: '成功率',
+        successRateTitle: '後端搜尋完成率',
+        replyAcceptanceRateTitle: 'LINE 回覆接受率',
         avgResponseTitle: '平均回應時間',
         instantResponsesTitle: '快取命中筆數',
         newUsersTitle: '新使用者',
@@ -913,7 +921,8 @@
         errorCountTitle: '錯誤次數',
         totalQueriesSub: '所選期間內總查詢次數',
         activeUsersSub: '所選期間內至少查詢一次',
-        successRateSub: '成功回傳結果 / 全部查詢',
+        successRateSub: '後端完成搜尋 / 全部正式查詢',
+        replyAcceptanceRateSub: 'LINE API 接受 / 已嘗試回覆',
         avgResponseSub: '所有正式查詢的平均處理時間',
         instantResponsesSub: '由後端明確記錄的 cache hit',
         newUsersSub: '首次使用者數',
@@ -949,7 +958,8 @@
         detailTitles: {
           totalQueries: '查詢總量明細',
           activeUsers: '活躍使用者明細',
-          successRate: '成功率明細',
+          successRate: '後端搜尋完成率明細',
+          replyAcceptanceRate: 'LINE 回覆接受率明細',
           avgResponse: '平均回應時間明細',
           instantResponses: '快取命中明細',
           newUsers: '新使用者明細',
@@ -977,7 +987,8 @@
         lineDevicePeriod: 'LINE Device / Relationship Period',
         totalQueriesTitle: 'Total Queries',
         activeUsersTitle: 'Active Users',
-        successRateTitle: 'Success Rate',
+        successRateTitle: 'Backend Search Completion',
+        replyAcceptanceRateTitle: 'LINE Reply Acceptance',
         avgResponseTitle: 'Average Response Time',
         instantResponsesTitle: 'Cache Hits',
         newUsersTitle: 'New Users',
@@ -986,7 +997,8 @@
         errorCountTitle: 'Error Count',
         totalQueriesSub: 'Total queries in the selected period',
         activeUsersSub: 'Users with at least one query in the selected period',
-        successRateSub: 'Successful results / all queries',
+        successRateSub: 'Backend searches completed / formal queries',
+        replyAcceptanceRateSub: 'Replies accepted by LINE API / attempted replies',
         avgResponseSub: 'Average processing time for all formal queries',
         instantResponsesSub: 'Explicit cache hits recorded by the backend',
         newUsersSub: 'First-time users',
@@ -1022,7 +1034,8 @@
         detailTitles: {
           totalQueries: 'Total Queries Details',
           activeUsers: 'Active Users Details',
-          successRate: 'Success Rate Details',
+          successRate: 'Backend Search Completion Details',
+          replyAcceptanceRate: 'LINE Reply Acceptance Details',
           avgResponse: 'Average Response Time Details',
           instantResponses: 'Cache Hit Details',
           newUsers: 'New Users Details',
@@ -1050,7 +1063,8 @@
         lineDevicePeriod: 'LINE 端末 / 関係期間',
         totalQueriesTitle: '検索総数',
         activeUsersTitle: 'アクティブユーザー',
-        successRateTitle: '成功率',
+        successRateTitle: 'バックエンド検索完了率',
+        replyAcceptanceRateTitle: 'LINE返信受付率',
         avgResponseTitle: '平均応答時間',
         instantResponsesTitle: 'キャッシュヒット数',
         newUsersTitle: '新規ユーザー',
@@ -1059,7 +1073,8 @@
         errorCountTitle: 'エラー回数',
         totalQueriesSub: '選択期間内の総検索回数',
         activeUsersSub: '選択期間内に1回以上検索した人数',
-        successRateSub: '結果を返した回数 / 全検索回数',
+        successRateSub: '検索処理完了数 / 正式検索数',
+        replyAcceptanceRateSub: 'LINE API受付数 / 返信試行数',
         avgResponseSub: 'すべての正式検索の平均処理時間',
         instantResponsesSub: 'バックエンドが明示的に記録した cache hit',
         newUsersSub: '初回利用者数',
@@ -1095,7 +1110,8 @@
         detailTitles: {
           totalQueries: '検索総数の詳細',
           activeUsers: 'アクティブユーザー詳細',
-          successRate: '成功率詳細',
+          successRate: 'バックエンド検索完了率詳細',
+          replyAcceptanceRate: 'LINE返信受付率詳細',
           avgResponse: '平均応答時間詳細',
           instantResponses: 'キャッシュヒット詳細',
           newUsers: '新規ユーザー詳細',
@@ -1166,7 +1182,8 @@
       lineDeviceSubscription: '包含使用裝置與加入好友時間長短，屬 LINE 官方資料，固定每日更新。',
       totalQueries: '所選期間內真正開始執行的正式定位查詢次數；快取命中仍算一次。',
       activeUsers: '所選期間內至少使用過一次的使用者數。',
-      successRate: '成功回傳結果的比例，公式為成功回傳結果 ÷ 全部查詢。',
+      successRate: '後端完成搜尋流程的比例，公式為搜尋成功 ÷ 全部正式查詢；不代表 LINE 已成功送達。',
+      replyAcceptanceRate: 'LINE Messaging API 接受回覆請求的比例，公式為接受次數 ÷ 回覆嘗試次數。',
       avgResponse: '所有正式定位查詢的平均處理時間，包含快取命中。',
       instantResponses: '由查詢流程明確記錄的快取命中次數，不再用回應時間推測。',
       newUsers: '所選期間內首次使用本系統的使用者數。',
@@ -1378,6 +1395,7 @@
       const totalQueries = cfg.totalQueries;
       const activeUsers = cfg.activeUsers;
       const successRate = +(Math.random() * 10 + 89).toFixed(1);
+      const replyAcceptanceRate = +(Math.random() * 5 + 94).toFixed(1);
       const avgResponse = rand(180, 900);
       const newUsers = rand(10, Math.max(20, Math.floor(cfg.activeUsers * 0.25)));
       const retentionRate = +(Math.random() * 30 + 40).toFixed(1);
@@ -1392,6 +1410,7 @@
           totalQueries,
           activeUsers,
           successRate,
+          replyAcceptanceRate,
           avgResponse,
           instantResponses: rand(0, Math.max(3, Math.floor(totalQueries * 0.2))),
           newUsers,
@@ -1415,7 +1434,7 @@
               .slice(0, 5)
           },
           activeUsers: {
-            inactiveUsersEstimate: Math.max(0, totalQueries - activeUsers),
+            repeatQueryCount: Math.max(0, totalQueries - activeUsers),
             avgQueriesPerUser: (totalQueries / activeUsers).toFixed(2),
             topUserSamples: Array.from({ length: 5 }, (_, i) => ({
               user: `user_${rand(1000, 9999)}`,
@@ -1426,6 +1445,12 @@
             successCount,
             failedCount,
             successRate
+          },
+          replyAcceptanceRate: {
+            attemptedCount: totalQueries,
+            acceptedCount: Math.round(totalQueries * replyAcceptanceRate / 100),
+            rejectedCount: totalQueries - Math.round(totalQueries * replyAcceptanceRate / 100),
+            rate: replyAcceptanceRate
           },
           avgResponse: {
             min: rand(80, 140),
@@ -1501,6 +1526,7 @@
       const totalQueries = pickMetric(summary, 'totalQueries', 'total_queries', 'queryCount', 'query_count');
       const activeUsers = pickMetric(summary, 'activeUsers', 'active_users', 'unique_users', 'users');
       const successRate = pickMetric(summary, 'successRate', 'success_rate', 'success_rate_percent');
+      const replyAcceptanceRate = pickMetric(summary, 'replyAcceptanceRate', 'reply_acceptance_rate');
       const avgResponse = pickMetric(summary, 'avgResponse', 'avg_response', 'avgResponseMs', 'avg_response_ms', 'average_response_ms');
       const instantResponses = pickMetric(summary, 'instantResponses', 'instant_responses', 'instant_response_count', 'instantResponsesCount');
       const newUsers = pickMetric(summary, 'newUsers', 'new_users');
@@ -1511,6 +1537,7 @@
       document.getElementById('totalQueries').textContent = formatMetricValue(totalQueries);
       document.getElementById('activeUsers').textContent = formatMetricValue(activeUsers);
       document.getElementById('successRate').textContent = isMissingMetric(successRate) ? '0%' : `${successRate}%`;
+      document.getElementById('replyAcceptanceRate').textContent = isMissingMetric(replyAcceptanceRate) ? '0%' : `${replyAcceptanceRate}%`;
       document.getElementById('avgResponse').textContent = isMissingMetric(avgResponse) ? '0 ms' : `${formatNumber(avgResponse)} ms`;
 
       const instantEl = document.getElementById('instantResponses');
@@ -1679,9 +1706,11 @@
             ${(detail.topTimePoints || []).length ? `<table class="mini-table"><thead><tr><th>時段</th><th>查詢量</th></tr></thead><tbody>${(detail.topTimePoints || []).map(x => `<tr><td>${x.label}</td><td>${x.value}</td></tr>`).join('')}</tbody></table>` : '<div class="empty-text">目前沒有資料</div>'}
           </div>`;
       } else if (metric === 'activeUsers') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>平均每位使用者查詢次數</h4><div class="detail-value">${detail.avgQueriesPerUser ?? '0.00'}</div></div><div class="detail-card"><h4>推估非重複外查詢數</h4><div class="detail-value">${detail.inactiveUsersEstimate ?? 0}</div></div></div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>平均每位使用者查詢次數</h4><div class="detail-value">${detail.avgQueriesPerUser ?? '0.00'}</div></div><div class="detail-card"><h4>重複查詢筆數</h4><div class="detail-value">${detail.repeatQueryCount ?? 0}</div></div></div>`;
       } else if (metric === 'successRate') {
-        html = `<div class="detail-grid"><div class="detail-card"><h4>成功次數</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>失敗次數</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>成功率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
+        html = `<div class="detail-grid"><div class="detail-card"><h4>搜尋完成</h4><div class="detail-value">${detail.successCount ?? 0}</div></div><div class="detail-card"><h4>搜尋失敗</h4><div class="detail-value">${detail.failedCount ?? 0}</div></div><div class="detail-card"><h4>完成率</h4><div class="detail-value">${detail.successRate ?? 0}%</div></div></div>`;
+      } else if (metric === 'replyAcceptanceRate') {
+        html = `<div class="detail-grid"><div class="detail-card"><h4>嘗試回覆</h4><div class="detail-value">${detail.attemptedCount ?? 0}</div></div><div class="detail-card"><h4>LINE API 接受</h4><div class="detail-value">${detail.acceptedCount ?? 0}</div></div><div class="detail-card"><h4>未接受</h4><div class="detail-value">${detail.rejectedCount ?? 0}</div></div><div class="detail-card"><h4>接受率</h4><div class="detail-value">${detail.rate ?? 0}%</div></div></div>`;
       } else if (metric === 'avgResponse') {
         html = `<div class="detail-grid"><div class="detail-card"><h4>最小值</h4><div class="detail-value">${detail.min ?? 0} ms</div></div><div class="detail-card"><h4>中位數</h4><div class="detail-value">${detail.median ?? 0} ms</div></div><div class="detail-card"><h4>P95</h4><div class="detail-value">${detail.p95 ?? 0} ms</div></div><div class="detail-card"><h4>最大值</h4><div class="detail-value">${detail.max ?? 0} ms</div></div></div><div class="empty-text">平均值涵蓋所有正式定位查詢；快取命中另行統計。</div>`;
       } else if (metric === 'instantResponses') {

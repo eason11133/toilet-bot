@@ -53,13 +53,51 @@ class QueryLifecycleTests(unittest.TestCase):
         self.assertFalse(handlers._accept_user_location_query("U1", 25.0001, 121.5001, now=12))
         self.assertTrue(handlers._accept_user_location_query("U1", 25.0001, 121.5001, now=20))
 
+    def test_legacy_raw_user_id_is_backfilled_to_canonical_hash(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO analytics_events (user_id,event_type,created_at) VALUES (?,?,?)",
+            ("legacy-user", "location_query", "2026-10-15T12:00:00+08:00"),
+        )
+        conn.commit()
+        conn.close()
+        updated = database.backfill_analytics_user_hashes(handlers._analytics_user_hash)
+        conn = sqlite3.connect(self.db_path)
+        user_id, user_id_hash = conn.execute(
+            "SELECT user_id,user_id_hash FROM analytics_events"
+        ).fetchone()
+        conn.close()
+        self.assertEqual(updated, 1)
+        self.assertEqual(user_id, handlers._analytics_user_hash("legacy-user"))
+        self.assertEqual(user_id_hash, user_id)
+
     def test_cache_metadata_is_explicit_even_for_empty_results(self):
         with mock.patch.object(search, "get_cached_data", return_value=[]):
             result, meta = search.build_nearby_toilets(
                 "U1", 25.0, 121.5, return_metadata=True
             )
         self.assertEqual(result, [])
-        self.assertEqual(meta, {"cache_hit": True})
+        self.assertEqual(meta, {
+            "cache_hit": True,
+            "source_status": "cached",
+            "source_failures": [],
+        })
+
+    def test_all_source_failure_is_explicit_and_not_cached(self):
+        failed = mock.Mock()
+        failed.result.side_effect = RuntimeError("source unavailable")
+        with mock.patch.object(search, "get_cached_data", return_value=None), \
+             mock.patch.object(search._pool, "submit", return_value=failed), \
+             mock.patch.object(search, "save_cache") as save_cache, \
+             mock.patch.object(search, "log_source_query"), \
+             mock.patch.dict(os.environ, {"OSM_FALLBACK_ENABLE": "0"}):
+            result, meta = search.build_nearby_toilets(
+                "U1", 25.0, 121.5, return_metadata=True
+            )
+        self.assertEqual(result, [])
+        self.assertEqual(meta["source_status"], "failed")
+        self.assertEqual(len(meta["source_failures"]), 2)
+        save_cache.assert_not_called()
 
 
 class GapDefinitionTests(unittest.TestCase):
@@ -90,6 +128,39 @@ class GapDefinitionTests(unittest.TestCase):
         self.assertEqual(len(clusters), 1)
         self.assertEqual(clusters[0]["unique_users"], 3)
         self.assertEqual(clusters[0]["active_days"], 2)
+
+    def test_gap_excludes_failed_and_degraded_source_queries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "analytics.db")
+            old_db_path = database.ANALYTICS_DB_PATH
+            old_gap_path = gap_analysis.ANALYTICS_DB_PATH
+            database.ANALYTICS_DB_PATH = db_path
+            gap_analysis.ANALYTICS_DB_PATH = db_path
+            try:
+                database.create_analytics_tables()
+                conn = sqlite3.connect(db_path)
+                rows = [
+                    ("ok", "A", 0, 1, "success", "ok"),
+                    ("failed", "B", 0, 0, "failed", "failed"),
+                    ("degraded", "C", 0, 1, "success", "degraded"),
+                ]
+                conn.executemany("""
+                    INSERT INTO analytics_events
+                    (query_id,user_id,event_type,result_count,success,response_time_ms,
+                     lat,lon,area_name,created_at,status,source_status)
+                    VALUES (?,?, 'location_query', ?, ?, 100, 25.03, 121.52,
+                            '測試區', '2026-10-16T12:00:00+08:00', ?, ?)
+                """, rows)
+                conn.commit()
+                conn.close()
+                result = gap_analysis._build_gap_summary("all")
+                self.assertEqual(result["summary"]["total_queries"], 1)
+                self.assertEqual(result["summary"]["no_result_count"], 1)
+                self.assertEqual(result["data_quality"]["excluded_failed_queries"], 1)
+                self.assertEqual(result["data_quality"]["excluded_degraded_queries"], 1)
+            finally:
+                database.ANALYTICS_DB_PATH = old_db_path
+                gap_analysis.ANALYTICS_DB_PATH = old_gap_path
 
 
 if __name__ == "__main__":

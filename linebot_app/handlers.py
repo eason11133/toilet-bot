@@ -1,6 +1,5 @@
 import os
 import json
-import hashlib
 import logging
 import sqlite3
 import threading
@@ -29,7 +28,7 @@ from core.cache import _CACHE
 from core.i18n import (
     set_user_lang, get_user_lang, T, L, _localize_outgoing_messages,
 )
-from core.utils import norm_coord, haversine
+from core.utils import norm_coord, haversine, mask_user_id
 from linebot_app.reply_tokens import CHANNEL_ACCESS_TOKEN, claim_reply_token, show_loading
 from linebot_app.dedupe import is_duplicate_and_mark_event
 from linebot_app.replies import (
@@ -393,8 +392,7 @@ def log_analytics_event(
         logging.warning(f"log_analytics_event failed: {e}")
 
 def _analytics_user_hash(user_id):
-    secret = os.getenv("ANALYTICS_HASH_SALT") or os.getenv("LINE_CHANNEL_SECRET") or "toilet-bot"
-    return hashlib.sha256(f"{secret}:{user_id or ''}".encode("utf-8")).hexdigest()
+    return mask_user_id(user_id)
 
 def _start_location_query(query_id, user_id, lat, lon, area_name, created_at=None):
     """Create exactly one canonical row when a formal search is accepted."""
@@ -408,8 +406,8 @@ def _start_location_query(query_id, user_id, lat, lon, area_name, created_at=Non
                 INSERT INTO analytics_events
                 (query_id, user_id, user_id_hash, event_type, result_count, success,
                  response_time_ms, lat, lon, area_name, created_at, cache_hit, status,
-                 reply_attempted, reply_accepted)
-                VALUES (%s,%s,%s,'location_query',0,0,NULL,%s,%s,%s,%s,FALSE,'processing',FALSE,FALSE)
+                 reply_attempted, reply_accepted, source_status)
+                VALUES (%s,%s,%s,'location_query',0,0,NULL,%s,%s,%s,%s,FALSE,'processing',FALSE,FALSE,'pending')
                 ON CONFLICT (query_id) DO NOTHING
             """, (query_id, user_hash, user_hash, float(lat), float(lon), area_name, created_at))
             conn.commit()
@@ -420,8 +418,8 @@ def _start_location_query(query_id, user_id, lat, lon, area_name, created_at=Non
                 INSERT OR IGNORE INTO analytics_events
                 (query_id, user_id, user_id_hash, event_type, result_count, success,
                  response_time_ms, lat, lon, area_name, created_at, cache_hit, status,
-                 reply_attempted, reply_accepted)
-                VALUES (?,?,?,'location_query',0,0,NULL,?,?,?,?,0,'processing',0,0)
+                 reply_attempted, reply_accepted, source_status)
+                VALUES (?,?,?,'location_query',0,0,NULL,?,?,?,?,0,'processing',0,0,'pending')
             """, (query_id, user_hash, user_hash, float(lat), float(lon), area_name, created_at.isoformat()))
             conn.commit()
             conn.close()
@@ -429,12 +427,13 @@ def _start_location_query(query_id, user_id, lat, lon, area_name, created_at=Non
         logging.warning("start location query analytics failed query_id=%s error=%s", query_id, type(exc).__name__)
 
 def _finish_location_query(query_id, status, result_count, processing_ms, cache_hit=False,
+                           source_status=None,
                            failure_reason=None, reply_attempted=False, reply_accepted=False):
     success = status == "success"
     try:
         values = (
             int(result_count or 0), int(processing_ms or 0), bool(cache_hit), status,
-            failure_reason, bool(reply_attempted), bool(reply_accepted), query_id,
+            source_status, failure_reason, bool(reply_attempted), bool(reply_accepted), query_id,
         )
         if POSTGRES_ENABLED:
             conn = _pg_connect()
@@ -442,11 +441,11 @@ def _finish_location_query(query_id, status, result_count, processing_ms, cache_
             cur.execute("""
                 UPDATE analytics_events
                 SET result_count=%s, success=%s, response_time_ms=%s, cache_hit=%s,
-                    status=%s, failure_reason=%s, reply_attempted=%s, reply_accepted=%s
+                    status=%s, source_status=%s, failure_reason=%s, reply_attempted=%s, reply_accepted=%s
                 WHERE query_id=%s
             """, (
                 values[0], int(success), values[1], values[2], values[3], values[4],
-                values[5], values[6], values[7],
+                values[5], values[6], values[7], values[8],
             ))
             conn.commit()
             conn.close()
@@ -455,11 +454,11 @@ def _finish_location_query(query_id, status, result_count, processing_ms, cache_
             conn.execute("""
                 UPDATE analytics_events
                 SET result_count=?, success=?, response_time_ms=?, cache_hit=?, status=?,
-                    failure_reason=?, reply_attempted=?, reply_accepted=?
+                    source_status=?, failure_reason=?, reply_attempted=?, reply_accepted=?
                 WHERE query_id=?
             """, (
                 values[0], int(success), values[1], int(values[2]), values[3], values[4],
-                int(values[5]), int(values[6]), values[7],
+                values[5], int(values[6]), int(values[7]), values[8],
             ))
             conn.commit()
             conn.close()
@@ -1168,12 +1167,19 @@ def handle_location(event):
     _start_location_query(query_id, uid, lat, lon, area_name)
     _log_formal_search(query_id, uid, lat, lon)
     show_loading(uid, seconds=15)
+    source_status = "pending"
+    source_failure_reason = None
 
     try:
         toilets, search_meta = build_nearby_toilets(
             uid, lat, lon, return_metadata=True, query_id=query_id
         )
         cache_hit = bool((search_meta or {}).get("cache_hit"))
+        source_status = (search_meta or {}).get("source_status") or "ok"
+        source_failures = (search_meta or {}).get("source_failures") or []
+        source_failure_reason = ",".join(str(x) for x in source_failures[:5]) or None
+        if source_status == "failed":
+            raise RuntimeError("all_search_sources_failed")
         elapsed_ms = int((time.time() - start_ts) * 1000)
 
         if toilets:
@@ -1265,6 +1271,8 @@ def handle_location(event):
             result_count=len(toilets or []),
             processing_ms=elapsed_ms,
             cache_hit=cache_hit,
+            source_status=source_status,
+            failure_reason=source_failure_reason,
             reply_attempted=True,
             reply_accepted=reply_accepted,
         )
@@ -1279,7 +1287,8 @@ def handle_location(event):
             result_count=0,
             processing_ms=elapsed_ms,
             cache_hit=False,
-            failure_reason=type(e).__name__,
+            source_status="failed" if source_status in ("pending", "failed") else source_status,
+            failure_reason=("all_search_sources_failed" if str(e) == "all_search_sources_failed" else type(e).__name__),
             reply_attempted=True,
             reply_accepted=reply_accepted,
         )
