@@ -29,7 +29,7 @@ LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "4"))
 # rerank that pool before returning LOC_MAX_RESULTS items.
 LOC_CANDIDATE_TOP_K = max(
     LOC_MAX_RESULTS,
-    int(os.getenv("LOC_CANDIDATE_TOP_K", "12")),
+    int(os.getenv("LOC_CANDIDATE_TOP_K", "10")),
 )
 SHOW_SEARCHING_BUBBLE = False
 
