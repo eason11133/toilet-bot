@@ -822,7 +822,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     def _gap_take(rows, limit):
         return rows if not limit else rows[:limit]
 
-    GAP_CLUSTER_OUTPUT_LIMIT = _gap_output_limit("GAP_CLUSTER_OUTPUT_LIMIT", "500") or 500
+    GAP_CLUSTER_OUTPUT_LIMIT = _gap_output_limit("GAP_CLUSTER_OUTPUT_LIMIT", "0")
     GAP_HOTSPOT_OUTPUT_LIMIT = _gap_output_limit("GAP_HOTSPOT_OUTPUT_LIMIT", "1000") or 1000
     GAP_PRECISE_HOTSPOT_LIMIT = _gap_output_limit("GAP_PRECISE_HOTSPOT_LIMIT", "1000") or 1000
     GAP_RECOMMENDED_LIMIT = _gap_output_limit("GAP_RECOMMENDED_LIMIT", "10") or 10
