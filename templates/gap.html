@@ -255,6 +255,7 @@
   const DEFAULT_CENTER = [25.0478, 121.5170];
   let currentData = null;
   let map, heatLayer, circleLayer, pinLayer, rawLayer;
+  let refreshPollTimer = null;
   const fmt = new Intl.NumberFormat('zh-TW');
 
   const n = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
@@ -568,7 +569,11 @@
       renderRankList(data);
       renderCharts(data);
       setText('lastUpdated', `更新：${new Date(data.generated_at || Date.now()).toLocaleString('zh-TW')}`);
-      setText('cacheState', data.cached ? '快取資料' : '即時整理');
+      setText('cacheState', data.refreshing ? '快照資料｜背景更新中' : (data.cached ? '最新快照' : '即時整理'));
+      if (refreshPollTimer) clearTimeout(refreshPollTimer);
+      if (data.refreshing) {
+        refreshPollTimer = setTimeout(() => loadDashboard(false), 4000);
+      }
       document.getElementById('copySummaryBtn').onclick = async () => { await navigator.clipboard.writeText(summaryText); alert('已複製研究摘要'); };
       document.getElementById('downloadCsvBtn').onclick = downloadCsv;
       document.getElementById('printBtn').onclick = () => window.print();

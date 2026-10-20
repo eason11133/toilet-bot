@@ -1,8 +1,11 @@
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest import mock
+
+from flask import Flask
 
 os.environ.setdefault("DATABASE_URL", "")
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test")
@@ -10,6 +13,7 @@ os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
 
 from core import database
 from dashboard import gap_analysis
+from dashboard import gap_routes
 from linebot_app import handlers
 from toilet import search
 
@@ -210,11 +214,35 @@ class GapDefinitionTests(unittest.TestCase):
                 result = gap_analysis._build_gap_summary("all")
                 self.assertEqual(result["summary"]["total_queries"], 1)
                 self.assertEqual(result["summary"]["no_result_count"], 1)
+                self.assertEqual(result["source_watermark"], 3)
+                self.assertGreater(result["generated_epoch"], 0)
                 self.assertEqual(result["data_quality"]["excluded_failed_queries"], 1)
                 self.assertEqual(result["data_quality"]["excluded_degraded_queries"], 1)
             finally:
                 database.ANALYTICS_DB_PATH = old_db_path
                 gap_analysis.ANALYTICS_DB_PATH = old_gap_path
+
+
+class GapSnapshotRouteTests(unittest.TestCase):
+    def test_stale_snapshot_returns_immediately_and_starts_background_refresh(self):
+        app = Flask(__name__)
+        gap_routes.register_gap_routes(app)
+        snapshot = {
+            "ok": True,
+            "generated_epoch": time.time() - 600,
+            "source_watermark": 10,
+        }
+        with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
+             mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=11), \
+             mock.patch.object(gap_routes, "_start_gap_refresh", return_value=True), \
+             mock.patch.object(gap_routes, "_build_gap_summary") as build:
+            response = app.test_client().get("/api/gap-summary?range=all")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["cached"])
+        self.assertTrue(payload["new_data_available"])
+        self.assertTrue(payload["refreshing"])
+        build.assert_not_called()
 
 
 if __name__ == "__main__":

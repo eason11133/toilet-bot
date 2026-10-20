@@ -114,12 +114,13 @@ def _backfill_area_names_async(events, max_rows=1000):
 _GAP_SUMMARY_CACHE = {}
 _GAP_MEMORY_CACHE_MAX = max(0, int(os.getenv("GAP_MEMORY_CACHE_MAX", "1")))
 # Gap summary is expensive because it scans and clusters analytics_events.
-# Default to 12 hours so the research/dashboard page opens fast.
-# Manual refresh still works via ?force=1 / ?refresh=1.
-_GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "43200"))
+# Serve the latest snapshot immediately, then refresh it in the background at
+# most once per short interval when newer events exist.
+_GAP_SUMMARY_CACHE_TTL = int(os.getenv("GAP_SUMMARY_CACHE_TTL_SECONDS", "300"))
+_GAP_SUMMARY_STALE_TTL = int(os.getenv("GAP_SUMMARY_STALE_TTL_SECONDS", "604800"))
 
 
-def _gap_cache_get(key):
+def _gap_cache_get(key, ttl_sec=None):
     """Read gap-summary cache.
 
     Uses two layers:
@@ -128,17 +129,18 @@ def _gap_cache_get(key):
 
     Manual refresh bypasses this function via ?force=1 / ?refresh=1.
     """
+    ttl_sec = _GAP_SUMMARY_CACHE_TTL if ttl_sec is None else max(0, int(ttl_sec))
     try:
         item = _GAP_SUMMARY_CACHE.get(key)
         if item:
             ts, data = item
-            if time.time() - ts <= _GAP_SUMMARY_CACHE_TTL:
+            if time.time() - ts <= ttl_sec:
                 return data
     except Exception:
         pass
 
     try:
-        data = get_cached_data(f"gap_summary:{key}", ttl_sec=_GAP_SUMMARY_CACHE_TTL)
+        data = get_cached_data(f"gap_summary:{key}", ttl_sec=ttl_sec)
         if data is not None:
             try:
                 if _GAP_MEMORY_CACHE_MAX:
@@ -151,6 +153,39 @@ def _gap_cache_get(key):
         logging.debug(f"gap sqlite cache read skipped: {e}")
 
     return None
+
+
+def _gap_latest_event_id(range_key="all", anchor_date=None):
+    """Cheap watermark query used to avoid rebuilding when no data changed."""
+    start, end, _, _ = _dashboard_range_to_sqlite(range_key, anchor_date)
+    try:
+        if POSTGRES_ENABLED:
+            conn = _pg_connect()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT COALESCE(MAX(id), 0)
+                FROM analytics_events
+                WHERE created_at >= %s AND created_at <= %s
+                  AND event_type = 'location_query'
+                  AND COALESCE(response_time_ms, 0) > 0
+            """, (start, end))
+            value = int((cur.fetchone() or [0])[0] or 0)
+            conn.close()
+            return value
+
+        conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=5, check_same_thread=False)
+        value = int((conn.execute("""
+            SELECT COALESCE(MAX(id), 0)
+            FROM analytics_events
+            WHERE created_at >= ? AND created_at <= ?
+              AND event_type = 'location_query'
+              AND COALESCE(response_time_ms, 0) > 0
+        """, (start.isoformat(), end.isoformat())).fetchone() or [0])[0] or 0)
+        conn.close()
+        return value
+    except Exception as exc:
+        logging.warning("gap watermark query skipped error=%s", type(exc).__name__)
+        return None
 def _gap_cache_set(key, data):
     try:
         if _GAP_MEMORY_CACHE_MAX:
@@ -622,6 +657,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
     # Keep all valid demand points, but exclude out-of-scope/global/test coordinates so the map
     # does not zoom out to the whole world. This dashboard is for Taiwan public facility research.
     raw_total_queries_before_scope = len(events)
+    source_watermark = max((int(e.get("id") or 0) for e in events), default=0)
     excluded_failed_queries = sum(
         1 for e in events
         if e.get("status") == "failed"
@@ -833,6 +869,8 @@ def _build_gap_summary(range_key="all", anchor_date=None):
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
+        "generated_epoch": time.time(),
+        "source_watermark": source_watermark,
         "thresholds": {
             "low_result_threshold": LOW_RESULT_THRESHOLD,
             "slow_query_ms": SLOW_QUERY_MS,

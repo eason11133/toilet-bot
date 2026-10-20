@@ -24,6 +24,15 @@ def rss():
     return round(value, 1) if value is not None else None
 
 
+def wait_for_gap_refresh(client, payload, timeout=30):
+    deadline = time.time() + timeout
+    while payload.get("refreshing") and time.time() < deadline:
+        time.sleep(0.25)
+        payload = client.get("/api/gap-summary?range=all").get_json() or {}
+    assert not payload.get("refreshing"), "gap background refresh timed out"
+    return payload
+
+
 def seed(count=20000):
     conn = sqlite3.connect(ANALYTICS_DB_PATH)
     conn.execute("DELETE FROM analytics_events WHERE query_text = ?", (MARKER,))
@@ -49,7 +58,7 @@ def seed(count=20000):
 def cleanup():
     conn = sqlite3.connect(ANALYTICS_DB_PATH)
     conn.execute("DELETE FROM analytics_events WHERE query_text = ?", (MARKER,))
-    conn.execute("DELETE FROM request_cache WHERE query_key LIKE 'gap_summary:v252_quality_filtered:%'")
+    conn.execute("DELETE FROM request_cache WHERE query_key LIKE 'gap_summary:v253_snapshot_swr:%'")
     conn.commit()
     conn.close()
 
@@ -83,7 +92,9 @@ def main():
         print({"stage": "gap_10_cached", "rss_mb": rss()})
         forced_rss = []
         for _ in range(5):
-            assert client.get("/api/gap-summary?range=all&force=1").status_code == 200
+            forced = client.get("/api/gap-summary?range=all&force=1")
+            assert forced.status_code == 200
+            wait_for_gap_refresh(client, forced.get_json() or {})
             forced_rss.append(rss())
         print({"stage": "gap_5_forced", "rss_mb_each": forced_rss})
         for _ in range(10):
