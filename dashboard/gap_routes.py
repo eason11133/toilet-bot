@@ -11,7 +11,6 @@ from dashboard.gap_analysis import (
     _gap_cache_set,
     _gap_latest_event_id,
     _build_gap_summary,
-    _GAP_SUMMARY_CACHE_TTL,
     _GAP_SUMMARY_STALE_TTL,
     _GAP_VALID_LAT_MIN,
     _GAP_VALID_LAT_MAX,
@@ -94,9 +93,10 @@ def api_gap_summary():
                 latest_event_id is not None
                 and int(latest_event_id) > int(cached.get("source_watermark") or 0)
             )
-            should_refresh = force or (
-                age_seconds >= _GAP_SUMMARY_CACHE_TTL and has_new_data
-            )
+            # The dashboard polls this endpoint while it is open.  A cheap
+            # watermark comparison lets new formal queries trigger a refresh
+            # immediately, without rebuilding when nothing has changed.
+            should_refresh = force or has_new_data
             refresh_started = _start_gap_refresh(cache_key, range_key, anchor_date) if should_refresh else False
             out = dict(cached)
             out["cached"] = True

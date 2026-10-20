@@ -555,8 +555,10 @@
     URL.revokeObjectURL(url);
   }
 
-  async function loadDashboard(force=false){
-    document.getElementById('loadingBox').classList.remove('hidden');
+  const AUTO_REFRESH_MS = 30000;
+
+  async function loadDashboard(force=false, silent=false){
+    if (!silent) document.getElementById('loadingBox').classList.remove('hidden');
     document.getElementById('errorBox').classList.add('hidden');
     try{
       const res = await fetch(API_URL + (force ? '&force=1' : ''), {cache:'no-store'});
@@ -572,7 +574,9 @@
       setText('cacheState', data.refreshing ? '快照資料｜背景更新中' : (data.cached ? '最新快照' : '即時整理'));
       if (refreshPollTimer) clearTimeout(refreshPollTimer);
       if (data.refreshing) {
-        refreshPollTimer = setTimeout(() => loadDashboard(false), 4000);
+        refreshPollTimer = setTimeout(() => loadDashboard(false, true), 4000);
+      } else {
+        refreshPollTimer = setTimeout(() => loadDashboard(false, true), AUTO_REFRESH_MS);
       }
       document.getElementById('copySummaryBtn').onclick = async () => { await navigator.clipboard.writeText(summaryText); alert('已複製研究摘要'); };
       document.getElementById('downloadCsvBtn').onclick = downloadCsv;
@@ -583,6 +587,8 @@
       const box = document.getElementById('errorBox');
       box.textContent = `載入失敗：${err.message || err}`;
       box.classList.remove('hidden');
+      if (refreshPollTimer) clearTimeout(refreshPollTimer);
+      refreshPollTimer = setTimeout(() => loadDashboard(false, true), AUTO_REFRESH_MS);
     }
   }
 

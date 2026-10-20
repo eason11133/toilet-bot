@@ -244,6 +244,39 @@ class GapSnapshotRouteTests(unittest.TestCase):
         self.assertTrue(payload["refreshing"])
         build.assert_not_called()
 
+    def test_recent_snapshot_with_new_data_starts_background_refresh(self):
+        app = Flask(__name__)
+        gap_routes.register_gap_routes(app)
+        snapshot = {
+            "ok": True,
+            "generated_epoch": time.time(),
+            "source_watermark": 10,
+        }
+        with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
+             mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=11), \
+             mock.patch.object(gap_routes, "_start_gap_refresh", return_value=True):
+            response = app.test_client().get("/api/gap-summary?range=all")
+        payload = response.get_json()
+        self.assertTrue(payload["new_data_available"])
+        self.assertTrue(payload["refreshing"])
+
+    def test_unchanged_snapshot_does_not_rebuild(self):
+        app = Flask(__name__)
+        gap_routes.register_gap_routes(app)
+        snapshot = {
+            "ok": True,
+            "generated_epoch": time.time(),
+            "source_watermark": 10,
+        }
+        with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
+             mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=10), \
+             mock.patch.object(gap_routes, "_start_gap_refresh") as refresh:
+            response = app.test_client().get("/api/gap-summary?range=all")
+        payload = response.get_json()
+        self.assertFalse(payload["new_data_available"])
+        self.assertFalse(payload["refreshing"])
+        refresh.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
