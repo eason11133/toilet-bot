@@ -99,6 +99,36 @@ class QueryLifecycleTests(unittest.TestCase):
         self.assertEqual(len(meta["source_failures"]), 2)
         save_cache.assert_not_called()
 
+    def test_distance_top_k_is_selected_before_nts_reranking(self):
+        toilets = [
+            {"name": f"T{i}", "distance": distance, "verification_status": "pending"}
+            for i, distance in enumerate([500, 40, 300, 20, 200, 100])
+        ]
+        seen_distances = []
+
+        def fake_nts(items):
+            seen_distances.extend(item["distance"] for item in items)
+            return list(reversed(items))
+
+        with mock.patch.object(search, "sort_toilets_nts", side_effect=fake_nts):
+            result = search._rank_two_stage(
+                toilets, algo="nts_score", candidate_top_k=4, result_top_k=2
+            )
+
+        self.assertEqual(seen_distances, [20, 40, 100, 200])
+        self.assertEqual([item["distance"] for item in result], [200, 100])
+
+    def test_rejected_items_do_not_consume_candidate_slots(self):
+        toilets = [
+            {"name": "rejected", "distance": 1, "verification_status": "rejected"},
+            {"name": "valid-a", "distance": 10, "verification_status": "pending"},
+            {"name": "valid-b", "distance": 20, "verification_status": "approved"},
+        ]
+        result = search._rank_two_stage(
+            toilets, algo="distance_only", candidate_top_k=2, result_top_k=2
+        )
+        self.assertEqual([item["name"] for item in result], ["valid-a", "valid-b"])
+
 
 class GapDefinitionTests(unittest.TestCase):
     def test_no_result_and_low_coverage_are_exclusive(self):

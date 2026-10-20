@@ -25,6 +25,12 @@ LOC_USER_DEDUPE_SECONDS = max(1, int(os.getenv("LOC_USER_DEDUPE_SECONDS", "5")))
 LOC_USER_DEDUPE_DISTANCE_M = max(1, int(os.getenv("LOC_USER_DEDUPE_DISTANCE_M", "80")))
 LOC_QUERY_TIMEOUT_SEC = float(os.getenv("LOC_QUERY_TIMEOUT_SEC", "3.0"))
 LOC_MAX_RESULTS = int(os.getenv("LOC_MAX_RESULTS", "4"))
+# Two-stage retrieval: keep the nearest candidate pool first, then let NTS
+# rerank that pool before returning LOC_MAX_RESULTS items.
+LOC_CANDIDATE_TOP_K = max(
+    LOC_MAX_RESULTS,
+    int(os.getenv("LOC_CANDIDATE_TOP_K", "12")),
+)
 SHOW_SEARCHING_BUBBLE = False
 
 # Data enrichment / query limits

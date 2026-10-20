@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from flask import request
 
-from config import LOC_QUERY_TIMEOUT_SEC, LOC_MAX_RESULTS
+from config import LOC_QUERY_TIMEOUT_SEC, LOC_MAX_RESULTS, LOC_CANDIDATE_TOP_K
 from core.utils import grid_coord, _parse_lat_lon, haversine
 from core.database import get_cached_data, save_cache
 from core.i18n import _api_L
@@ -74,6 +74,27 @@ def _merge_and_dedupe_lists(*lists, dist_th=35, name_sim_th=0.55):
     return merged
 
 
+def _rank_two_stage(toilets, algo="nts_score", candidate_top_k=None, result_top_k=None):
+    """Distance Top-K candidate recall followed by NTS reranking."""
+    candidate_top_k = max(
+        1, int(candidate_top_k if candidate_top_k is not None else LOC_CANDIDATE_TOP_K)
+    )
+    result_top_k = max(
+        1, int(result_top_k if result_top_k is not None else LOC_MAX_RESULTS)
+    )
+
+    eligible = [
+        item for item in (toilets or [])
+        if (item.get("verification_status") or "pending").lower() != "rejected"
+    ]
+    sort_toilets(eligible)
+    candidates = eligible[:max(candidate_top_k, result_top_k)]
+
+    if algo != "distance_only":
+        candidates = sort_toilets_nts(candidates)
+    return candidates[:result_top_k]
+
+
 def nearby_toilets():
     user_lat = request.args.get('lat')
     user_lon = request.args.get('lon')
@@ -113,7 +134,11 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
     # === Grid cache key（加入 algo/model_version/OSM 策略，避免切換後吃到舊快取）===
     lat_g = grid_coord(lat)
     lon_g = grid_coord(lon)
-    query_key = f"nearby:{algo}:{model_version}:osm{int(osm_enabled)}:min{osm_fallback_min}:{lat_g},{lon_g},{radius}"
+    query_key = (
+        f"nearby:{algo}:{model_version}:candidate{LOC_CANDIDATE_TOP_K}:"
+        f"top{LOC_MAX_RESULTS}:osm{int(osm_enabled)}:min{osm_fallback_min}:"
+        f"{lat_g},{lon_g},{radius}"
+    )
 
     query_id_for_source = query_id or ("SRC_" + uuid.uuid4().hex[:16])
     cached = get_cached_data(query_key)
@@ -217,12 +242,10 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
 
     quick = _merge_and_dedupe_lists(csv_res, saved_res, osm_res)
 
-    if algo == "distance_only":
-        sort_toilets(quick)
-    else:
-        quick = sort_toilets_nts(quick)
-
-    result = quick[:LOC_MAX_RESULTS]
+    # Two-stage ranking: distance Top-K builds a nearby candidate set, then NTS
+    # reranks only that set. This matches the documented retrieval pipeline and
+    # prevents a far-away high-trust record from displacing all nearby options.
+    result = _rank_two_stage(quick, algo=algo)
     all_sources_failed = successful_sources == 0
     source_status = "failed" if all_sources_failed else ("degraded" if source_failures else "ok")
 
