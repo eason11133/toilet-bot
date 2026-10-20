@@ -7,7 +7,7 @@ import math
 import time
 from urllib.parse import quote
 
-from config import LOC_MAX_RESULTS
+from config import LOC_MAX_RESULTS, LOC_CANDIDATE_TOP_K
 from core.database import POSTGRES_ENABLED, _pg_connect, psycopg2
 from core.utils import _in_bbox, haversine, norm_coord
 from toilet.floor import _floor_from_tags, _floor_from_name
@@ -247,7 +247,9 @@ def query_public_csv_toilets(user_lat, user_lon, radius=500):
         return []
 
     heap = []
-    limit = LOC_MAX_RESULTS
+    # The distance retrieval stage needs the complete Top-K candidate pool;
+    # limiting this source to the final display count would make Top-10 fake.
+    limit = max(LOC_MAX_RESULTS, LOC_CANDIDATE_TOP_K)
 
     try:
         with open(TOILETS_FILE_PATH, "r", encoding="utf-8-sig", newline="") as handle:

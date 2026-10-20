@@ -8,13 +8,14 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from flask import request
 
 from config import LOC_QUERY_TIMEOUT_SEC, LOC_MAX_RESULTS, LOC_CANDIDATE_TOP_K
-from core.utils import grid_coord, _parse_lat_lon, haversine
+from core.utils import grid_coord, _parse_lat_lon, haversine, norm_coord
 from core.database import get_cached_data, save_cache
 from core.i18n import _api_L
 from toilet.basic_ranking import sort_toilets
 from toilet.scoring import sort_toilets_nts
 from toilet.data_sources import query_public_csv_toilets, query_saved_toilets, query_overpass_toilets
 from toilet.recommendation_logs import log_source_query
+from toilet.status import build_status_index
 
 # === 共用執行緒池（避免每次臨時建立） ===
 _pool = ThreadPoolExecutor(max_workers=2)
@@ -95,6 +96,41 @@ def _rank_two_stage(toilets, algo="nts_score", candidate_top_k=None, result_top_
     return candidates[:result_top_k]
 
 
+def _apply_live_status(toilets, status_index=None):
+    """Attach the latest nearby status and exclude temporarily unavailable toilets."""
+    status_index = build_status_index() if status_index is None else status_index
+    if not status_index:
+        return [dict(item) for item in (toilets or [])]
+
+    output = []
+    for original in toilets or []:
+        item = dict(original)
+        lat_s = norm_coord(item.get("lat"))
+        lon_s = norm_coord(item.get("lon"))
+        status_obj = status_index.get((lat_s, lon_s))
+
+        if status_obj is None:
+            try:
+                lat_f, lon_f = float(lat_s), float(lon_s)
+                best_distance = 36.0
+                for (status_lat, status_lon), candidate in status_index.items():
+                    distance = haversine(lat_f, lon_f, float(status_lat), float(status_lon))
+                    if distance <= 35 and distance < best_distance:
+                        status_obj = candidate
+                        best_distance = distance
+            except (TypeError, ValueError):
+                status_obj = None
+
+        live_status = str((status_obj or {}).get("status") or "").strip()
+        if live_status == "暫停使用":
+            continue
+        if live_status:
+            item["status"] = live_status
+            item["status_text"] = live_status
+        output.append(item)
+    return output
+
+
 def nearby_toilets():
     user_lat = request.args.get('lat')
     user_lon = request.args.get('lon')
@@ -135,7 +171,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
     lat_g = grid_coord(lat)
     lon_g = grid_coord(lon)
     query_key = (
-        f"nearby:{algo}:{model_version}:candidate{LOC_CANDIDATE_TOP_K}:"
+        f"nearby:rawv2:{algo}:{model_version}:candidate{LOC_CANDIDATE_TOP_K}:"
         f"top{LOC_MAX_RESULTS}:osm{int(osm_enabled)}:min{osm_fallback_min}:"
         f"{lat_g},{lon_g},{radius}"
     )
@@ -144,17 +180,18 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
     cached = get_cached_data(query_key)
     if cached is not None:
         logging.debug(f"[cache hit] nearby {query_key}")
+        result = _rank_two_stage(_apply_live_status(cached), algo=algo)
         elapsed_ms = max(0, int((time.time() - total_start) * 1000))
         log_source_query(
-            query_id_for_source, uid, "cache", len(cached), elapsed_ms,
+            query_id_for_source, uid, "cache", len(result), elapsed_ms,
             True, "cache_hit", "", False,
         )
         log_source_query(
-            query_id_for_source, uid, "total", len(cached), elapsed_ms,
+            query_id_for_source, uid, "total", len(result), elapsed_ms,
             True, "cache_hit", "", False,
         )
         meta = {"cache_hit": True, "source_status": "cached", "source_failures": []}
-        return (cached, meta) if return_metadata else cached
+        return (result, meta) if return_metadata else result
 
     csv_res, saved_res, osm_res = [], [], []
     source_failures = []
@@ -245,7 +282,7 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
     # Two-stage ranking: distance Top-K builds a nearby candidate set, then NTS
     # reranks only that set. This matches the documented retrieval pipeline and
     # prevents a far-away high-trust record from displacing all nearby options.
-    result = _rank_two_stage(quick, algo=algo)
+    result = _rank_two_stage(_apply_live_status(quick), algo=algo)
     all_sources_failed = successful_sources == 0
     source_status = "failed" if all_sources_failed else ("degraded" if source_failures else "ok")
 
@@ -261,10 +298,10 @@ def build_nearby_toilets(uid, lat, lon, radius=500, return_metadata=False, query
         used_osm=used_osm
     )
 
-    # Only cache a complete source run. Caching an all-source failure would turn
-    # the next request into a misleading successful empty cache hit.
+    # Cache the status-independent candidate set. Live status is reapplied on
+    # every request, so pause/recovery reports take effect without stale results.
     if source_status == "ok":
-        save_cache(query_key, result)
+        save_cache(query_key, quick)
 
     meta = {
         "cache_hit": False,

@@ -129,6 +129,30 @@ class QueryLifecycleTests(unittest.TestCase):
         )
         self.assertEqual([item["name"] for item in result], ["valid-a", "valid-b"])
 
+    def test_paused_toilet_is_excluded_before_top_k(self):
+        toilets = [
+            {"name": "paused", "lat": 25.0, "lon": 121.5, "distance": 5},
+            {"name": "open", "lat": 25.001, "lon": 121.501, "distance": 20},
+        ]
+        status_index = {
+            (search.norm_coord(25.0), search.norm_coord(121.5)): {
+                "status": "暫停使用"
+            }
+        }
+        filtered = search._apply_live_status(toilets, status_index=status_index)
+        self.assertEqual([item["name"] for item in filtered], ["open"])
+
+    def test_recovered_toilet_returns_to_candidate_pool(self):
+        toilets = [{"name": "open-again", "lat": 25.0, "lon": 121.5, "distance": 5}]
+        status_index = {
+            (search.norm_coord(25.0), search.norm_coord(121.5)): {
+                "status": "恢復正常"
+            }
+        }
+        filtered = search._apply_live_status(toilets, status_index=status_index)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["status"], "恢復正常")
+
 
 class GapDefinitionTests(unittest.TestCase):
     def test_no_result_and_low_coverage_are_exclusive(self):
