@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from config import TW_TZ
 from dashboard.routes import _dashboard_range_to_sqlite
 from core.memory import log_memory
+from dashboard.gap_supply import (
+    build_current_supply_index,
+    current_supply_watermark,
+    reconcile_clusters_with_supply,
+)
 
 POSTGRES_ENABLED = False
 _pg_connect = None
@@ -186,6 +191,55 @@ def _gap_latest_event_id(range_key="all", anchor_date=None):
     except Exception as exc:
         logging.warning("gap watermark query skipped error=%s", type(exc).__name__)
         return None
+
+
+def _gap_supply_watermark():
+    """Version of data that can change current facility coverage."""
+    return current_supply_watermark(POSTGRES_ENABLED, _pg_connect)
+
+
+def _apply_current_supply(result):
+    """Reconcile demand circles against current government/approved-user data."""
+    radius_m = max(100, int(os.getenv("GAP_SUPPLY_RADIUS_M", "500")))
+    low_threshold = max(0, int(os.getenv("GAP_LOW_RESULT_THRESHOLD", "2")))
+    supply_index = build_current_supply_index(POSTGRES_ENABLED, _pg_connect, psycopg2)
+    clusters = result.get("demand_clusters") or []
+    coverage_counts = reconcile_clusters_with_supply(
+        clusters, supply_index, radius_m=radius_m, low_threshold=low_threshold
+    )
+    recommended_limit = max(1, int(os.getenv("GAP_RECOMMENDED_LIMIT", "10")))
+    actionable = [row for row in clusters if row.get("coverage_status") != "improved"]
+    result["recommended_sites"] = actionable[:recommended_limit]
+    result["supply_watermark"] = _gap_supply_watermark()
+    result["supply_generated_at"] = datetime.now(TW_TZ).isoformat()
+    result["supply_summary"] = {
+        **coverage_counts,
+        "actionable": len(actionable),
+        "total_indexed_rows": int(supply_index.total),
+        "coverage_radius_m": radius_m,
+        "sources": ["government", "user_approved"],
+    }
+    result.setdefault("summary", {}).update({
+        "unresolved_cluster_count": coverage_counts["unresolved"],
+        "low_coverage_cluster_count": coverage_counts["low_coverage"],
+        "improved_cluster_count": coverage_counts["improved"],
+        "top_gap_cluster": (
+            clusters[0].get("center") if clusters else "-"
+        ),
+    })
+    return result
+
+
+def _refresh_gap_supply_snapshot(snapshot):
+    """Fast supply-only refresh; does not rescan or regroup historical demand."""
+    result = dict(snapshot or {})
+    result["demand_clusters"] = [dict(row) for row in (snapshot or {}).get("demand_clusters", [])]
+    result["summary"] = dict((snapshot or {}).get("summary") or {})
+    result["generated_at"] = datetime.now(TW_TZ).isoformat()
+    result["generated_epoch"] = time.time()
+    return _apply_current_supply(result)
+
+
 def _gap_cache_set(key, data):
     try:
         if _GAP_MEMORY_CACHE_MAX:
@@ -865,7 +919,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
 
     result = {
         "ok": True,
-        "version": "demand_gap_v9_quality_filtered",
+        "version": "demand_gap_v10_supply_reconciled",
         "range": range_key,
         "anchor_date": anchor_date,
         "generated_at": datetime.now(TW_TZ).isoformat(),
@@ -925,6 +979,7 @@ def _build_gap_summary(range_key="all", anchor_date=None):
             "OSM fallback 或慢查詢高的區域，通常優先做本地資料補強，降低外部 API 延遲。"
         ]
     }
+    result = _apply_current_supply(result)
     logging.info(
         "gap summary built: range=%s raw=%s effective=%s hotspots=%s clusters=%s elapsed_ms=%s",
         range_key,

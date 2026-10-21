@@ -14,6 +14,7 @@ os.environ.setdefault("LINE_CHANNEL_SECRET", "test")
 from core import database
 from dashboard import gap_analysis
 from dashboard import gap_routes
+from dashboard.gap_supply import SupplyIndex, reconcile_clusters_with_supply
 from linebot_app import handlers
 from toilet import search
 
@@ -231,9 +232,11 @@ class GapSnapshotRouteTests(unittest.TestCase):
             "ok": True,
             "generated_epoch": time.time() - 600,
             "source_watermark": 10,
+            "supply_watermark": "s1",
         }
         with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
              mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=11), \
+             mock.patch.object(gap_routes, "_gap_supply_watermark", return_value="s1"), \
              mock.patch.object(gap_routes, "_start_gap_refresh", return_value=True), \
              mock.patch.object(gap_routes, "_build_gap_summary") as build:
             response = app.test_client().get("/api/gap-summary?range=all")
@@ -251,9 +254,11 @@ class GapSnapshotRouteTests(unittest.TestCase):
             "ok": True,
             "generated_epoch": time.time(),
             "source_watermark": 10,
+            "supply_watermark": "s1",
         }
         with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
              mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=11), \
+             mock.patch.object(gap_routes, "_gap_supply_watermark", return_value="s1"), \
              mock.patch.object(gap_routes, "_start_gap_refresh", return_value=True):
             response = app.test_client().get("/api/gap-summary?range=all")
         payload = response.get_json()
@@ -267,15 +272,77 @@ class GapSnapshotRouteTests(unittest.TestCase):
             "ok": True,
             "generated_epoch": time.time(),
             "source_watermark": 10,
+            "supply_watermark": "s1",
         }
         with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
              mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=10), \
+             mock.patch.object(gap_routes, "_gap_supply_watermark", return_value="s1"), \
              mock.patch.object(gap_routes, "_start_gap_refresh") as refresh:
             response = app.test_client().get("/api/gap-summary?range=all")
         payload = response.get_json()
         self.assertFalse(payload["new_data_available"])
         self.assertFalse(payload["refreshing"])
         refresh.assert_not_called()
+
+    def test_supply_change_uses_fast_supply_only_refresh(self):
+        app = Flask(__name__)
+        gap_routes.register_gap_routes(app)
+        snapshot = {
+            "ok": True,
+            "generated_epoch": time.time(),
+            "source_watermark": 10,
+            "supply_watermark": "old",
+        }
+        with mock.patch.object(gap_routes, "_gap_cache_get", return_value=snapshot), \
+             mock.patch.object(gap_routes, "_gap_latest_event_id", return_value=10), \
+             mock.patch.object(gap_routes, "_gap_supply_watermark", return_value="new"), \
+             mock.patch.object(gap_routes, "_start_gap_refresh", return_value=True) as refresh:
+            response = app.test_client().get("/api/gap-summary?range=all")
+        payload = response.get_json()
+        self.assertTrue(payload["supply_changes_available"])
+        self.assertEqual(payload["refresh_mode"], "supply_only")
+        refresh.assert_called_once_with(
+            mock.ANY, "all", None, snapshot=snapshot, supply_only=True
+        )
+
+
+class GapSupplyTests(unittest.TestCase):
+    def test_no_current_supply_keeps_circle_unresolved(self):
+        clusters = [{"lat": 25.0330, "lon": 121.5654, "gap_score": 80}]
+        counts = reconcile_clusters_with_supply(
+            clusters, SupplyIndex(), radius_m=500, low_threshold=2
+        )
+        self.assertEqual(clusters[0]["coverage_status"], "unresolved")
+        self.assertEqual(clusters[0]["demand_score"], 80)
+        self.assertEqual(clusters[0]["gap_score"], 80)
+        self.assertEqual(counts["unresolved"], 1)
+
+    def test_supply_reconciliation_lowers_priority_without_erasing_demand(self):
+        index = SupplyIndex()
+        index.add(25.0330, 121.5654, "government")
+        index.add(25.0332, 121.5655, "user_approved")
+        clusters = [{
+            "lat": 25.0330,
+            "lon": 121.5654,
+            "gap_score": 100,
+            "effective_queries": 8,
+        }]
+        counts = reconcile_clusters_with_supply(clusters, index, radius_m=500, low_threshold=2)
+        row = clusters[0]
+        self.assertEqual(row["demand_score"], 100)
+        self.assertEqual(row["current_supply_count"], 2)
+        self.assertEqual(row["coverage_status"], "low_coverage")
+        self.assertEqual(row["gap_score"], 40)
+        self.assertEqual(counts["low_coverage"], 1)
+
+    def test_three_current_facilities_mark_circle_improved(self):
+        index = SupplyIndex()
+        for offset in (0, 0.0002, 0.0004):
+            index.add(25.0330 + offset, 121.5654, "government")
+        clusters = [{"lat": 25.0330, "lon": 121.5654, "gap_score": 80}]
+        reconcile_clusters_with_supply(clusters, index, radius_m=500, low_threshold=2)
+        self.assertEqual(clusters[0]["coverage_status"], "improved")
+        self.assertEqual(clusters[0]["gap_score"], 8)
 
 
 if __name__ == "__main__":

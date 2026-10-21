@@ -306,6 +306,7 @@
           <div><b>${fmt.format(n(row.no_result_count))}</b><br><span style="font-size:11px;color:#64748b">查無</span></div>
           <div><b>${fmt.format(n(row.low_result_count))}</b><br><span style="font-size:11px;color:#64748b">低覆蓋</span></div>
         </div>
+        <div style="font-size:12px;color:#475569;margin-bottom:8px">目前供給：${fmt.format(n(row.current_supply_count))} 間｜${row.coverage_label || '待校正'}</div>
         <div style="display:inline-flex;gap:6px;align-items:center;border:1px solid #e5e7eb;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:800"><i style="width:9px;height:9px;border-radius:999px;background:${color};display:inline-block"></i>${row.gap_level || '觀察中'}</div>
         <p style="font-size:12px;line-height:1.5;color:#475569;margin:10px 0 0">${row.priority_reason || row.action_label || row.suggestion || ''}</p>
         ${row.map_url ? `<a href="${row.map_url}" target="_blank" rel="noopener" style="display:inline-block;margin-top:9px;font-size:12px;font-weight:900;color:#0f766e">Google Maps →</a>` : ''}
@@ -442,7 +443,7 @@
     const radius = Math.max(...clusters.map(c => n(c.radius_m, 0)), 0);
     const title = top.demand_label || (top.lat ? `${top.area_name || '候選位置'}附近約 ${Math.max(120, Math.round(n(top.radius_m,150)))}m 需求圈` : '尚無需求圈');
     const text = clusters.length
-      ? `本次分析納入 ${fmt.format(n(s.effective_queries || s.total_queries))} 筆去重後有效需求訊號，系統辨識出 ${fmt.format(clusters.length)} 個需求圈。最高優先需求圈位於「${title}」，半徑約 ${Math.max(120, Math.round(n(top.radius_m,150)))} 公尺，累積 ${fmt.format(n(top.effective_queries))} 筆有效需求，其中查無 ${fmt.format(n(top.no_result_count))} 次、低覆蓋 ${fmt.format(n(top.low_result_count))} 次，可作為研究展示、資料補強或現地盤點的優先候選位置。`
+      ? `本次分析納入 ${fmt.format(n(s.effective_queries || s.total_queries))} 筆去重後有效需求訊號，系統辨識出 ${fmt.format(clusters.length)} 個需求圈；其中 ${fmt.format(n(s.improved_cluster_count))} 個已由目前供給改善。最高優先需求圈位於「${title}」，半徑約 ${Math.max(120, Math.round(n(top.radius_m,150)))} 公尺，目前附近有 ${fmt.format(n(top.current_supply_count))} 間有效廁所，可作為資料補強或現地盤點的優先候選位置。`
       : '目前尚未累積足夠缺口訊號。系統會持續把位置查詢轉換為需求圈，供後續研究展示與對外提供。';
 
     setText('researchSummary', text);
@@ -466,7 +467,7 @@
         <div class="rank-num">${idx + 1}</div>
         <div>
           <div class="rank-title">${demandTitle(r, idx)}</div>
-          <div class="rank-desc">中心 ${shortCoord(r)}｜半徑約 ${Math.max(120, Math.round(n(r.radius_m,150)))}m</div>
+          <div class="rank-desc">中心 ${shortCoord(r)}｜半徑約 ${Math.max(120, Math.round(n(r.radius_m,150)))}m｜目前供給 ${fmt.format(n(r.current_supply_count))} 間</div>
           <span class="badge"><i class="dot" style="background:${color}"></i>${r.gap_level || '觀察中'}</span>
           <div class="rank-stats">
             <div class="statbox"><b>${n(r.gap_score).toFixed(1)}</b><span>分數</span></div>
@@ -541,7 +542,7 @@
 
   function downloadCsv(){
     const rows = scopedRows(currentData?.demand_clusters || []);
-    const header = ['rank','demand_label','lat','lon','radius_m','gap_score','gap_level','effective_queries','no_result_count','low_result_count','slow_query_count','confidence_note','priority_reason','map_url'];
+    const header = ['rank','demand_label','lat','lon','radius_m','demand_score','gap_score','gap_level','coverage_status','coverage_label','current_supply_count','government_supply_count','user_supply_count','effective_queries','no_result_count','low_result_count','slow_query_count','confidence_note','priority_reason','map_url'];
     const csv = [header.join(',')].concat(rows.map((r,i)=> header.map(k => {
       const value = k === 'rank' ? i+1 : (k === 'demand_label' ? demandTitle(r,i) : (r[k] ?? ''));
       return `"${String(value).replaceAll('"','""')}"`;
@@ -571,7 +572,9 @@
       renderRankList(data);
       renderCharts(data);
       setText('lastUpdated', `更新：${new Date(data.generated_at || Date.now()).toLocaleString('zh-TW')}`);
-      setText('cacheState', data.refreshing ? '快照資料｜背景更新中' : (data.cached ? '最新快照' : '即時整理'));
+      setText('cacheState', data.refreshing
+        ? (data.refresh_mode === 'supply_only' ? '供給資料變動｜背景校正中' : '新需求資料｜背景更新中')
+        : (data.cached ? '需求與供給皆為最新' : '即時整理'));
       if (refreshPollTimer) clearTimeout(refreshPollTimer);
       if (data.refreshing) {
         refreshPollTimer = setTimeout(() => loadDashboard(false, true), 4000);

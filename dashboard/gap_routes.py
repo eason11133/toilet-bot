@@ -10,6 +10,8 @@ from dashboard.gap_analysis import (
     _gap_cache_get,
     _gap_cache_set,
     _gap_latest_event_id,
+    _gap_supply_watermark,
+    _refresh_gap_supply_snapshot,
     _build_gap_summary,
     _GAP_SUMMARY_STALE_TTL,
     _GAP_VALID_LAT_MIN,
@@ -30,7 +32,7 @@ def _gap_snapshot_age_seconds(data):
         return float("inf")
 
 
-def _start_gap_refresh(cache_key, range_key, anchor_date):
+def _start_gap_refresh(cache_key, range_key, anchor_date, snapshot=None, supply_only=False):
     """Start at most one refresh per cache key in this worker."""
     with _GAP_REFRESHING_LOCK:
         if cache_key in _GAP_REFRESHING:
@@ -41,7 +43,11 @@ def _start_gap_refresh(cache_key, range_key, anchor_date):
         log_memory("gap_background_before", range=range_key)
         try:
             with _GAP_BUILD_LOCK:
-                data = _build_gap_summary(range_key, anchor_date)
+                data = (
+                    _refresh_gap_supply_snapshot(snapshot)
+                    if supply_only and snapshot is not None
+                    else _build_gap_summary(range_key, anchor_date)
+                )
                 data["cached"] = False
                 _gap_cache_set(cache_key, data)
         except Exception as exc:
@@ -79,7 +85,7 @@ def api_gap_summary():
 
         # Bump when calculation semantics change so old persisted summaries are not served.
         cache_key = (
-            f"v253_snapshot_swr:{range_key}:{anchor_date or ''}:"
+            f"v254_supply_reconciled:{range_key}:{anchor_date or ''}:"
             f"{os.getenv('GAP_CLUSTER_OUTPUT_LIMIT', '0')}:"
             f"{os.getenv('GAP_HOTSPOT_OUTPUT_LIMIT', '1000')}:"
             f"{os.getenv('GAP_MAX_EVENTS', '20000')}:"
@@ -93,15 +99,30 @@ def api_gap_summary():
                 latest_event_id is not None
                 and int(latest_event_id) > int(cached.get("source_watermark") or 0)
             )
+            latest_supply_watermark = _gap_supply_watermark()
+            has_supply_changes = (
+                bool(latest_supply_watermark)
+                and latest_supply_watermark != cached.get("supply_watermark")
+            )
             # The dashboard polls this endpoint while it is open.  A cheap
             # watermark comparison lets new formal queries trigger a refresh
             # immediately, without rebuilding when nothing has changed.
-            should_refresh = force or has_new_data
-            refresh_started = _start_gap_refresh(cache_key, range_key, anchor_date) if should_refresh else False
+            should_refresh = force or has_new_data or has_supply_changes
+            refresh_started = _start_gap_refresh(
+                cache_key,
+                range_key,
+                anchor_date,
+                snapshot=cached,
+                supply_only=(has_supply_changes and not has_new_data and not force),
+            ) if should_refresh else False
             out = dict(cached)
             out["cached"] = True
             out["snapshot_age_seconds"] = round(age_seconds, 1)
             out["new_data_available"] = bool(has_new_data)
+            out["supply_changes_available"] = bool(has_supply_changes)
+            out["refresh_mode"] = (
+                "full" if force or has_new_data else ("supply_only" if has_supply_changes else "none")
+            )
             out["refreshing"] = bool(refresh_started or cache_key in _GAP_REFRESHING)
             log_memory("gap_endpoint_after", cached=True, refreshing=out["refreshing"])
             return jsonify(out)
