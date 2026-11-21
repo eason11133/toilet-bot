@@ -175,6 +175,18 @@ class ConsentRouteTests(unittest.TestCase):
         self.assertEqual(verified["sub"], "U123")
         self.assertEqual(post.call_args.kwargs["data"]["client_id"], "2007674330")
 
+    def test_generic_login_channel_cannot_override_consent_liff_channel(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "LIFF_CONSENT_ID": "2007674330-abcdef",
+                "LIFF_CONSENT_CHANNEL_ID": "",
+                "LINE_LOGIN_CHANNEL_ID": "wrong-channel",
+            },
+            clear=False,
+        ):
+            self.assertEqual(consent_routes._get_liff_channel_id(), "2007674330")
+
     def test_line_verification_timeout_is_retryable(self):
         with mock.patch.dict(
             os.environ, {"LIFF_CONSENT_ID": "2007674330-abcdef"}, clear=False

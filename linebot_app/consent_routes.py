@@ -30,15 +30,19 @@ def _get_liff_consent_id() -> str:
 
 
 def _get_liff_channel_id() -> str:
-    configured = (
-        os.getenv("LIFF_CONSENT_CHANNEL_ID")
-        or os.getenv("LINE_LOGIN_CHANNEL_ID")
-        or ""
-    ).strip()
-    if configured:
-        return configured
+    # The ID token audience belongs to the channel that owns this LIFF app.
+    # A generic LINE_LOGIN_CHANNEL_ID may point to another Login channel and
+    # would make LINE reject an otherwise valid token as invalid_id_token.
+    dedicated = (os.getenv("LIFF_CONSENT_CHANNEL_ID") or "").strip()
+    if dedicated:
+        return dedicated
     liff_id = _get_liff_consent_id()
-    return liff_id.split("-", 1)[0].strip() if "-" in liff_id else ""
+    derived = liff_id.split("-", 1)[0].strip() if "-" in liff_id else ""
+    if derived:
+        return derived
+    # Backwards compatibility only for legacy LIFF IDs that do not contain a
+    # channel prefix. New deployments should set LIFF_CONSENT_CHANNEL_ID.
+    return (os.getenv("LINE_LOGIN_CHANNEL_ID") or "").strip()
 
 
 def _verify_line_id_token(id_token):
