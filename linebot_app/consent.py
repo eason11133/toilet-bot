@@ -183,8 +183,24 @@ def _database_error_category(exc):
         return "timeout"
     if "too many connections" in message or "remaining connection slots" in message:
         return "connection_limit"
+    if "max client connections" in message:
+        return "connection_limit"
     if "connection refused" in message:
         return "connection_refused"
+    if "server closed the connection unexpectedly" in message:
+        return "server_closed"
+    if "connection reset" in message:
+        return "connection_reset"
+    if "network is unreachable" in message or "no route to host" in message:
+        return "network_unreachable"
+    if "endpoint" in message and ("disabled" in message or "suspended" in message):
+        return "endpoint_inactive"
+    if "database" in message and "does not exist" in message:
+        return "missing_database"
+    if "role" in message and "does not exist" in message:
+        return "missing_role"
+    if "invalid dsn" in message or "invalid connection option" in message:
+        return "invalid_dsn"
     if "ssl" in message or "tls" in message or "certificate" in message:
         return "tls_failure"
     return "other"
