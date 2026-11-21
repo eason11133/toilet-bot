@@ -242,8 +242,17 @@ class ConsentStateTests(unittest.TestCase):
              mock.patch.object(consent, "_pg_connect", side_effect=RuntimeError("secret")):
             ok, status = consent.consent_storage_health()
         self.assertFalse(ok)
-        self.assertEqual(status, "connection_failed:RuntimeError")
+        self.assertEqual(status, "connection_failed:RuntimeError:other")
         self.assertNotIn("secret", status)
+
+    def test_storage_health_safely_classifies_bad_credentials(self):
+        error = RuntimeError("password authentication failed for user private-name")
+        with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
+             mock.patch.object(consent, "_pg_connect", side_effect=error):
+            ok, status = consent.consent_storage_health()
+        self.assertFalse(ok)
+        self.assertEqual(status, "connection_failed:RuntimeError:invalid_credentials")
+        self.assertNotIn("private-name", status)
 
     def test_prompt_builds_request_url_when_public_url_is_missing(self):
         app = Flask(__name__)

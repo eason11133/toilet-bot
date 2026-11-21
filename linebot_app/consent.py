@@ -172,6 +172,24 @@ def ensure_consent_or_prompt(user_id: str):
     return TextSendMessage(text=tip)
 
 
+def _database_error_category(exc):
+    """Return a non-sensitive connection error category for diagnostics."""
+    message = str(exc).lower()
+    if "password authentication failed" in message or "authentication failed" in message:
+        return "invalid_credentials"
+    if "could not translate host name" in message or "name or service not known" in message:
+        return "dns_failure"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "too many connections" in message or "remaining connection slots" in message:
+        return "connection_limit"
+    if "connection refused" in message:
+        return "connection_refused"
+    if "ssl" in message or "tls" in message or "certificate" in message:
+        return "tls_failure"
+    return "other"
+
+
 def consent_storage_health():
     """Check consent persistence without reading any user record."""
     if not POSTGRES_ENABLED:
@@ -181,8 +199,9 @@ def consent_storage_health():
         conn = _pg_connect()
     except Exception as exc:
         error_type = type(exc).__name__
-        logging.warning("consent storage connection failed: %s", error_type)
-        return False, f"connection_failed:{error_type}"
+        category = _database_error_category(exc)
+        logging.warning("consent storage connection failed: %s/%s", error_type, category)
+        return False, f"connection_failed:{error_type}:{category}"
     try:
         cur = conn.cursor()
         cur.execute("SELECT to_regclass('public.user_consent') IS NOT NULL")
