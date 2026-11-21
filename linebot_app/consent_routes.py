@@ -10,21 +10,28 @@ from linebot_app.consent import (
     _consent_q,
     _consent_lock,
     _last_consent_ts,
-    CONSENT_MIN_INTERVAL,
+    _booly,
     record_consent_attempt,
     upsert_consent,
 )
 
 def _get_liff_consent_id() -> str:
-    return (os.getenv("LIFF_CONSENT_ID") or "").strip()
+    # Prefer the dedicated consent LIFF app, while keeping the old shared LIFF
+    # variable as a backwards-compatible fallback for existing deployments.
+    return (
+        os.getenv("LIFF_CONSENT_ID")
+        or os.getenv("LIFF_ID_CONSENT")
+        or os.getenv("LIFF_ID")
+        or ""
+    ).strip()
 
 
 def render_consent_page():
-    liff_id = (os.getenv("LIFF_ID") or "").strip()   # 改成讀 consent 專用 ID
+    liff_id = _get_liff_consent_id()
 
     if not liff_id:
-        logging.error("LIFF_CONSENT_ID not set")
-        return "LIFF_CONSENT_ID not set on server", 500
+        logging.error("LIFF_CONSENT_ID / LIFF_ID not set")
+        return "LIFF consent ID not set on server", 500
 
     return render_template(
         "consent.html",
@@ -39,7 +46,7 @@ def render_privacy_page():
 def api_consent():
     try:
         payload = request.get_json(force=True, silent=False) or {}
-        agreed = bool(payload.get("agree"))
+        agreed = _booly(payload.get("agree"))
         user_id = (payload.get("userId") or "").strip()
         display_name = payload.get("displayName") or ""
         source_type = payload.get("sourceType") or ""
@@ -50,12 +57,6 @@ def api_consent():
             logging.warning(f"/api/consent missing userId. payload={payload}")
             return {"ok": False, "message": "缺少 userId"}, 400
 
-        now = time.time()
-        last = _last_consent_ts.get(user_id, 0.0)
-        if now - last < CONSENT_MIN_INTERVAL:
-            return {"ok": True, "message": "accepted"}, 200
-        record_consent_attempt(user_id, now)
-
         ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
         if not ok:
             def job():
@@ -64,10 +65,17 @@ def api_consent():
                 except Exception:
                     pass
             with _consent_lock:
-                if len(_consent_q) < 1000:
+                if _consent_q.maxlen is None or len(_consent_q) < _consent_q.maxlen:
                     _consent_q.append(job)
-            return {"ok": True, "message": "queued"}, 200
+            # Never tell the LIFF page that consent succeeded before it was
+            # durably stored.  The page stays open and lets the user retry.
+            return {
+                "ok": False,
+                "message": "同意狀態暫時無法儲存，請稍後再試",
+                "retryable": True,
+            }, 503
 
+        record_consent_attempt(user_id, time.time())
         return {"ok": True}, 200
     except Exception as e:
         logging.error(f"/api/consent 失敗: {e}")

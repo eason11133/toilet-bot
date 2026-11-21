@@ -72,6 +72,7 @@ def has_consented(user_id: str) -> bool:
     if not POSTGRES_ENABLED:
         logging.warning("Postgres not enabled for consent")
         return False
+    conn = None
     try:
         now = time.time()
         hit = _consent_cache.get(user_id)
@@ -84,6 +85,7 @@ def has_consented(user_id: str) -> bool:
         cur.execute("SELECT agreed FROM user_consent WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         conn.close()
+        conn = None
 
         ok = bool(row and row[0])
         _consent_cache_set(user_id, ok)
@@ -91,6 +93,12 @@ def has_consented(user_id: str) -> bool:
     except Exception as e:
         logging.warning(f"查詢 Neon 同意資料失敗: {e}")
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: str, ua: str, ts_iso: str):
@@ -100,6 +108,7 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
     if not POSTGRES_ENABLED:
         logging.warning("Postgres not enabled for consent")
         return False
+    conn = None
     try:
         conn = _pg_connect()
         cur = conn.cursor()
@@ -116,11 +125,18 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
         """, (user_id, bool(agreed), display_name or "", source_type or "", ua or ""))
         conn.commit()
         conn.close()
+        conn = None
         _consent_cache_set(user_id, agreed)
         return True
     except Exception as e:
         logging.error(f"寫入/更新 Neon 同意資料失敗: {e}", exc_info=True)
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def ensure_consent_or_prompt(user_id: str):
     if has_consented(user_id):
