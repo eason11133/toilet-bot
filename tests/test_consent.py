@@ -19,7 +19,7 @@ class ConsentRouteTests(unittest.TestCase):
         self.verify_patcher = mock.patch.object(
             consent_routes,
             "_verify_line_id_token",
-            return_value=({"sub": "U123", "name": "Verified User"}, "", 200),
+            return_value=({"sub": "U123", "name": "Verified User"}, "", 200, "ok"),
         )
         self.verify_patcher.start()
 
@@ -36,6 +36,8 @@ class ConsentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'dedicated-123', response.data)
         self.assertNotIn(b'shared-456', response.data)
+        self.assertEqual(response.headers["Cache-Control"], "no-store, no-cache, must-revalidate, max-age=0")
+        self.assertIn(b'consent-flow-version', response.data)
 
     def test_consent_page_falls_back_to_shared_liff_id(self):
         with mock.patch.dict(os.environ, {"LIFF_ID": "shared-456"}, clear=False):
@@ -43,6 +45,21 @@ class ConsentRouteTests(unittest.TestCase):
                 response = self.app.test_client().get("/consent")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'shared-456', response.data)
+
+    def test_health_reports_config_and_storage_without_user_data(self):
+        with mock.patch.dict(
+            os.environ, {"LIFF_CONSENT_ID": "2007674330-abcdef"}, clear=False
+        ), mock.patch.object(
+            consent_routes, "consent_storage_health", return_value=(True, "ok")
+        ):
+            response = self.app.test_client().get("/api/consent/health")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["liff_configured"])
+        self.assertTrue(payload["channel_configured"])
+        self.assertTrue(payload["storage_ok"])
+        self.assertNotIn("user_id", payload)
 
     def test_failed_write_is_not_reported_as_success(self):
         with mock.patch.object(consent_routes, "upsert_consent", return_value=False):
@@ -151,9 +168,10 @@ class ConsentRouteTests(unittest.TestCase):
             },
             clear=False,
         ), mock.patch.object(consent_routes.requests, "post", return_value=line_response) as post:
-            verified, error, status = self.real_verify("signed-token")
+            verified, error, status, code = self.real_verify("signed-token")
         self.assertEqual(status, 200)
         self.assertEqual(error, "")
+        self.assertEqual(code, "ok")
         self.assertEqual(verified["sub"], "U123")
         self.assertEqual(post.call_args.kwargs["data"]["client_id"], "2007674330")
 
@@ -165,9 +183,10 @@ class ConsentRouteTests(unittest.TestCase):
             "post",
             side_effect=consent_routes.requests.Timeout("timeout"),
         ):
-            verified, message, status = self.real_verify("signed-token")
+            verified, message, status, code = self.real_verify("signed-token")
         self.assertIsNone(verified)
         self.assertEqual(status, 503)
+        self.assertEqual(code, "line_verify_unavailable")
         self.assertIn("稍後再試", message)
 
     def test_line_rejected_token_is_not_accepted(self):
@@ -177,9 +196,10 @@ class ConsentRouteTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ, {"LIFF_CONSENT_ID": "2007674330-abcdef"}, clear=False
         ), mock.patch.object(consent_routes.requests, "post", return_value=line_response):
-            verified, message, status = self.real_verify("bad-token")
+            verified, message, status, code = self.real_verify("bad-token")
         self.assertIsNone(verified)
         self.assertEqual(status, 401)
+        self.assertEqual(code, "invalid_id_token")
 
 
 class ConsentStateTests(unittest.TestCase):
@@ -228,7 +248,20 @@ class ConsentStateTests(unittest.TestCase):
                      side_effect=lambda key, uid, url: f"consent:{url}",
                  ):
                 message = consent.ensure_consent_or_prompt("U123")
-        self.assertEqual(message.text, "consent:https://example.test/consent")
+        self.assertTrue(message.text.startswith("consent:https://example.test/consent?cv="))
+
+    def test_consent_url_replaces_existing_flow_version(self):
+        with mock.patch.object(consent, "has_consented", return_value=False), \
+             mock.patch.object(
+                 consent,
+                 "CONSENT_PAGE_URL",
+                 "https://example.test/consent?source=line&cv=old",
+             ), \
+             mock.patch.object(consent, "T", side_effect=lambda key, uid, url: url):
+            url = consent.ensure_consent_or_prompt("U123").text
+        self.assertIn("source=line", url)
+        self.assertIn(f"cv={consent.CONSENT_FLOW_VERSION}", url)
+        self.assertNotIn("cv=old", url)
 
 
 class ConsentEndToEndTests(unittest.TestCase):
@@ -266,7 +299,7 @@ class ConsentEndToEndTests(unittest.TestCase):
              mock.patch.object(
                  consent_routes,
                  "_verify_line_id_token",
-                 return_value=({"sub": "U123", "name": "Verified User"}, "", 200),
+                 return_value=({"sub": "U123", "name": "Verified User"}, "", 200, "ok"),
              ), \
              mock.patch.object(consent_routes, "upsert_consent", side_effect=consent.upsert_consent):
             response = app.test_client().post(

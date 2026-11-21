@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 
 import requests
-from flask import request, render_template
+from flask import request, render_template, make_response
 
 from config import TW_TZ
 from linebot_app.consent import (
@@ -14,6 +14,8 @@ from linebot_app.consent import (
     _booly,
     record_consent_attempt,
     upsert_consent,
+    consent_storage_health,
+    CONSENT_FLOW_VERSION,
 )
 
 def _get_liff_consent_id() -> str:
@@ -42,11 +44,11 @@ def _get_liff_channel_id() -> str:
 def _verify_line_id_token(id_token):
     """Verify a LIFF ID token with LINE and return its trusted payload."""
     if not id_token:
-        return None, "缺少 LINE 身分憑證", 401
+        return None, "缺少 LINE 身分憑證，請關閉後重新開啟同意頁", 401, "missing_id_token"
     channel_id = _get_liff_channel_id()
     if not channel_id:
         logging.error("LIFF consent channel ID is not configured")
-        return None, "伺服器缺少 LINE Login Channel ID", 500
+        return None, "伺服器缺少 LINE Login Channel ID", 500, "channel_config_missing"
     try:
         response = requests.post(
             "https://api.line.me/oauth2/v2.1/verify",
@@ -56,19 +58,19 @@ def _verify_line_id_token(id_token):
         )
     except requests.RequestException as exc:
         logging.warning("LINE ID token verification unavailable: %s", type(exc).__name__)
-        return None, "LINE 身分驗證暫時無法使用，請稍後再試", 503
+        return None, "LINE 身分驗證暫時無法使用，請稍後再試", 503, "line_verify_unavailable"
     try:
         payload = response.json()
     except Exception:
         payload = {}
     if response.status_code != 200:
         logging.warning("LINE ID token verification rejected status=%s", response.status_code)
-        return None, "LINE 身分驗證失敗，請重新開啟同意頁", 401
+        return None, "LINE 身分驗證失敗，請重新開啟同意頁", 401, "invalid_id_token"
     user_id = str(payload.get("sub") or "").strip()
     if not user_id:
         logging.warning("LINE ID token verification returned no subject")
-        return None, "LINE 身分資料不完整，請重新登入", 401
-    return payload, "", 200
+        return None, "LINE 身分資料不完整，請重新登入", 401, "missing_subject"
+    return payload, "", 200, "ok"
 
 
 def render_consent_page():
@@ -78,14 +80,32 @@ def render_consent_page():
         logging.error("LIFF_CONSENT_ID / LIFF_ID not set")
         return "LIFF consent ID not set on server", 500
 
-    return render_template(
+    response = make_response(render_template(
         "consent.html",
-        liff_id=liff_id
-    )
+        liff_id=liff_id,
+        consent_flow_version=CONSENT_FLOW_VERSION,
+    ))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def render_privacy_page():
     return render_template("privacy_policy.html")
+
+
+def api_consent_health():
+    storage_ok, storage_status = consent_storage_health()
+    status = 200 if storage_ok and _get_liff_consent_id() and _get_liff_channel_id() else 503
+    return {
+        "ok": status == 200,
+        "flow_version": CONSENT_FLOW_VERSION,
+        "liff_configured": bool(_get_liff_consent_id()),
+        "channel_configured": bool(_get_liff_channel_id()),
+        "storage_ok": storage_ok,
+        "storage_status": storage_status,
+    }, status
 
 
 def api_consent():
@@ -104,15 +124,24 @@ def api_consent():
         id_token = str(payload.get("idToken") or "").strip()
         if len(id_token) > 8192:
             return {"ok": False, "message": "LINE 身分憑證格式錯誤"}, 400
-        verified, verify_error, verify_status = _verify_line_id_token(
+        verified, verify_error, verify_status, verify_code = _verify_line_id_token(
             id_token
         )
         if not verified:
-            return {"ok": False, "message": verify_error, "retryable": verify_status >= 500}, verify_status
+            return {
+                "ok": False,
+                "code": verify_code,
+                "message": verify_error,
+                "retryable": verify_status >= 500,
+            }, verify_status
         user_id = (verified.get("sub") or "").strip()
         if claimed_user_id and claimed_user_id != user_id:
             logging.warning("/api/consent LINE user mismatch")
-            return {"ok": False, "message": "LINE 帳號驗證不一致，請重新開啟同意頁"}, 401
+            return {
+                "ok": False,
+                "code": "identity_mismatch",
+                "message": "LINE 帳號驗證不一致，請重新開啟同意頁",
+            }, 401
         display_name = str(verified.get("name") or "")[:200]
         source_type = str(payload.get("sourceType") or "")[:50]
         ua = str(request.headers.get("User-Agent", ""))[:500]
@@ -132,6 +161,7 @@ def api_consent():
             # durably stored.  The page stays open and lets the user retry.
             return {
                 "ok": False,
+                "code": "storage_unavailable",
                 "message": "同意狀態暫時無法儲存，請稍後再試",
                 "retryable": True,
             }, 503
@@ -148,3 +178,4 @@ def register_consent_routes(app):
     app.add_url_rule('/consent', endpoint='render_consent_page', view_func=render_consent_page, methods=['GET'])
     app.add_url_rule('/privacy', endpoint='render_privacy_page', view_func=render_privacy_page, methods=['GET'])
     app.add_url_rule('/api/consent', endpoint='api_consent', view_func=api_consent, methods=['POST'])
+    app.add_url_rule('/api/consent/health', endpoint='api_consent_health', view_func=api_consent_health, methods=['GET'])

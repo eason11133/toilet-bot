@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict, deque
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import has_request_context, request
 from linebot.models import TextSendMessage
@@ -11,6 +12,7 @@ POSTGRES_ENABLED = False
 _pg_connect = None
 T = None
 CONSENT_PAGE_URL = ""
+CONSENT_FLOW_VERSION = os.getenv("CONSENT_FLOW_VERSION", "20261121-4")
 
 
 def configure_consent(postgres_enabled=False, pg_connect=None, T_func=None, consent_page_url=""):
@@ -159,11 +161,40 @@ def ensure_consent_or_prompt(user_id: str):
     consent_url = CONSENT_PAGE_URL
     if not consent_url and has_request_context():
         consent_url = request.url_root.rstrip("/") + "/consent"
+    if consent_url:
+        parts = urlsplit(consent_url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["cv"] = CONSENT_FLOW_VERSION
+        consent_url = urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+        )
     tip = T("consent_required", uid=user_id, url=consent_url)
     return TextSendMessage(text=tip)
 
 
-# === LIFF 同意 API（新增：微節流＋失敗入背景佇列，回 200） ===
+def consent_storage_health():
+    """Check consent persistence without reading any user record."""
+    if not POSTGRES_ENABLED:
+        return False, "postgres_disabled"
+    conn = None
+    try:
+        conn = _pg_connect()
+        cur = conn.cursor()
+        cur.execute("SELECT to_regclass('public.user_consent') IS NOT NULL")
+        row = cur.fetchone()
+        return bool(row and row[0]), "ok" if row and row[0] else "table_missing"
+    except Exception as exc:
+        logging.warning("consent storage health failed: %s", type(exc).__name__)
+        return False, "database_unavailable"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# === LIFF 同意 API：微節流；只有資料庫確實寫入才回成功 ===
 _last_consent_ts = OrderedDict()
 _CONSENT_RATE_LIMIT_MAX = max(100, int(os.getenv("CONSENT_RATE_LIMIT_MAX", "5000")))
 

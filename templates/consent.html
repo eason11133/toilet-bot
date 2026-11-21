@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title id="t_title">隱私同意 | 廁所幫手</title>
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+  <meta name="consent-flow-version" content="{{ consent_flow_version }}" />
   <link rel="preconnect" href="https://static.line-scdn.net">
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
@@ -288,7 +290,7 @@
             showTips(T.ok_external_done);
           }
         } else {
-          throw new Error(j.message || "consent write failed");
+          throw new Error(`${j.code ? `[${j.code}] ` : ""}${j.message || "consent write failed"}`);
         }
 
       } catch (e) {
