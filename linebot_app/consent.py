@@ -179,13 +179,19 @@ def consent_storage_health():
     conn = None
     try:
         conn = _pg_connect()
+    except Exception as exc:
+        error_type = type(exc).__name__
+        logging.warning("consent storage connection failed: %s", error_type)
+        return False, f"connection_failed:{error_type}"
+    try:
         cur = conn.cursor()
         cur.execute("SELECT to_regclass('public.user_consent') IS NOT NULL")
         row = cur.fetchone()
         return bool(row and row[0]), "ok" if row and row[0] else "table_missing"
     except Exception as exc:
-        logging.warning("consent storage health failed: %s", type(exc).__name__)
-        return False, "database_unavailable"
+        error_type = type(exc).__name__
+        logging.warning("consent storage query failed: %s", error_type)
+        return False, f"query_failed:{error_type}"
     finally:
         if conn is not None:
             try:

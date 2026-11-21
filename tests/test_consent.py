@@ -237,6 +237,14 @@ class ConsentStateTests(unittest.TestCase):
             self.assertFalse(consent.has_consented("U123"))
         cursor.execute.assert_called_once()
 
+    def test_storage_health_distinguishes_connection_failure(self):
+        with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
+             mock.patch.object(consent, "_pg_connect", side_effect=RuntimeError("secret")):
+            ok, status = consent.consent_storage_health()
+        self.assertFalse(ok)
+        self.assertEqual(status, "connection_failed:RuntimeError")
+        self.assertNotIn("secret", status)
+
     def test_prompt_builds_request_url_when_public_url_is_missing(self):
         app = Flask(__name__)
         with app.test_request_context("/callback", base_url="https://example.test"):
