@@ -52,7 +52,7 @@
       </ul>
 
       <h2 id="t_h2_5">聯絡我們</h2>
-      <p id="t_contact">若你有任何疑問或刪除請求，請聯絡：{{ contact_email or "you@example.com" }}</p>
+      <p id="t_contact">若你有任何疑問或刪除請求，請聯絡：<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer">Instagram @toiletmvp</a></p>
     </div>
   </div>
 
@@ -152,8 +152,7 @@ setText("t_h2_5", T.h2_5);
 
 const contactEl = document.getElementById("t_contact");
 if (contactEl) {
-  const email = "{{ contact_email or 'you@example.com' }}";
-  contactEl.textContent = T.contact_prefix + email;
+  contactEl.innerHTML = T.contact_prefix + '<a href="{{ contact_url }}" target="_blank" rel="noopener noreferrer">Instagram @toiletmvp</a>';
 }
 </script>
 </body>

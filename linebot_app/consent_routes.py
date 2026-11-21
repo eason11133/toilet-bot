@@ -148,7 +148,10 @@ def render_consent_page():
 
 
 def render_privacy_page():
-    return render_template("privacy_policy.html")
+    return render_template(
+        "privacy_policy.html",
+        contact_url="https://www.instagram.com/toiletmvp?jplx=MWRvMnV2MTNyN2RkMw==",
+    )
 
 
 def api_consent_health():
@@ -211,11 +214,27 @@ def api_consent():
         ua = str(request.headers.get("User-Agent", ""))[:500]
         ts = datetime.now(TW_TZ).isoformat()
 
-        ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
+        ok = upsert_consent(
+            user_id,
+            agreed,
+            display_name,
+            source_type,
+            ua,
+            ts,
+            access_token=access_token,
+        )
         if not ok:
             def job():
                 try:
-                    upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
+                    upsert_consent(
+                        user_id,
+                        agreed,
+                        display_name,
+                        source_type,
+                        ua,
+                        ts,
+                        access_token=access_token,
+                    )
                 except Exception:
                     pass
             with _consent_lock:

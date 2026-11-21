@@ -46,6 +46,12 @@ class ConsentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'shared-456', response.data)
 
+    def test_privacy_page_uses_instagram_contact(self):
+        response = self.app.test_client().get("/privacy")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"instagram.com/toiletmvp", response.data)
+        self.assertIn(b"jplx=MWRvMnV2MTNyN2RkMw==", response.data)
+
     def test_health_reports_config_and_storage_without_user_data(self):
         with mock.patch.dict(
             os.environ, {"LIFF_CONSENT_ID": "2007674330-abcdef"}, clear=False
@@ -286,6 +292,48 @@ class ConsentStateTests(unittest.TestCase):
              mock.patch.object(consent, "_pg_connect", return_value=connection):
             self.assertFalse(consent.has_consented("U123"))
         cursor.execute.assert_called_once()
+
+    def test_neon_read_failure_falls_back_to_staging(self):
+        with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
+             mock.patch.object(consent, "_pg_connect", side_effect=RuntimeError("quota")), \
+             mock.patch.object(consent, "_staging_has_consented", return_value=True) as staging:
+            self.assertTrue(consent.has_consented("U123"))
+        staging.assert_called_once_with("U123")
+
+    def test_neon_write_failure_falls_back_to_verified_staging_write(self):
+        with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
+             mock.patch.object(consent, "_pg_connect", side_effect=RuntimeError("quota")), \
+             mock.patch.object(consent, "_staging_upsert", return_value=True) as staging:
+            ok = consent.upsert_consent(
+                "U123", True, "Verified", "line-client", "agent", "now",
+                access_token="line-token",
+            )
+        self.assertTrue(ok)
+        staging.assert_called_once_with("line-token", True, "line-client", "agent")
+
+    def test_staged_sync_upserts_neon_then_marks_rows(self):
+        cursor = mock.MagicMock()
+        connection = mock.MagicMock()
+        connection.cursor.return_value = cursor
+        row = {
+            "user_id": "U123", "agreed": True, "display_name": "User",
+            "source_type": "line-client", "user_agent": "agent",
+            "consented_at": "2026-11-22T00:00:00+00:00",
+            "updated_at": "2026-11-22T00:00:00+00:00",
+        }
+        with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
+             mock.patch.object(consent, "CONSENT_STAGING_URL", "https://staging.test"), \
+             mock.patch.object(consent, "CONSENT_STAGING_SECRET", "secret"), \
+             mock.patch.object(consent, "_pg_connect", return_value=connection), \
+             mock.patch.object(
+                 consent, "_staging_post",
+                 side_effect=[{"ok": True, "rows": [row]}, {"ok": True, "updated": 1}],
+             ) as staging:
+            synced = consent.sync_staged_consents(batch_limit=500, max_batches=1)
+        self.assertEqual(synced, 1)
+        cursor.executemany.assert_called_once()
+        connection.commit.assert_called_once()
+        self.assertEqual(staging.call_args_list[1].args[0], "mark_synced")
 
     def test_storage_health_distinguishes_connection_failure(self):
         with mock.patch.object(consent, "POSTGRES_ENABLED", True), \
