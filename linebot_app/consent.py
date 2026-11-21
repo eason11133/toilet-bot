@@ -58,7 +58,10 @@ def _booly(v):
 # （可選微優化）本機同意快取，TTL 預設 10 分鐘；失敗時當未同意（不影響功能）
 _consent_cache = OrderedDict()   # bounded user_id -> (ts, bool)
 _consent_cache_lock = threading.Lock()
-_CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
+# Consent is correctness/privacy state, not ordinary content cache. Keep the
+# default disabled so every webhook observes the durable database value. A
+# short positive-only TTL can still be opted into explicitly if traffic grows.
+_CONSENT_TTL = max(0, int(os.getenv("CONSENT_TTL_SEC", "0")))
 _CONSENT_CACHE_MAX = max(100, int(os.getenv("CONSENT_CACHE_MAX", "2000")))
 
 def _consent_cache_set(user_id, value):
@@ -86,7 +89,7 @@ def has_consented(user_id: str) -> bool:
         now = time.time()
         with _consent_cache_lock:
             hit = _consent_cache.get(user_id)
-            if hit and bool(hit[1]) and (now - hit[0] < _CONSENT_TTL):
+            if _CONSENT_TTL > 0 and hit and bool(hit[1]) and (now - hit[0] < _CONSENT_TTL):
                 _consent_cache.move_to_end(user_id)
                 return True
             if hit:

@@ -137,6 +137,7 @@ python app.py
 | `PUBLIC_URL` | 部署後的公開網址 |
 | `CONSENT_PAGE_URL` | 使用者同意頁網址 |
 | `LIFF_CONSENT_ID` | 同意頁專用 LIFF ID；未設定時相容使用 `LIFF_ID` |
+| `LIFF_CONSENT_CHANNEL_ID` | 選填；LINE Login Channel ID，未設定時由 LIFF ID 前綴取得 |
 | `LIFF_STATUS_ID` | 狀態回報 LIFF ID |
 | `ADMIN_TOKEN` | 管理功能驗證 |
 | `CONTACT_EMAIL` | 外部資料查詢的聯絡資訊 |

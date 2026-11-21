@@ -46,7 +46,7 @@
 
     <div class="row">
       <label style="display:flex;gap:10px;align-items:flex-start;">
-        <input id="agreeChk" type="checkbox" checked />
+        <input id="agreeChk" type="checkbox" />
         <span id="t_chk">我已閱讀並同意《<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>》與使用條款；我了解若不同意將無法使用本服務。</span>
       </label>
     </div>
@@ -262,11 +262,14 @@
       okBtn.textContent = T.ok_sending;
 
       try {
+        const idToken = (window.liff && typeof liff.getIDToken === "function") ? liff.getIDToken() : "";
+        if (!idToken) throw new Error(LANG === "en" ? "LINE identity token is unavailable" : "無法取得 LINE 身分憑證，請重新開啟此頁");
         const res = await fetch("/api/consent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             agree: true,
+            idToken,
             userId,
             displayName,
             sourceType,

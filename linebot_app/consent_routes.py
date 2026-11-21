@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime
 
+import requests
 from flask import request, render_template
 
 from config import TW_TZ
@@ -26,6 +27,50 @@ def _get_liff_consent_id() -> str:
     ).strip()
 
 
+def _get_liff_channel_id() -> str:
+    configured = (
+        os.getenv("LIFF_CONSENT_CHANNEL_ID")
+        or os.getenv("LINE_LOGIN_CHANNEL_ID")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+    liff_id = _get_liff_consent_id()
+    return liff_id.split("-", 1)[0].strip() if "-" in liff_id else ""
+
+
+def _verify_line_id_token(id_token):
+    """Verify a LIFF ID token with LINE and return its trusted payload."""
+    if not id_token:
+        return None, "缺少 LINE 身分憑證", 401
+    channel_id = _get_liff_channel_id()
+    if not channel_id:
+        logging.error("LIFF consent channel ID is not configured")
+        return None, "伺服器缺少 LINE Login Channel ID", 500
+    try:
+        response = requests.post(
+            "https://api.line.me/oauth2/v2.1/verify",
+            data={"id_token": id_token, "client_id": channel_id},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=float(os.getenv("LINE_ID_TOKEN_VERIFY_TIMEOUT_SEC", "5")),
+        )
+    except requests.RequestException as exc:
+        logging.warning("LINE ID token verification unavailable: %s", type(exc).__name__)
+        return None, "LINE 身分驗證暫時無法使用，請稍後再試", 503
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    if response.status_code != 200:
+        logging.warning("LINE ID token verification rejected status=%s", response.status_code)
+        return None, "LINE 身分驗證失敗，請重新開啟同意頁", 401
+    user_id = str(payload.get("sub") or "").strip()
+    if not user_id:
+        logging.warning("LINE ID token verification returned no subject")
+        return None, "LINE 身分資料不完整，請重新登入", 401
+    return payload, "", 200
+
+
 def render_consent_page():
     liff_id = _get_liff_consent_id()
 
@@ -45,17 +90,33 @@ def render_privacy_page():
 
 def api_consent():
     try:
-        payload = request.get_json(force=True, silent=False) or {}
+        if request.content_length and request.content_length > 16384:
+            return {"ok": False, "message": "請求內容過大"}, 413
+        payload = request.get_json(silent=True)
+        if payload is None:
+            return {"ok": False, "message": "請求格式錯誤"}, 400
+        if not isinstance(payload, dict):
+            return {"ok": False, "message": "請求格式錯誤"}, 400
+        if "agree" not in payload:
+            return {"ok": False, "message": "缺少同意狀態"}, 400
         agreed = _booly(payload.get("agree"))
-        user_id = (payload.get("userId") or "").strip()
-        display_name = payload.get("displayName") or ""
-        source_type = payload.get("sourceType") or ""
-        ua = payload.get("ua") or request.headers.get("User-Agent","")
-        ts = payload.get("ts") or datetime.now(TW_TZ).isoformat()
-
-        if not user_id:
-            logging.warning("/api/consent missing userId")
-            return {"ok": False, "message": "缺少 userId"}, 400
+        claimed_user_id = str(payload.get("userId") or "").strip()[:128]
+        id_token = str(payload.get("idToken") or "").strip()
+        if len(id_token) > 8192:
+            return {"ok": False, "message": "LINE 身分憑證格式錯誤"}, 400
+        verified, verify_error, verify_status = _verify_line_id_token(
+            id_token
+        )
+        if not verified:
+            return {"ok": False, "message": verify_error, "retryable": verify_status >= 500}, verify_status
+        user_id = (verified.get("sub") or "").strip()
+        if claimed_user_id and claimed_user_id != user_id:
+            logging.warning("/api/consent LINE user mismatch")
+            return {"ok": False, "message": "LINE 帳號驗證不一致，請重新開啟同意頁"}, 401
+        display_name = str(verified.get("name") or "")[:200]
+        source_type = str(payload.get("sourceType") or "")[:50]
+        ua = str(request.headers.get("User-Agent", ""))[:500]
+        ts = datetime.now(TW_TZ).isoformat()
 
         ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
         if not ok:
