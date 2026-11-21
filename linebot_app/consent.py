@@ -4,6 +4,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 
+from flask import has_request_context, request
 from linebot.models import TextSendMessage
 
 POSTGRES_ENABLED = False
@@ -56,14 +57,22 @@ def _booly(v):
 
 # （可選微優化）本機同意快取，TTL 預設 10 分鐘；失敗時當未同意（不影響功能）
 _consent_cache = OrderedDict()   # bounded user_id -> (ts, bool)
+_consent_cache_lock = threading.Lock()
 _CONSENT_TTL = int(os.getenv("CONSENT_TTL_SEC", "600"))
 _CONSENT_CACHE_MAX = max(100, int(os.getenv("CONSENT_CACHE_MAX", "2000")))
 
 def _consent_cache_set(user_id, value):
-    _consent_cache[user_id] = (time.time(), bool(value))
-    _consent_cache.move_to_end(user_id)
-    while len(_consent_cache) > _CONSENT_CACHE_MAX:
-        _consent_cache.popitem(last=False)
+    with _consent_cache_lock:
+        # Never cache a negative answer. A consent write may be handled by a
+        # different Gunicorn process, and a cached False would keep blocking
+        # that user until the old 10-minute TTL expired.
+        if not value:
+            _consent_cache.pop(user_id, None)
+            return
+        _consent_cache[user_id] = (time.time(), True)
+        _consent_cache.move_to_end(user_id)
+        while len(_consent_cache) > _CONSENT_CACHE_MAX:
+            _consent_cache.popitem(last=False)
 
 def has_consented(user_id: str) -> bool:
     """Read consent from Neon user_consent."""
@@ -75,10 +84,13 @@ def has_consented(user_id: str) -> bool:
     conn = None
     try:
         now = time.time()
-        hit = _consent_cache.get(user_id)
-        if hit and (now - hit[0] < _CONSENT_TTL):
-            _consent_cache.move_to_end(user_id)
-            return bool(hit[1])
+        with _consent_cache_lock:
+            hit = _consent_cache.get(user_id)
+            if hit and bool(hit[1]) and (now - hit[0] < _CONSENT_TTL):
+                _consent_cache.move_to_end(user_id)
+                return True
+            if hit:
+                _consent_cache.pop(user_id, None)
 
         conn = _pg_connect()
         cur = conn.cursor()
@@ -141,7 +153,10 @@ def upsert_consent(user_id: str, agreed: bool, display_name: str, source_type: s
 def ensure_consent_or_prompt(user_id: str):
     if has_consented(user_id):
         return None
-    tip = T("consent_required", uid=user_id, url=CONSENT_PAGE_URL)
+    consent_url = CONSENT_PAGE_URL
+    if not consent_url and has_request_context():
+        consent_url = request.url_root.rstrip("/") + "/consent"
+    tip = T("consent_required", uid=user_id, url=consent_url)
     return TextSendMessage(text=tip)
 
 

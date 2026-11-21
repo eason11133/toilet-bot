@@ -171,7 +171,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 if not os.path.exists(FAVORITES_FILE_PATH):
     open(FAVORITES_FILE_PATH, "a", encoding="utf-8").close()
 
-_PUBLIC_URL_FOR_CONSENT = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+_PUBLIC_URL_FOR_CONSENT = (
+    os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
+).rstrip("/")
 CONSENT_PAGE_URL = os.getenv("CONSENT_PAGE_URL") or (
     f"{_PUBLIC_URL_FOR_CONSENT}/consent" if _PUBLIC_URL_FOR_CONSENT else ""
 )

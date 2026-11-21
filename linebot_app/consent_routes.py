@@ -54,7 +54,7 @@ def api_consent():
         ts = payload.get("ts") or datetime.now(TW_TZ).isoformat()
 
         if not user_id:
-            logging.warning(f"/api/consent missing userId. payload={payload}")
+            logging.warning("/api/consent missing userId")
             return {"ok": False, "message": "缺少 userId"}, 400
 
         ok = upsert_consent(user_id, agreed, display_name, source_type, ua, ts)
