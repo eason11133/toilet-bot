@@ -308,6 +308,10 @@ class ConsentStateTests(unittest.TestCase):
         error = RuntimeError("server closed the connection unexpectedly")
         self.assertEqual(consent._database_error_category(error), "server_closed")
 
+    def test_database_error_category_handles_neon_quota_suspension(self):
+        error = RuntimeError("Your account or project has exceeded the quota")
+        self.assertEqual(consent._database_error_category(error), "quota_exceeded")
+
     def test_prompt_builds_request_url_when_public_url_is_missing(self):
         app = Flask(__name__)
         with app.test_request_context("/callback", base_url="https://example.test"):

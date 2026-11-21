@@ -175,6 +175,8 @@ def ensure_consent_or_prompt(user_id: str):
 def _database_error_category(exc):
     """Return a non-sensitive connection error category for diagnostics."""
     message = str(exc).lower()
+    if "exceeded the quota" in message or "quota exceeded" in message:
+        return "quota_exceeded"
     if "password authentication failed" in message or "authentication failed" in message:
         return "invalid_credentials"
     if "could not translate host name" in message or "name or service not known" in message:
