@@ -264,13 +264,15 @@
       okBtn.textContent = T.ok_sending;
 
       try {
+        const accessToken = (window.liff && typeof liff.getAccessToken === "function") ? liff.getAccessToken() : "";
         const idToken = (window.liff && typeof liff.getIDToken === "function") ? liff.getIDToken() : "";
-        if (!idToken) throw new Error(LANG === "en" ? "LINE identity token is unavailable" : "無法取得 LINE 身分憑證，請重新開啟此頁");
+        if (!accessToken && !idToken) throw new Error(LANG === "en" ? "LINE identity token is unavailable" : "無法取得 LINE 身分憑證，請重新開啟此頁");
         const res = await fetch("/api/consent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             agree: true,
+            accessToken,
             idToken,
             userId,
             displayName,

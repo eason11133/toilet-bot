@@ -213,6 +213,44 @@ class ConsentRouteTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertEqual(code, "invalid_id_token")
 
+    def test_access_token_is_verified_and_profile_is_loaded(self):
+        verify_response = mock.MagicMock()
+        verify_response.status_code = 200
+        verify_response.json.return_value = {"client_id": "2007674330", "expires_in": 3600}
+        profile_response = mock.MagicMock()
+        profile_response.status_code = 200
+        profile_response.json.return_value = {"userId": "U123", "displayName": "LINE User"}
+        with mock.patch.dict(
+            os.environ,
+            {"LIFF_CONSENT_ID": "2007674330-abcdef", "LIFF_CONSENT_CHANNEL_ID": ""},
+            clear=False,
+        ), mock.patch.object(
+            consent_routes.requests,
+            "get",
+            side_effect=[verify_response, profile_response],
+        ) as get:
+            verified, error, status, code = consent_routes._verify_line_access_token("access-token")
+        self.assertEqual((error, status, code), ("", 200, "ok"))
+        self.assertEqual(verified["sub"], "U123")
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args_list[1].kwargs["headers"]["Authorization"], "Bearer access-token")
+
+    def test_access_token_channel_mismatch_is_rejected(self):
+        verify_response = mock.MagicMock()
+        verify_response.status_code = 200
+        verify_response.json.return_value = {"client_id": "different-channel"}
+        with mock.patch.dict(
+            os.environ,
+            {"LIFF_CONSENT_ID": "2007674330-abcdef", "LIFF_CONSENT_CHANNEL_ID": ""},
+            clear=False,
+        ), mock.patch.object(
+            consent_routes.requests, "get", return_value=verify_response
+        ):
+            verified, _, status, code = consent_routes._verify_line_access_token("access-token")
+        self.assertIsNone(verified)
+        self.assertEqual(status, 500)
+        self.assertEqual(code, "channel_mismatch")
+
 
 class ConsentStateTests(unittest.TestCase):
     def setUp(self):

@@ -12,7 +12,7 @@ POSTGRES_ENABLED = False
 _pg_connect = None
 T = None
 CONSENT_PAGE_URL = ""
-CONSENT_FLOW_VERSION = os.getenv("CONSENT_FLOW_VERSION", "20261121-4")
+CONSENT_FLOW_VERSION = os.getenv("CONSENT_FLOW_VERSION", "20261121-5")
 
 
 def configure_consent(postgres_enabled=False, pg_connect=None, T_func=None, consent_page_url=""):

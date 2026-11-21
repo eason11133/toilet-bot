@@ -77,6 +77,58 @@ def _verify_line_id_token(id_token):
     return payload, "", 200, "ok"
 
 
+def _verify_line_access_token(access_token):
+    """Validate a LIFF access token and load its LINE-owned profile."""
+    if not access_token:
+        return None, "缺少 LINE 存取憑證，請關閉後重新開啟同意頁", 401, "missing_access_token"
+    channel_id = _get_liff_channel_id()
+    if not channel_id:
+        logging.error("LIFF consent channel ID is not configured")
+        return None, "伺服器缺少 LINE Login Channel ID", 500, "channel_config_missing"
+    timeout = float(os.getenv("LINE_ID_TOKEN_VERIFY_TIMEOUT_SEC", "5"))
+    try:
+        verification = requests.get(
+            "https://api.line.me/oauth2/v2.1/verify",
+            params={"access_token": access_token},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        logging.warning("LINE access token verification unavailable: %s", type(exc).__name__)
+        return None, "LINE 身分驗證暫時無法使用，請稍後再試", 503, "line_verify_unavailable"
+    try:
+        verification_payload = verification.json()
+    except Exception:
+        verification_payload = {}
+    if verification.status_code != 200:
+        logging.warning("LINE access token verification rejected status=%s", verification.status_code)
+        return None, "LINE 身分驗證失敗，請重新開啟同意頁", 401, "invalid_access_token"
+    token_channel_id = str(verification_payload.get("client_id") or "").strip()
+    if token_channel_id != channel_id:
+        logging.warning("LINE access token channel mismatch")
+        return None, "LINE 應用程式設定不一致，請聯絡管理者", 500, "channel_mismatch"
+    try:
+        profile = requests.get(
+            "https://api.line.me/v2/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        logging.warning("LINE profile lookup unavailable: %s", type(exc).__name__)
+        return None, "LINE 身分資料暫時無法取得，請稍後再試", 503, "line_profile_unavailable"
+    try:
+        profile_payload = profile.json()
+    except Exception:
+        profile_payload = {}
+    user_id = str(profile_payload.get("userId") or "").strip()
+    if profile.status_code != 200 or not user_id:
+        logging.warning("LINE profile lookup rejected status=%s", profile.status_code)
+        return None, "LINE 身分資料無法取得，請重新開啟同意頁", 401, "invalid_profile"
+    return {
+        "sub": user_id,
+        "name": str(profile_payload.get("displayName") or ""),
+    }, "", 200, "ok"
+
+
 def render_consent_page():
     liff_id = _get_liff_consent_id()
 
@@ -125,12 +177,20 @@ def api_consent():
             return {"ok": False, "message": "缺少同意狀態"}, 400
         agreed = _booly(payload.get("agree"))
         claimed_user_id = str(payload.get("userId") or "").strip()[:128]
+        access_token = str(payload.get("accessToken") or "").strip()
         id_token = str(payload.get("idToken") or "").strip()
+        if len(access_token) > 4096:
+            return {"ok": False, "message": "LINE 存取憑證格式錯誤"}, 400
         if len(id_token) > 8192:
             return {"ok": False, "message": "LINE 身分憑證格式錯誤"}, 400
-        verified, verify_error, verify_status, verify_code = _verify_line_id_token(
-            id_token
-        )
+        if access_token:
+            verified, verify_error, verify_status, verify_code = _verify_line_access_token(
+                access_token
+            )
+        else:
+            verified, verify_error, verify_status, verify_code = _verify_line_id_token(
+                id_token
+            )
         if not verified:
             return {
                 "ok": False,
