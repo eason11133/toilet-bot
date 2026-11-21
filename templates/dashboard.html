@@ -1907,7 +1907,10 @@
     applyI18n();
     refreshDashboard();
     refreshLineInsights();
-    setInterval(refreshDashboard, 30000);
+    // Historical analytics are expensive to transfer from Neon. Five-minute
+    // auto refresh keeps the dashboard current without re-downloading the
+    // same range 120 times per hour. Range/date changes still refresh now.
+    setInterval(refreshDashboard, 300000);
     setInterval(refreshLineInsights, 86400000);
 
   </script>

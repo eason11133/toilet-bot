@@ -144,24 +144,16 @@ def _generate_dashboard_data(range_key="1h", anchor_date=None):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT
-                id,
                 user_id,
                 event_type,
                 result_count,
                 success,
                 response_time_ms,
-                lat,
-                lon,
                 area_name,
-                query_text,
-                query_id,
-                user_id_hash,
                 cache_hit,
                 status,
-                failure_reason,
                 reply_attempted,
                 reply_accepted,
-                source_status,
                 created_at
             FROM analytics_events
             WHERE created_at >= %s AND created_at <= %s
@@ -482,7 +474,27 @@ def api_dashboard():
         range_key = "1h"
 
     anchor_date = (request.args.get("anchor_date") or "").strip() or None
-    response = jsonify(_generate_dashboard_data(range_key, anchor_date))
+    force = (request.args.get("force") or "0").strip() == "1"
+    ttl = max(30, int(os.getenv("DASHBOARD_CACHE_TTL_SECONDS", "300")))
+    cache_key = f"dashboard:v2:{range_key}:{anchor_date or 'latest'}"
+    data = None
+    if not force and callable(get_cached_data):
+        try:
+            data = get_cached_data(cache_key, ttl_sec=ttl)
+        except Exception as exc:
+            logging.debug("dashboard cache read skipped: %s", type(exc).__name__)
+    if isinstance(data, dict):
+        data["cached"] = True
+    else:
+        data = _generate_dashboard_data(range_key, anchor_date)
+        data["cached"] = False
+        data["generated_at"] = datetime.now(TW_TZ).isoformat()
+        if callable(save_cache):
+            try:
+                save_cache(cache_key, data)
+            except Exception as exc:
+                logging.debug("dashboard cache write skipped: %s", type(exc).__name__)
+    response = jsonify(data)
     log_memory("dashboard_after")
     return response
 

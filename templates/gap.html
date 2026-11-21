@@ -556,7 +556,9 @@
     URL.revokeObjectURL(url);
   }
 
-  const AUTO_REFRESH_MS = 30000;
+  // Cached demand snapshots only need a lightweight periodic freshness check.
+  // Active background rebuilds still poll every 4 seconds below.
+  const AUTO_REFRESH_MS = 300000;
 
   async function loadDashboard(force=false, silent=false){
     if (!silent) document.getElementById('loadingBox').classList.remove('hidden');
